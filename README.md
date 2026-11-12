@@ -28,25 +28,30 @@ claude plugin install agent-org@agent-org
 plugins/agent-org/
 ├─ .claude-plugin/plugin.json
 ├─ .codex-plugin/plugin.json         Codex 0.5.1-codex.4
-├─ orgspec/                          组织规则（rules.json，英文标识）和术语表（terms.zh.json）
-├─ scripts/                          orgspec.py 读规则和检查包；setup.py 初始化和开池清单；ledger.py 台账；route.py 路由、收件箱、聚焦会话和会话池；pool.py 认领和会话状态
+├─ orgspec/                          组织规则（rules.json，英文标识）、术语表（terms.zh.json）、和飞书模板的约定（contract.json）
+├─ scripts/                          orgspec.py 读规则和检查包；setup.py 初始化和开池清单；space.py 读飞书空间的结构、绑定约定；ledger.py 台账；route.py 路由、收件箱、聚焦会话和会话池；pool.py 认领和会话状态
 ├─ scaffold/                         初始化时生成项目文件用的模板和 hook
 ├─ skills-codex/                     Codex 的六个技能入口，共享业务规则和包模板
 ├─ skills/
 │  ├─ setup/                         预检、初始化、搭模板空间、绑定飞书空间
-│  ├─ charter/                       立项单、阶段计划
+│  ├─ charter/                       开一条研究任务：研究任务单
 │  ├─ spec/                          访谈后写实验规格和评测协议
-│  ├─ packages/                      五类包的模板、设计原则、序列接口、示例
+│  ├─ packages/                      三类包（需求包、交付包、决策包）的模板、设计原则、序列接口、示例
 │  ├─ ledger/                        台账读写和结构
+│  ├─ space-read/                    读懂一个飞书空间：类型、流程、每一步谁负责
+│  ├─ space-bind/                    约定的槽位和空间对不上时怎么指认
 │  └─ entry/                         路由决策表、决策队列、聚焦会话
-└─ tests/test_plugin.py              不连飞书的测试
+└─ tests/                            不连飞书的测试
+feishu-template/                     飞书项目模板的说明、结构、搭建手册和更新记录
 docs/
 └─ 使用说明.md
 ```
 
 ## 规则只存一份
 
-职级、序列、五类包、关系矩阵、交接规则、路由决策表、台账结构都在 `orgspec/rules.json`，用不变的英文标识；中文名在 `orgspec/terms.zh.json`。agent 定义、CLAUDE.md、组织规则全文和台账结构说明都由它生成，测试会检查生成物和它一致。改名只改术语表。
+职级、序列、三类包、关系矩阵、交接规则、路由决策表、研究任务怎么推进都在 `orgspec/rules.json`，用不变的英文标识；中文名在 `orgspec/terms.zh.json`。agent 定义、CLAUDE.md 和组织规则全文都由它生成，测试会检查生成物和它一致。改名只改术语表。
+
+飞书空间里有哪些流程、节点怎么排、每一步必填什么，不写在规则里：脚本运行时读空间。脚本按含义处理的类型、字段、角色和状态写在 `orgspec/contract.json`，飞书项目模板见 `feishu-template/`。
 
 ```bash
 python3 -I plugins/agent-org/scripts/orgspec.py check
@@ -54,6 +59,9 @@ python3 -I plugins/agent-org/scripts/orgspec.py check
 
 ```bash
 python3 -I -B plugins/agent-org/tests/test_plugin.py
+python3 -I -B plugins/agent-org/tests/test_space.py
+python3 -I -B plugins/agent-org/tests/test_ledger.py
+python3 -I -B plugins/agent-org/tests/test_binding.py
 python3 -I -B plugins/agent-org/tests/test_codex.py
 python3 -I -B plugins/agent-org/tests/test_codex_upgrade.py
 python3 -I -B plugins/agent-org/tests/test_initialization.py
