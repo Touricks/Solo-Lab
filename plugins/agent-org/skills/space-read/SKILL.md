@@ -104,7 +104,11 @@ python3 -I <插件目录>/scripts/space.py check --space <空间名、simple_nam
 
 退出码 0 是通过，1 是有问题并逐条列出，2 是命令没跑成。流程图要靠工作项才读得到，核对要在每个流程都有一条样例工作项的时候跑。
 
-给模板写结构说明时，从一份快照生成，输出里不带空间的任何键：
+给模板写结构说明时，先把模板空间读成一份快照文件，再从它生成说明。快照文件里有空间的各种键，放在仓库之外；生成的说明不带任何键：
+
+```bash
+python3 -I <插件目录>/scripts/space.py export --space <空间名> --out <space.json>
+```
 
 ```bash
 python3 -I <插件目录>/scripts/space.py show --snapshot <space.json> structure
