@@ -9,7 +9,7 @@
   "types": {
     "research_task": {
       "main_line": true,
-      "fields": ["sequence", "sender", "main_doc", "source_item", "due", "blocked_reason", "blocked_since", "hypothesis_sign", "next_step_sign", "conclusion"],
+      "fields": ["sequence", "sender", "main_doc", "source_item", "due", "blocked_reason", "blocked_since", "hypothesis_signoff", "next_step_signoff", "conclusion"],
       "roles": ["product", "alg", "rnd", "infra", "pmo", "issuer", "scribe"],
       "states": ["archived"]
     },
@@ -29,7 +29,7 @@
       "states": ["pending", "decided", "archived"]
     },
     "feedback": {
-      "fields": ["main_doc", "task_ref"],
+      "fields": ["sequence", "sender", "main_doc", "task_ref"],
       "roles": ["pmo", "scribe"],
       "states": ["archived"]
     }
@@ -50,8 +50,8 @@
     "to_sequence": {"type": "select", "options": {"group": "seq"}},
     "urgency": {"type": "select"},
     "sign_result": {"type": "select", "options": {"group": "sign"}},
-    "hypothesis_sign": {"type": "text", "signature": true},
-    "next_step_sign": {"type": "text", "signature": true},
+    "hypothesis_signoff": {"type": "text", "signature": true},
+    "next_step_signoff": {"type": "text", "signature": true},
     "conclusion": {"type": "select"}
   },
   "roles": {
@@ -68,7 +68,8 @@
   "flow": {
     "archive_node": {"key": "archive", "role": "scribe", "state": "archived"},
     "sign_gate": {"type": "decision", "states": ["decided", "archived"], "result": "sign_result", "approved": "approved", "task": "task_ref"},
-    "freeze": {"sealed_by": "hypothesis_sign", "checked_before": "conclusion"},
-    "rollback_needs_decision": ["research_task"]
+    "freeze": {"sealed_by": "hypothesis_signoff", "checked_before": "conclusion"},
+    "rollback_needs_decision": ["research_task"],
+    "closed": ["accepted", "archived"]
   }
 }

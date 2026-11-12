@@ -102,7 +102,7 @@ def classify_text(spec, root, text, offline):
                 it = lg.item(item_id)
             except ledger.LedgerError as e:
                 return result(spec, "R3", "#%s 查不到：%s" % (item_id, str(e)[:120]), work_item=item_id)
-            if it["state"] in ledger.closed_states(spec):
+            if it["state"] in ledger.closed_states(lg):
                 return result(spec, "R3", "#%s 已是“%s”，不能直接续上" % (item_id, it["state"]), work_item=item_id)
             seq_cn = lg.text_of(it, "sequence")
             seq = next((s for s, cn, _ in spec.sequences() if cn == seq_cn), None)
@@ -134,26 +134,18 @@ def classify_draft(spec, root, path):
         if d.header.get("渠道") == spec.term("channel", "researcher"):
             tell = "给“受影响的工作项”的负责会话发消息【%s #ID】；显示“研究员在用”的改用 route.py notify 留言" % notice
             return result(spec, "R6", "研究员主动发起的决策包", next_hop="pmo-scribe",
-                          steps=["书记员 register 后流转到“已决定”，表单填决定内容和决定人", tell])
+                          steps=["书记员 register 后确认“决定”这一步，填决定内容和决定人", tell])
         return result(spec, "R5", "决策队列来的决策包", next_hop="pmo-scribe",
-                      steps=["书记员 register，建成“待决定”", "紧急程度为“插队”的马上交研究员，其余进每日队列"])
+                      steps=["书记员 register，停在“待决定”", "紧急程度为“插队”的马上交研究员，其余进每日队列"])
     route = next((r for r in spec.rules["package_routes"] if r["pkg"] == d.pid and (r["rel"] or None) == d.rel), None)
     steps, hop = [], None
     if d.pid == "request" and d.rel == "cross":
         hop = "%s-p2" % to_seq if to_seq else None
-        steps = ["书记员 register，建跨序列需求（待接单）", "派 %s 接单：复述需求、承接范围、预计交付时间" % hop]
+        steps = ["书记员 register，建跨序列需求（“提出”随登记确认，停在待接单）", "派 %s 接单：复述需求、承接范围、预计交付时间" % hop]
     elif d.pid == "delivery" and d.rel == "cross":
         hop = "%s-p2" % to_seq if to_seq else None
-        steps = ["确认交付物涉及的结论已有验收包", "书记员 reply，并流转跨序列需求到“已交付”",
-                 "给 %s 的会话发消息【%s #ID】，写交付包路径" % (hop, notice)]
-    elif d.pid == "review":
-        hop = "quality-p2"
-        steps = ["书记员 register，建送审（待核查）；被送审的工作项流转到“待验收”", "派 quality-p2 核查"]
-    elif d.pid == "verdict":
-        hop = "pmo-scribe"
-        steps = ["书记员 reply，按它打印的两条流转命令改状态",
-                 "给送审方（发【%s】给你的那个会话）发消息【%s #被送审工作项 ID】，写验收包路径；送审方是 +1、+0 的，"
-                  "再用 route.py notify 给它所在序列的 +2 留一句" % (spec.term("msg", "review"), notice)]
+        steps = ["书记员 reply，把交付包挂到跨序列需求下；承接方请书记员确认“执行”这一步，工作项到“待验收”",
+                 "给 %s 的会话发消息【%s #ID】，写交付包路径；它验收通过就请书记员确认“验收”，不通过就回滚到“执行”并写原因" % (hop, notice)]
     else:
         return result(spec, None, "序列内的%s不经过入口，交回本序列上一级" % spec.pkg(d.pid), next_hop=None)
     if hop and hop.endswith("-p2") and to_seq and focus_for_sequence(root, to_seq):
@@ -673,12 +665,12 @@ def queue_rows(root, policy, me, seq):
         if me["role"] == policy.get("entry_role"):
             leased = set((pool.load(root)[0].get("owners") or {}))
             rows += [r for r in ledger.query(lg, "cross", None, as_json=False)
-                     if r.get("work_item_status") == "待接单" and str(r.get("work_item_id")) not in leased]
+                     if r.get("work_item_status") == lg.state("cross_request", "waiting") and str(r.get("work_item_id")) not in leased]
             rows += [r for r in ledger.query(lg, "open", None, as_json=False)
-                     if r.get("work_item_status") == "待开工" and tag in str(r.get("name", ""))]
+                     if r.get("work_item_status") == lg.state("same_seq", "queued") and tag in str(r.get("name", ""))]
         else:
             rows += [r for r in ledger.query(lg, "open", seq, as_json=False)
-                     if r.get("work_item_status") == "待开工" and tag in str(r.get("name", ""))]
+                     if r.get("work_item_status") == lg.state("same_seq", "queued") and tag in str(r.get("name", ""))]
     return rows
 
 
@@ -706,7 +698,7 @@ def queue_cmd(root, policy, name, offline=False):
     if not items:
         print("没有等你派的工作项。没事就一句话结束本轮。")
     elif free:
-        print("有等你派的活、又有空闲会话：先请书记员把它流转到“执行中”（跨序列需求是派对方 +2 接单），再派出去。")
+        print("有等你派的活、又有空闲会话：先请书记员确认“开工”这一步（跨序列需求是派对方 +2 接单），再派出去。")
     return 0
 
 

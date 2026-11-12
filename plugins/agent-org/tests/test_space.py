@@ -179,6 +179,13 @@ class BindTest(SpaceCase):
         with self.assertRaises(space.SpaceError):
             self.bind(maps=["decision.nope=x"])
 
+    def test_a_type_pointed_at_by_hand_is_read_again(self):
+        odd = {"type_key": "k9", "name": "拍板", "api_name": "sign_off"}
+        self.assertFalse(space.wanted_by(self.contract)(odd))
+        self.assertTrue(space.wanted_by(self.contract, {"decision": "拍板"})(odd))
+        self.assertTrue(space.wanted_by(self.contract, old={"types": {"decision": {"type_key": "k9"}}})(odd))
+        self.assertFalse(space.wanted_by(self.contract, old={"types": {"decision": {}}})({"name": "别的"}))
+
     def test_what_was_bound_last_time_survives_a_rename(self):
         old, _ = self.bind()
         self.field("decision", "签字结果")["name"] = "批不批"
@@ -310,6 +317,13 @@ class CliTest(SpaceCase):
         with open(os.path.join(self.tmp, "feishu", name), "w", encoding="utf-8") as f:
             json.dump(obj, f, ensure_ascii=False)
 
+    def bound(self, snap=None):
+        """The binding as `setup.py feishu --apply` writes it."""
+        binding, _ = space.bind(self.contract, snap or self.snap)
+        ids = space.apply_binding(json.loads(self.get("ids.json")), self.contract, binding)
+        self.put("ids.json", ids)
+        return ids
+
     def get(self, name):
         with open(os.path.join(self.tmp, "feishu", name), encoding="utf-8") as f:
             return f.read()
@@ -327,14 +341,15 @@ class CliTest(SpaceCase):
             self.assertIn("这是预览", out)
             self.assertFalse(os.path.exists(os.path.join(self.tmp, "feishu", "space.json")))
             self.assertEqual(self.run_cli("snapshot", "--target", self.tmp, "--apply")[0], 0)
-        self.assertEqual(self.run_cli("bind", "--target", self.tmp)[0], 0)
-        self.assertNotIn("types", json.loads(self.get("ids.json"))["meegle"])   # a preview writes nothing
-        code, out = self.run_cli("bind", "--target", self.tmp, "--apply")
+        code, out = self.run_cli("bind", "--target", self.tmp)
         self.assertEqual(code, 0)
-        ids = json.loads(self.get("ids.json"))
+        self.assertIn("setup.py feishu --target <项目目录> --live", out)
+        self.assertNotIn("types", json.loads(self.get("ids.json"))["meegle"])   # only setup.py feishu writes the binding
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            self.run_cli("bind", "--target", self.tmp, "--apply")
+        ids = self.bound()
         self.assertEqual((ids["schema"], ids["meegle"]["contract_version"]), ("agent-org/ids-v2", self.contract.version))
         self.assertEqual(sorted(ids["meegle"]["types"]), sorted(self.contract.types()))
-        self.assertIn("约定的槽位对到哪里", self.get("space.md"))
         code, out = self.run_cli("check", "--target", self.tmp)
         self.assertEqual(code, 0)
         self.assertIn("约定核对（contract_version 1）：通过", out)
@@ -344,20 +359,43 @@ class CliTest(SpaceCase):
         task = self.type("research_task")
         task["fields"] = [f for f in task["fields"] if f["name"] != "下一步签字"]
         self.put("space.json", self.snap)
-        code, out = self.run_cli("bind", "--target", self.tmp, "--apply")
+        code, out = self.run_cli("bind", "--target", self.tmp)
         self.assertEqual(code, 1)
         self.assertIn("研究任务的“下一步签字”", out)
+        self.bound()
         self.assertEqual(self.run_cli("check", "--target", self.tmp)[0], 1)
 
     def test_a_binding_made_for_another_contract_version(self):
         self.put("space.json", self.snap)
-        self.run_cli("bind", "--target", self.tmp, "--apply")
-        ids = json.loads(self.get("ids.json"))
+        ids = self.bound()
         ids["meegle"]["contract_version"] = 0
         self.put("ids.json", ids)
         code, out = self.run_cli("check", "--target", self.tmp)
         self.assertEqual(code, 1)
         self.assertIn("绑定按约定第 0 版做的", out)
+
+    def test_check_says_when_the_binding_is_behind_the_snapshot(self):
+        ids = self.bound()
+        next(s for s in self.type("decision")["states"] if s["name"] == "待决定")["name"] = "等研究员"
+        del ids["meegle"]["field_keys"]["research_task"]["conclusion"]
+        self.put("space.json", self.snap)
+        self.put("ids.json", ids)
+        code, out = self.run_cli("check", "--target", self.tmp)
+        self.assertEqual(code, 1)
+        self.assertIn("空间里现在是 “等研究员”，绑定记的是 “待决定”", out)
+        self.assertIn("研究任务的字段“结论”", out)
+        self.assertIn("空间里有，绑定里还没记", out)
+        self.assertIn("setup.py feishu --target <项目目录> --live", out)
+
+    def test_export_puts_any_space_into_a_file_outside_the_project(self):
+        path = os.path.join(self.tmp, "template.json")
+        with mock.patch.object(space, "call", Replay()):
+            code, out = self.run_cli("export", "--space", "research_template", "--out", path)
+        self.assertEqual(code, 0)
+        with open(path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["types"], self.snap["types"])
+        self.assertIn("show --snapshot", out)
+        self.assertEqual(os.listdir(os.path.join(self.tmp, "feishu")), ["ids.json"])
 
     def test_check_a_space_by_name_writes_nothing(self):
         before = sorted(os.listdir(os.path.join(self.tmp, "feishu")))
@@ -409,7 +447,7 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(c.option_names("relation"), ["下发", "执行"])
         self.assertEqual(len(c.option_names("sequence")), 7)
         self.assertEqual(c.option_names("urgency"), [])
-        self.assertEqual(c.signatures(), ["hypothesis_sign", "next_step_sign"])
+        self.assertEqual(c.signatures(), ["hypothesis_signoff", "next_step_signoff"])
 
 
 if __name__ == "__main__":

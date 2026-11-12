@@ -13,7 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import codex_onboarding
-import export_field_dictionary as exporter
+import space
 import ledger
 import setup
 
@@ -71,23 +71,22 @@ class InitializationTest(unittest.TestCase):
 
     def test_metadata_reads_overlap_and_keep_type_identity(self):
         barrier = threading.Barrier(4)
-        def page(command, key, type_key):
-            if command == "meta-fields":
-                barrier.wait(timeout=2)
-                return [{"field_name": type_key, "field_key": type_key + "-field", "field_type": "text"}]
-            return [{"role_name": type_key, "role_id": type_key + "-role"}]
-        types = [{"type_key": str(n), "name": str(n)} for n in range(4)]
-        with mock.patch.object(exporter, "paged", side_effect=page):
-            result = exporter.export_types(types, "space")
+        def read(key, t):
+            barrier.wait(timeout=2)                                  # all four types are being read at once
+            return t["type_key"], {"name": t["name"], "fields": [{"field_key": t["type_key"] + "-field"}]}
+        types = {"list": [{"type_key": str(n), "name": str(n), "api_name": "t%d" % n, "is_disable": 2} for n in range(4)]}
+        with mock.patch.object(space, "call", return_value=types), mock.patch.object(space, "read_type", side_effect=read):
+            result = space.snapshot({"project_key": "space"}, workers=4)["types"]
         self.assertEqual(list(result), ["0", "1", "2", "3"])
         for key, item in result.items():
             self.assertEqual(item["fields"][0]["field_key"], key + "-field")
-            self.assertEqual(item["roles"][0]["role_id"], key + "-role")
 
     def test_metadata_failures_do_not_become_partial_success(self):
-        with mock.patch.object(exporter, "paged", side_effect=RuntimeError("read failure")):
-            with self.assertRaisesRegex(RuntimeError, "read failure"):
-                exporter.export_types([{"type_key": "a"}], "space")
+        types = {"list": [{"type_key": "a", "name": "a", "is_disable": 2}]}
+        with mock.patch.object(space, "call", return_value=types), \
+                mock.patch.object(space, "read_type", side_effect=space.SpaceError("read failure")):
+            with self.assertRaisesRegex(space.SpaceError, "read failure"):
+                space.snapshot({"project_key": "space"})
 
     def test_node_setup_lists_each_parent_once_and_rerun_reuses_ids(self):
         with tempfile.TemporaryDirectory(prefix="init[scope]-") as root:
@@ -105,9 +104,9 @@ class InitializationTest(unittest.TestCase):
             with mock.patch.object(lg, "lark", side_effect=lark), contextlib.redirect_stdout(io.StringIO()):
                 ledger.ensure_all_nodes(lg)
                 ledger.ensure_all_nodes(lg)
-            self.assertEqual(len(created), 29)
-            self.assertEqual(sum(c[1] == "+node-list" for c in calls), 4)
-            self.assertEqual(len(json.loads(path.read_text())["wiki"]["nodes"]), 29)
+            self.assertEqual(len(created), 21)                         # 7 top-level nodes, 7 sequences under two of them
+            self.assertEqual(sum(c[1] == "+node-list" for c in calls), 3)
+            self.assertEqual(len(json.loads(path.read_text())["wiki"]["nodes"]), 21)
             self.assertFalse(hasattr(lg, "_node_listing_cache"))
 
 

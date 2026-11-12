@@ -830,7 +830,6 @@ MEEGLE_WRITE = {
     "workitem": {"create", "update"},
     "workflow": {"transition", "transition-state", "update-node"},
     "comment": {"add"},
-    "view": {"create-fixed", "update-fixed"},
     "subtask": {"update"},
     "attachment": {"+upload", "prepare-upload"},
     "resource": {"create"},

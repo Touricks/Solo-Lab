@@ -2,11 +2,12 @@
 """Read a Feishu Project space and bind the plugin's contract to it.
 
     space.py snapshot --target <项目目录> [--apply]      read the project's space: feishu/space.json, feishu/space.md
-    space.py bind     --target <项目目录> [--map k=v] [--apply]   fill the contract's slots: feishu/ids.json
+    space.py bind     --target <项目目录> [--map k=v]    show which object of the space would fill each slot
     space.py check    --target <项目目录>                contract check on feishu/space.json and feishu/ids.json
     space.py check    --space <名字、simple_name 或 project_key>   read any space (a template) and check it; writes nothing
     space.py show     --target <项目目录> [flows|fields|binding|structure]
     space.py show     --snapshot <space.json> structure   the structure without any key of the space
+    space.py export   --space <名字…> --out <文件>         a template maintainer's snapshot of any space, outside every project
 
 The plugin and a template are independent. The plugin carries a contract
 (orgspec/contract.json): the types, fields, roles and states its scripts handle by meaning.
@@ -14,7 +15,9 @@ A snapshot is what a space really has: types, fields with options, roles, the fi
 work item must fill, states and, for every flow that already has a work item, the nodes
 in order with their roles and required form items. Binding says which object of the space
 fills each slot; it matches by --map, then what was bound last time, then the identifier
-(api_name, role id, the field alias shown on the new-item page), then the name.
+(api_name, role id, the field alias shown on the new-item page), then the name. The binding
+itself (feishu/ids.json) is written by `setup.py feishu --apply` only, which the researcher's
+own session runs: every session can read a space, one place changes what the ledger trusts.
 
 Only read-only meegle commands are used. A flow chart can only be read from a work item
 of that flow (`workflow get-node`), so a flow nobody has used yet is listed without nodes.
@@ -189,10 +192,13 @@ def snapshot(project, wanted=None, workers=4):
     return snap
 
 
-def wanted_by(contract, maps=None):
-    """Read in full only the types that can fill a type slot: by identifier, name or --map."""
+def wanted_by(contract, maps=None, old=None):
+    """Read in full only the types that can fill a type slot: by identifier, name, --map or
+    the binding made last time (old)."""
     names = set(contract.types()) | {contract.name("types", t) for t in contract.types()}
     names |= {v for k, v in (maps or {}).items() if "." not in k}
+    names |= {t.get("type_key") for t in ((old or {}).get("types") or {}).values()}
+    names.discard(None)
     return lambda t: bool(names & {t.get("api_name"), t.get("name"), t.get("type_key")})
 
 
@@ -566,6 +572,31 @@ def binding_of(ids):
     return {k: m.get(k) or {} for k in ("types", "field_keys", "roles", "states")}
 
 
+def stale(contract, binding, fresh):
+    """Problems where feishu/ids.json records something else than the snapshot now shows:
+    any session may re-read the snapshot, the binding is written in one place only, so a
+    renamed state or a slot the space has since gained leaves the ledger on old names."""
+    rows, fix = [], "重跑 setup.py feishu --target <项目目录> --live，核对后加 --apply"
+    shown = lambda v: "“%s”" % v.get("name") if isinstance(v, dict) else str(v)
+    for wid, new in (fresh.get("types") or {}).items():
+        cn, was = contract.name("types", wid), (binding.get("types") or {}).get(wid)
+        if not was:
+            rows.append([cn, "空间里有这个类型，绑定里还没记", fix])
+            continue
+        if was != new:
+            rows.append([cn, "空间里现在是“%s”（%s），绑定记的是“%s”（%s）" % (
+                new.get("name"), new.get("api_name"), was.get("name"), was.get("api_name")), fix])
+        for kind, group, label in (("field_keys", "fields", "字段"), ("roles", "roles", "角色"), ("states", "states", "状态")):
+            old, now_ = (binding.get(kind) or {}).get(wid) or {}, (fresh.get(kind) or {}).get(wid) or {}
+            for slot, value in now_.items():
+                what = "%s的%s“%s”" % (cn, label, contract.name(group, slot))
+                if slot not in old:
+                    rows.append([what, "空间里有，绑定里还没记", fix])
+                elif old[slot] != value:
+                    rows.append([what, "空间里现在是 %s，绑定记的是 %s" % (shown(value), shown(old[slot])), fix])
+    return rows
+
+
 def find_project(wanted):
     """The one space whose name, simple_name or project_key equals wanted."""
     data = call(["project", "search", "--project-key", wanted])
@@ -590,10 +621,13 @@ def report(contract, snap, binding, problems, notes):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="读飞书项目空间的结构，把插件的约定绑定到它")
     sub = ap.add_subparsers(dest="cmd")
+    p = sub.add_parser("export")
+    p.add_argument("--space", required=True, help="要读的空间（模板）：名字、simple_name 或 project_key")
+    p.add_argument("--out", required=True, help="快照写到这个文件")
     for name in ("snapshot", "bind", "check", "show"):
         p = sub.add_parser(name)
         p.add_argument("--target", help="项目目录")
-        if name in ("snapshot", "bind"):
+        if name == "snapshot":
             p.add_argument("--apply", action="store_true")
         if name == "bind":
             p.add_argument("--map", action="append", default=[])
@@ -609,6 +643,15 @@ def main(argv=None):
     spec = orgspec.OrgSpec()
     contract = orgspec.Contract(spec)
     try:
+        if args.cmd == "export":
+            snap = snapshot(find_project(args.space), wanted_by(contract))
+            write(os.path.abspath(args.out), dump_json(snap))
+            binding, _ = bind(contract, snap)
+            for note in check(contract, snap, binding)[1]:
+                print("提醒：" + note)
+            print("空间“%s”的快照写到 %s。文件里有这个空间的各种标识；要放进仓库的是不带标识的结构：\n"
+                  "  space.py show --snapshot %s structure" % (snap.get("space_name"), args.out, args.out))
+            return 0
         if args.cmd == "check" and args.space:
             snap = snapshot(find_project(args.space), wanted_by(contract))
             binding, problems = bind(contract, snap)
@@ -636,7 +679,7 @@ def main(argv=None):
                 raise SpaceError("feishu/ids.json 里没有 project_key：先跑 setup.py feishu --live --apply 找到项目空间")
             old = load_json(os.path.join(fdir, "space.json"))
             snap = snapshot({"project_key": m["project_key"], "simple_name": m.get("simple_name"), "name": m.get("space_name")},
-                            wanted_by(contract))
+                            wanted_by(contract, old=binding_of(ids)))
             for line in diff(old, snap) if old else []:
                 print("变化：" + line)
             if args.apply:
@@ -654,20 +697,16 @@ def main(argv=None):
             binding, problems = bind(contract, snap, binding_of(ids), parse_maps(contract, args.map))
             more, notes = check(contract, snap, binding)
             report(contract, snap, binding, problems + more, notes)
-            if args.apply:
-                write(os.path.join(fdir, "ids.json"), dump_json(apply_binding(ids, contract, binding)))
-                write(os.path.join(fdir, "space.md"), to_markdown(snap, contract, binding) + "\n")
-                print("已写入 feishu/ids.json。")
-            else:
-                print("这是预览。核对后加 --apply 写入 feishu/ids.json。")
+            print("这是预览，照本地的快照算的。绑定由研究员的会话写入：setup.py feishu --target <项目目录> --live，核对后加 --apply。")
             return 1 if problems + more else 0
         binding = binding_of(ids)
         if args.cmd == "check":
-            _, problems = bind(contract, snap, binding)
+            fresh, problems = bind(contract, snap, binding)
+            problems += stale(contract, binding, fresh)
             more, notes = check(contract, snap, binding)
             if m.get("contract_version") not in (None, contract.version):
                 problems.append(["feishu/ids.json", "绑定按约定第 %s 版做的，插件现在是第 %d 版" % (m.get("contract_version"), contract.version),
-                                 "重跑 space.py bind --target <项目目录> --apply"])
+                                 "重跑 setup.py feishu --target <项目目录> --live，核对后加 --apply"])
             report(contract, snap, binding, problems + more, notes)
             return 1 if problems + more else 0
         if args.what == "binding":

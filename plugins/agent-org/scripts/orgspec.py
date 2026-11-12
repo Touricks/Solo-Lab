@@ -182,6 +182,10 @@ class OrgSpec:
     def signoff_items(self):
         return "\n".join("- " + i for i in self.rules["only_humans"])
 
+    def task_rules(self):
+        """How a research task moves: who advances a step, the freeze, roll-backs, the two flows."""
+        return "\n".join("- " + self.render(r) for r in self.rules["task_rules"])
+
     def sequence_overview(self):
         return md_table(["序列", "重心"], [[self.term("seq", s["id"]), self.render(s["focus"])]
                                           for s in self.rules["sequences"]])
@@ -210,7 +214,7 @@ class OrgSpec:
         return md_table(["包", "发出方", "接收方", "怎么送到"], rows)
 
     def routing_table(self):
-        rows = [[r["id"], r["when"], r["test"], self.render(r["detail"])] for r in self.rules["routing"]]
+        rows = [[r["id"], self.render(r["when"]), self.render(r["test"]), self.render(r["detail"])] for r in self.rules["routing"]]
         return md_table(["编号", "收到什么", "判据", "动作"], rows)
 
     # --------------------------------------------------------------- feishu
@@ -223,24 +227,6 @@ class OrgSpec:
                 return w
         raise OrgSpecError("未知工作项类型：%s" % wid)
 
-    def fields_of(self, wid):
-        """The shared fields, the source field, then the type's own; a type's own entry
-        with a shared id overrides that entry (feedback's main_doc carries its own note)."""
-        f = self.rules["feishu"]["fields"]
-        out = list(f["common"])
-        if wid in f["source_item"]["on"]:
-            out.append(f["source_item"])
-        merged = {}
-        for x in out + f.get(wid, []):
-            merged[x["id"]] = dict(merged.get(x["id"], {}), **x)
-        return list(merged.values())
-
-    def field(self, wid, fid):
-        for f in self.fields_of(wid):
-            if f["id"] == fid:
-                return f
-        raise OrgSpecError("%s 上没有字段 %s" % (wid, fid))
-
     def field_name(self, fid):
         return self.term("field", fid)
 
@@ -252,28 +238,6 @@ class OrgSpec:
                 w.get("created_by"), w.get("created_by"))
             rows.append([self.term("wi", w["id"]), self.render(w["main_doc"]), replies, who])
         return md_table(["工作项类型", "主文档", "挂在下面的答复", "由谁创建"], rows)
-
-    def flows_table(self):
-        rows = []
-        for w in self.work_items():
-            flow = "；".join("%s→%s" % (a, b) for a, b in w["transitions"])
-            forms = "；".join("%s→%s：%s" % (f["from"], f["to"], "、".join(self.field_name(x) for x in f["required"]))
-                              for f in w.get("forms", []))
-            rows.append([self.term("wi", w["id"]), "、".join(w["states"]), flow, forms or "无"])
-        return md_table(["工作项类型", "状态", "允许的流转", "流转表单必填"], rows)
-
-    def fields_table(self):
-        rows = []
-        seen = set()
-        for w in self.work_items():
-            for f in self.fields_of(w["id"]):
-                key = (w["id"], f["id"])
-                if key in seen:
-                    continue
-                seen.add(key)
-                rows.append([self.term("wi", w["id"]), self.field_name(f["id"]), f["id"], f.get("type") or "",
-                             "、".join(f.get("options") or []), f.get("note", "")])
-        return md_table(["工作项类型", "字段", "标识", "类型", "选项", "说明"], rows)
 
     def docs_tree(self):
         t = self.rules["docs_tree"]
@@ -329,17 +293,16 @@ class OrgSpec:
         for w in self.work_items():
             if w["id"] not in self.terms["wi"]:
                 problems.append("工作项类型 %s 缺中文名" % w["id"])
-            have = {f["id"] for f in self.fields_of(w["id"])}
-            for form in w.get("forms", []):
-                for fid in form["required"]:
-                    if fid not in have:
-                        problems.append("%s 的流转 %s→%s 要求的字段 %s 不在这个类型上" % (
-                            w["id"], form["from"], form["to"], fid))
-                if [form["from"], form["to"]] not in w["transitions"]:
-                    problems.append("%s 的表单 %s→%s 不在允许的流转里" % (w["id"], form["from"], form["to"]))
-            for a, b in w["transitions"]:
-                if a not in w["states"] or b not in w["states"]:
-                    problems.append("%s 的流转 %s→%s 用了不存在的状态" % (w["id"], a, b))
+            for pid in w.get("packages", []) + w.get("replies", []):
+                if pid not in pids:
+                    problems.append("工作项类型 %s 用到的包 %s 不存在" % (w["id"], pid))
+        tree = self.rules["docs_tree"]
+        for n in tree["nodes"]:
+            if n not in self.terms["node"]:
+                problems.append("知识库节点 %s 缺中文名" % n)
+        for n in tree["per_sequence"]:
+            if n not in tree["nodes"]:
+                problems.append("按序列分层的节点 %s 不在一级节点里" % n)
         d = self.rules.get("dispatch") or {}
         roles = {self.role_name(x["id"], r) for x in self.rules["sequences"] for r in (0, 1, 2)}
         ends = roles | {"p0", "p1", "p2"}
@@ -360,10 +323,6 @@ class OrgSpec:
                 problems.append("dispatch.kinds.%s 沿用的 %s 不存在" % (kind, rule["along"]))
         if not d.get("kinds"):
             problems.append("规则文件缺 dispatch（派发图）")
-        for group in ("common", "project", "same_seq", "cross_request", "review", "decision", "feedback"):
-            for f in self.rules["feishu"]["fields"].get(group, []):
-                if f["id"] not in self.terms["field"]:
-                    problems.append("字段 %s 缺中文名" % f["id"])
         return problems
 
 
@@ -489,6 +448,11 @@ class Contract:
         for wid in flow.get("rollback_needs_decision", []):
             if wid not in d["types"]:
                 problems.append("rollback_needs_decision 里的 %s 不是类型槽位" % wid)
+        for state in flow.get("closed", []):
+            if state not in terms.get("state", {}):
+                problems.append("closed 里的状态槽位 %s 没有定义" % state)
+        if sorted(d["types"]) != sorted(w["id"] for w in self.spec.work_items()):
+            problems.append("类型槽位和规则文件 feishu.work_items 的类型对不上")
         return ["约定文件：" + x for x in problems]
 
 
@@ -556,7 +520,7 @@ def lint_text(spec, text):
     names = {v: k for k, v in spec.terms["pkg"].items()}
     pid = names.get(header["包类型"].split("（")[0].strip())
     if not pid:
-        errors.append("包类型“%s”不是现行的五类包之一" % header["包类型"])
+        errors.append("包类型“%s”不是现行的包：只有%s" % (header["包类型"], "、".join(spec.terms["pkg"].values())))
         return errors, warnings
     keys = list(HEADER_KEYS)
     if pid in ("request", "delivery"):
@@ -630,10 +594,11 @@ def main(argv=None):
     if argv[0] == "show" and len(argv) > 1:
         fn = {"ranks": spec.rank_table, "packages": spec.package_table, "relations": spec.relation_matrix,
               "routes": spec.package_routes, "routing": spec.routing_table, "work-items": spec.work_items_table,
-              "flows": spec.flows_table, "fields": spec.fields_table, "docs-tree": spec.docs_tree,
+              "task-rules": spec.task_rules, "docs-tree": spec.docs_tree,
               "handoff": spec.handoff_rules, "overview": spec.sequence_overview}.get(argv[1])
         if not fn:
-            print("可以显示：ranks packages relations routes routing work-items flows fields docs-tree handoff overview")
+            print("可以显示：ranks packages relations routes routing work-items task-rules docs-tree handoff overview；"
+                  "流程和字段在飞书空间里，用 space.py show 看")
             return 2
         print(fn())
         return 0

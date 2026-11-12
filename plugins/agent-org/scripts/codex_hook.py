@@ -62,7 +62,7 @@ def protect_path(pool, policy, path, cwd):
 LEDGER_OPERATIONS = {
     "workitem create": "ledger.py register <草稿>",
     "workitem update": "ledger.py update <工作项 ID> --set <字段>=<值>",
-    "workflow transition-state": "ledger.py transition <工作项 ID> <状态>",
+    "workflow transition": "ledger.py confirm <工作项 ID> --by <会话名>，退回用 ledger.py rollback",
     "comment add": "ledger.py comment <工作项 ID> --text <正文>",
 }
 

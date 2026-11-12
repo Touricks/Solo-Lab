@@ -69,9 +69,11 @@ class CodexTest(unittest.TestCase):
                         "- 过程材料写入范围：packages/drafts/alg/、test-run/evidence/\n")
         lg = ledger.Ledger(str(self.root), "apply")
         ledger.save_receipt(lg, str(path), "101", "registered", doc="https://example.test/wiki/main")
-        ids = {"meegle": {}}
+        ids = {"schema": "agent-org/ids-v2", "meegle": {}}
         ids["meegle"].update(project_key="space", space_name="测试空间", bound_at="2026-11-03T12:00:00Z", types={"same_seq": {"type_key": "package"}},
-            field_keys={"same_seq": {"owner_session": "owner", "main_doc": "doc", "source_item": "source"}})
+            field_keys={"same_seq": {"owner_session": "owner", "main_doc": "doc", "source_item": "source"}},
+            states={"same_seq": {"doing": {"id": "s2", "name": "执行中"}},
+                    "cross_request": {"waiting": {"id": "c1", "name": "待接单"}, "doing": {"id": "c2", "name": "执行中"}}})
         (self.root / "feishu/ids.json").write_text(json.dumps(ids))
         task = json.loads((self.root / "spec/task.json").read_text())
         task["feishu"]["meegle_space"] = "测试空间"
@@ -158,30 +160,10 @@ class CodexTest(unittest.TestCase):
         with mock.patch.object(ledger.Ledger, "item", return_value=item):
             message = self.pool.message("Alg-p1-01", "assign", "请承接", str(path), "101", "pmo")
             self.pool.acknowledge(message["message_id"], thread="worker")
-            with self.assertRaisesRegex(runtime.RuntimeError, "已接单"):
+            with self.assertRaisesRegex(runtime.RuntimeError, "执行中"):
                 self.pool.start(message["message_id"], thread="worker")
-            item["state"] = "已接单"
-            self.assertEqual(self.pool.start(message["message_id"], thread="worker")["state"], "已接单")
-
-    def test_review_rechecks_source_before_work(self):
-        path, item = self.dispatch_fixture()
-        path.write_text(path.read_text().replace("包类型：需求包", "包类型：送审包"))
-        ids_path = self.root / "feishu/ids.json"
-        ids = json.loads(ids_path.read_text())
-        ids["meegle"]["field_keys"]["review"] = ids["meegle"]["field_keys"]["same_seq"]
-        ids_path.write_text(json.dumps(ids))
-        item.update(type="review", state="待核查")
-        item["fields"]["source"] = "202"
-        source = {"type": "same_seq", "state": "执行中"}
-        with mock.patch.object(ledger.Ledger, "item", side_effect=lambda wid: item if str(wid) == "101" else source):
-            with self.assertRaisesRegex(runtime.RuntimeError, "来源工作项"):
-                self.pool.message("Alg-p1-01", "review", "审查", str(path), "101", "pmo")
-            source["state"] = "待验收"
-            message = self.pool.message("Alg-p1-01", "review", "审查", str(path), "101", "pmo")
-            self.pool.acknowledge(message["message_id"], thread="worker")
-            source["state"] = "执行中"
-            with self.assertRaisesRegex(runtime.RuntimeError, "来源工作项"):
-                self.pool.start(message["message_id"], thread="worker")
+            item["state"] = "执行中"                       # the receiver's 接单 step was confirmed
+            self.assertEqual(self.pool.start(message["message_id"], thread="worker")["state"], "执行中")
 
     def test_project_readback_handles_pinned_duplicates_and_detects_moved_chat(self):
         self.bind("Alg-p2-01", "alg")

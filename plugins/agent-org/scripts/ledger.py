@@ -2,35 +2,50 @@
 """Read and write the task ledger (Feishu Project) and package documents (Feishu Docs).
 
 Read commands, for every session:
-    ledger.py get <ID> [--raw]              type, state, name and the rule fields (--raw: meegle's JSON)
-    ledger.py query <name> [--sequence s]   queue | blocked | verifying | reviewing | open | cross | recent | source:<ID>
+    ledger.py get <ID> [--raw]              type, state, flow, name and the fields that have a value
+    ledger.py next <ID>                     the step the item is at: who is responsible, what is still to fill in
+    ledger.py query <name> [--sequence s]   queue | blocked | verifying | open | cross | tasks | recent | source:<ID>
     ledger.py mql <name> [--sequence s]     print the MQL only
     ledger.py trace <ID>                    follow 来源工作项 upwards
     ledger.py status <ID>                   print the 状态包 section of the main document
 
 Write commands, for the scribe only (the guard hook enforces this). They print the
 commands first; nothing is written without --apply:
-    ledger.py register <draft> [--resume] [--existing]   request / review / decision / 立项单: work item + main document
-    ledger.py reply <draft>                 delivery / verdict: document under the parent, link field
-    ledger.py transition <ID> <state> [--set field=value ...]
-    ledger.py update <ID> --set field=value [...]
+    ledger.py register <draft> [--task ID] [--source ID] [--set f=v ...] [--resume]
+                                            需求包 / 决策包 / 研究任务单 / 反馈: work item + main document
+    ledger.py reply <draft>                 交付包: document under the request it answers, 交付包 field
+    ledger.py confirm <ID> --by <会话名> [--set f=v ...]     finish the step the item is at
+    ledger.py rollback <ID> --to <节点> --reason R (--by <会话名> | --decision <ID>)
+    ledger.py archive <ID>                  move the main document subtree to 归档文档/<序列>, then finish the last step
+    ledger.py update <ID> --set f=v [...]   blocked_reason=<原因> also sets the date; an empty value clears a field
     ledger.py comment <ID> --text T
+    ledger.py relink <ID>                   put the item's ID into the 关联工作项 line of its main document
     ledger.py status-block <ID> --file F    replace the 状态包 section (block_replace)
     ledger.py append <ID> --file F          append to 交接记录 (first line carries the session tag)
-    ledger.py archive <ID>                  move the main document subtree to 归档文档/<序列>
-    ledger.py ensure-node <key>             create a knowledge-base node such as feedback or review/alg
-    ledger.py ensure-node all               create the whole node skeleton, parents first
+    ledger.py ensure-node <key> | all       create knowledge-base nodes such as feedback or archive/alg
 
-Fields are named by rule identifiers (sequence, sender, source_item, ...); values
-are converted with feishu/field-dictionary.json. Dates are written as UTC noon.
+Every work item type has node flows. Which flows there are, how the nodes follow each
+other, who is responsible for a step and what it requires is read from the space, never
+kept here: `confirm` asks the space what the current node still lacks, writes the --set
+values, confirms the node and reads it back. What the scripts must find by meaning (the
+main-line type, the main document field, the role that signs ...) is the contract,
+orgspec/contract.json; feishu/ids.json binds each slot to this project's space and
+feishu/space.json is the space's structure as `space.py snapshot` read it.
+
+A field is named by its slot (main_doc), its name in the space (成功标准) or its field_key.
+Values go to meegle as strings: dates as UTC noon in milliseconds, numbers as digits.
+Three checks are the scripts' own. A step whose form requires a signature field takes a
+decision that is decided, approved and made for this task. Before the step that requires
+the conclusion, the operation records are read: a frozen field changed after the signing
+step stops the command. A roll-back on the main line needs an approved decision and
+clears the required fields of the steps it undoes.
+
 Document bodies go to lark-cli on stdin (`--content -`): lark-cli only reads @files
 under the working directory, /tmp or ~/files. The shapes parsed here are the ones
-recorded from a real space (tests/fixtures/feishu/). Every type and field is found
-through feishu/ids.json, which `setup.py feishu --live --apply` binds to the project's
-own space; the rules hold names and identifiers only, never a space's keys.
---offline prints every command without calling Feishu (used by tests).
-Every --apply holds an exclusive lock on feishu/.ledger.lock (waiting up to 60 seconds),
-so two writers never interleave; ids.json and receipts are replaced atomically.
+recorded from a real space (tests/fixtures/feishu/). --offline prints every command
+without calling Feishu (used by tests). Every --apply holds an exclusive lock on
+feishu/.ledger.lock (waiting up to 60 seconds), so two writers never interleave; ids.json
+and receipts are replaced atomically.
 Python 3.9 standard library only.
 """
 import argparse
@@ -49,20 +64,24 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import orgspec  # noqa: E402
 import project_paths  # noqa: E402
+import space  # noqa: E402
 
-# name: (work item type, condition, states to leave out besides the system ones or None, description)
+# name: (type slot, state slots to keep or None, state slots to leave out, extra condition or None, description)
 QUERIES = {
-    "queue": ("decision", "`work_item_status` = '待决定'", None, "决策队列：待决定的决策"),
-    "blocked": ("same_seq", "`work_item_status` = '阻塞'", None, "阻塞的同序列需求"),
-    "verifying": ("same_seq", "`work_item_status` = '待验收'", None, "待验收的同序列需求"),
-    "reviewing": ("review", "`work_item_status` = '待核查'", None, "待核查的送审"),
-    "open": ("same_seq", None, ["已验收", "归档"], "进行中的同序列需求"),
-    "cross": ("cross_request", None, ["已拒绝", "已关闭"], "进行中的跨序列需求"),
-    "recent": ("same_seq", "RELATIVE_DATETIME_BETWEEN(`updated_at`, 'past', '7d')", [], "近 7 天更新过的同序列需求"),
+    "queue": ("decision", ["pending"], [], None, "决策队列：待决定的决策"),
+    "verifying": ("same_seq", ["verifying"], [], None, "待验收的同序列需求"),
+    "open": ("same_seq", None, ["accepted", "archived"], None, "进行中的同序列需求"),
+    "cross": ("cross_request", None, ["accepted", "archived"], None, "进行中的跨序列需求"),
+    "tasks": ("research_task", None, ["archived"], None, "没归档的研究任务"),
+    "recent": ("same_seq", None, [], "RELATIVE_DATETIME_BETWEEN(`updated_at`, 'past', '7d')", "近 7 天更新过的同序列需求"),
 }
-READ_COMMANDS = ("get", "query", "mql", "trace", "status")
+QUERY_NAMES = ["queue", "blocked", "verifying", "open", "cross", "tasks", "recent"]
+READ_COMMANDS = ("get", "next", "query", "mql", "trace", "status")
 TRUE_WORDS = {"是", "true", "True", "1", "yes", "要"}
 FALSE_WORDS = {"否", "false", "False", "0", "no", "不要"}
+RESEARCHER = "研究员"
+SESSION_NAME = re.compile(r"^[A-Za-z]+-p[0-2]-\w+$")
+NODE_STATUS = {"doing": "进行中", "finished": "已完成", "not_started": "未开始"}
 
 
 class LedgerError(Exception):
@@ -161,15 +180,12 @@ def system_states(spec):
     return list(spec.rules["feishu"].get("system_states", []))
 
 
-def closed_states(spec):
-    """States in which new information no longer resumes a work item.
-
-    End states of every type, the system state 已终止, and the states listed in
-    feishu.closed_for_routing (已验收, 已过期): done, though not yet an end state.
-    """
-    out = set(system_states(spec)) | set(spec.rules["feishu"].get("closed_for_routing", []))
-    for w in spec.work_items():
-        out.update(w.get("end_states", []))
+def closed_states(lg):
+    """Names of the states in which new information no longer resumes a work item: the
+    contract's closed states as this space calls them, and the system state 已终止."""
+    out = set(system_states(lg.spec))
+    for wid, states in lg.states.items():
+        out.update(s["name"] for slot, s in states.items() if slot in lg.contract.flow.get("closed", []) and s.get("name"))
     return out
 
 
@@ -224,13 +240,16 @@ class Ledger:
     def __init__(self, root, mode):
         self.root, self.mode = root, mode          # mode: apply | preview | offline
         self.spec = orgspec.OrgSpec()
+        self.contract = orgspec.Contract(self.spec)
         self.ids = load_json(os.path.join(root, "feishu", "ids.json"), {}) or {}
-        self.fd = load_json(os.path.join(root, "feishu", "field-dictionary.json"), {}) or {}
+        self.snap = load_json(os.path.join(root, "feishu", "space.json"), {}) or {}
         m = self.ids.get("meegle") or {}
         self.key = m.get("project_key") or "<project_key>"
         self.simple_name = m.get("simple_name")
         self.types = m.get("types") or {}
         self.field_keys = m.get("field_keys") or {}
+        self.roles = m.get("roles") or {}
+        self.states = m.get("states") or {}
         wiki = self.ids.get("wiki") or {}
         self.nodes = wiki.get("nodes") or {}
         self.tenant = wiki.get("tenant_domain")
@@ -262,46 +281,54 @@ class Ledger:
         return self.bound_type(wid)["type_key"]
 
     def wid_of(self, key):
-        """Rule id of a work item type, from the type_key, api_name or name bound for this
-        space, or from the rule id itself (what --type takes)."""
+        """Type slot from the type_key, api_name or name bound for this space, or from the slot
+        itself (what --type takes)."""
         if not key:
             return None
         for wid, t in self.types.items():
             if key in (t.get("type_key"), t.get("api_name"), t.get("name")):
                 return wid
-        return next((w["id"] for w in self.spec.work_items() if w["id"] == key), None)
+        return key if key in self.contract.types() else None
 
-    def field(self, wid, fid):
-        """Rule field with the field_key bound for this space."""
-        f = self.spec.field(wid, fid)
-        key = (self.field_keys.get(wid) or {}).get(fid)
-        if not key:
-            raise LedgerError("%s的字段 %s（%s）还没绑定：空间里没有的照 feishu/migration.md 建好，名字不同的用 --map 指认，再跑 setup.py feishu --live --apply" % (
-                self.spec.term("wi", wid), fid, self.spec.field_name(fid)))
-        return dict(f, field_key=key)
+    def space_type(self, wid):
+        """What the snapshot holds for a bound type; {} when there is no snapshot of it."""
+        return space.type_of(self.snap, (self.types.get(wid) or {}).get("type_key"))
 
-    def key_of(self, wid, fid):
+    def field(self, wid, ref):
+        """A field of a type, named by its slot, its name in the space, its alias or its
+        field_key: {field_key, name, field_type, options, slot}."""
+        bound = self.field_keys.get(wid) or {}
+        key = bound.get(ref)
+        found = space.field_of(self.snap, (self.types.get(wid) or {}).get("type_key"), key or ref)
+        if found is None and key:                  # bound, but not in the snapshot: go by the contract
+            found = {"field_key": key, "name": self.spec.field_name(ref), "field_type": self.contract.field(ref)["type"]}
+        if found is None:
+            if ref in self.contract.data["fields"]:
+                raise LedgerError("%s的字段 %s（%s）还没绑定：报给模板维护者补上，名字不同的用 --map 指认，再跑 setup.py feishu --live --apply" % (
+                    self.spec.term("wi", wid), ref, self.spec.field_name(ref)))
+            raise LedgerError("%s上没有字段“%s”：写字段名、约定里的标识或 field_key；这个类型有哪些字段见 feishu/space.md" % (
+                self.spec.term("wi", wid), ref))
+        slot = ref if key else next((s for s, k in bound.items() if k == found["field_key"]), None)
+        return dict(found, slot=slot)
+
+    def key_of(self, wid, ref):
         try:
-            return self.field(wid, fid)["field_key"]
+            return self.field(wid, ref)["field_key"]
         except (LedgerError, orgspec.OrgSpecError, KeyError):
             return None
 
-    def fid_by_key(self, wid):
-        """{field_key: rule id} for every rule field of a type that has a key."""
-        out = {}
-        for f in self.spec.fields_of(wid):
-            key = self.key_of(wid, f["id"])
-            if key:
-                out[key] = f["id"]
-        return out
+    def label(self, wid, key):
+        """What a field_key is called in the space."""
+        f = space.field_of(self.snap, (self.types.get(wid) or {}).get("type_key"), key)
+        return (f or {}).get("name") or key
 
-    def fd_type(self, wid):
-        tkey = (self.types.get(wid) or {}).get("type_key")
-        return (self.fd.get("types") or {}).get(tkey) if tkey else None
-
-    def fd_field(self, wid, field_key):
-        t = self.fd_type(wid) or {}
-        return next((x for x in t.get("fields", []) if x.get("field_key") == field_key), None)
+    def state(self, wid, slot):
+        """The name of a state slot in this space."""
+        s = (self.states.get(wid) or {}).get(slot)
+        if not s or not s.get("name"):
+            raise LedgerError("%s的状态“%s”还没绑定：先跑 setup.py feishu --live --apply" % (
+                self.spec.term("wi", wid), self.spec.term("state", slot)))
+        return s["name"]
 
     def me(self):
         """user_key of the account every agent runs as (the researcher's)."""
@@ -316,62 +343,58 @@ class Ledger:
                 self._me = str(key)
         return self._me
 
-    def value(self, wid, fid, raw):
-        """Convert a human value to the STRING protocol meegle expects."""
-        f = self.field(wid, fid)
-        kind = f.get("type")
+    def value(self, wid, ref, raw):
+        """Convert a human value to the STRING protocol meegle expects. An empty value clears the field."""
+        f = self.field(wid, ref)
+        kind, name = f.get("field_type"), f.get("name") or ref
         raw = str(raw).strip()
+        if raw == "":
+            return ""
         if kind == "date":
             ms = utc_noon_ms(raw)
             if not ms:
-                raise LedgerError("%s 要写成存在的日期 YYYY-MM-DD：%s" % (self.spec.field_name(fid), raw))
+                raise LedgerError("%s 要写成存在的日期 YYYY-MM-DD：%s" % (name, raw))
             return ms
-        if kind == "bool":
+        if kind == "number":
+            if not re.fullmatch(r"-?\d+(\.\d+)?", raw):
+                raise LedgerError("%s 要写数字：%s" % (name, raw))
+            return raw
+        if kind in ("bool", "switch"):
             if raw in TRUE_WORDS:
                 return "true"
             if raw in FALSE_WORDS:
                 return "false"
-            raise LedgerError("%s 要写“是”或“否”：%s" % (self.spec.field_name(fid), raw))
+            raise LedgerError("%s 要写“是”或“否”：%s" % (name, raw))
         if kind == "user":
             # every agent runs as the researcher's account, and only the researcher decides
-            if raw in ("研究员", "我", "me") or (self.mode != "offline" and raw == self.me()):
+            if raw in (RESEARCHER, "我", "me") or (self.mode != "offline" and raw == self.me()):
                 return self.me()
             if self.mode == "offline":
                 return raw
-            raise LedgerError("%s 只能填“研究员”（或研究员的 user_key）：%s" % (self.spec.field_name(fid), raw))
-        if kind in ("select", "multi_select"):
-            meta = self.fd_field(wid, f["field_key"]) or {}
-            options = meta.get("options") or []
-            hit = next((o.get("id") for o in options if o.get("name") == raw), None)
+            raise LedgerError("%s 只能填“研究员”（或研究员的 user_key）：%s" % (name, raw))
+        if kind in ("select", "radio", "multi_select", "multi-select", "checkbox", "_work_item_template"):
+            options = f.get("options") or []
+            hit = next((o.get("id") for o in options if raw in (o.get("name"), o.get("id"))), None)
             if hit is None:
-                if self.mode == "offline":
+                if self.mode == "offline" and not options:
                     return "<%s 的选项 ID>" % raw
-                raise LedgerError("%s 没有选项“%s”；字段字典里的选项：%s" % (
-                    self.spec.field_name(fid), raw, "、".join(o.get("name", "") for o in options) or "无（先导出字段字典）"))
-            return json.dumps([{"option_id": hit}]) if kind == "multi_select" else hit
+                raise LedgerError("%s 没有选项“%s”；空间里的选项：%s" % (
+                    name, raw, "、".join(o.get("name", "") for o in options) or "无（先跑 space.py snapshot）"))
+            return json.dumps([{"option_id": hit}]) if kind in ("multi_select", "multi-select", "checkbox") else hit
         return raw
 
-    def entry(self, wid, fid, raw):
-        return {"field_key": self.field(wid, fid)["field_key"], "field_value": self.value(wid, fid, raw)}
-
-    def researcher_role(self, wid):
-        who = self.spec.term("role", "researcher")
-        t = self.fd_type(wid) or {}
-        role = next((r.get("role_id") for r in t.get("roles", []) if r.get("role_name") == who), None)
-        if not role and self.mode == "offline":
-            role = "<研究员角色 ID>"
-        return role
+    def entry(self, wid, ref, raw):
+        return {"field_key": self.field(wid, ref)["field_key"], "field_value": self.value(wid, ref, raw)}
 
     def role_owners(self, wid):
-        """role_owners entry naming the researcher, for workitem create; None if the role is unknown."""
-        role = self.researcher_role(wid)
-        if not role:
-            print("提醒：字段字典里%s没有“%s”角色，工作项的角色人员会空着" % (
-                self.spec.term("wi", wid), self.spec.term("role", "researcher")))
+        """role_owners entry for workitem create: every role of the type is the researcher's
+        account, so every node has someone who may finish it. None when no role is known."""
+        roles = [r["role_id"] for r in self.space_type(wid).get("roles") or []] or sorted(set((self.roles.get(wid) or {}).values()))
+        if not roles:
+            print("提醒：读不到%s有哪些角色，工作项的角色人员会空着" % self.spec.term("wi", wid))
             return None
-        return {"field_key": "role_owners", "field_value": json.dumps([{"role": role, "owners": [self.me()]}])}
+        return {"field_key": "role_owners", "field_value": json.dumps([{"role": r, "owners": [self.me()]} for r in roles])}
 
-    # running commands
     def run(self, argv, write, stdin=None):
         shown = " ".join(_quote(a) for a in argv)
         if stdin is not None:
@@ -424,12 +447,12 @@ class Ledger:
         return self.meegle(*args)
 
     def item(self, item_id):
-        """{type, type_key, state, name, fields{field_key: raw value}}; None offline.
+        """{type, type_key, state, flow, flow_id, name, fields{field_key: raw value}}; None offline.
 
         Shape of `workitem get --fields '["_all"]'`: work_item_attribute holds the
-        type {key: type_key, name}, the state {key, name} and work_item_name;
-        work_item_fields lists {key, name, value}. Fields without a value are left
-        out. One page holds 100 fields; the types here have under 50.
+        type {key: type_key, name}, the state {key, name}, the flow {id, name} and
+        work_item_name; work_item_fields lists {key, name, value}. Fields without a
+        value are left out. One page holds 100 fields; the types here have under 60.
         """
         data = self.get(item_id, ["_all"])
         if data is None:
@@ -443,9 +466,64 @@ class Ledger:
         for f in data.get("work_item_fields") or []:
             if isinstance(f, dict) and f.get("key"):
                 fields[f["key"]] = f.get("value")
+        flow = attr.get("template") or {}
         return {"type": self.wid_of(tkey), "type_key": tkey,
                 "state": (attr.get("work_item_status") or {}).get("name"),
+                "flow": flow.get("name"), "flow_id": str(flow["id"]) if flow.get("id") is not None else None,
                 "name": attr.get("work_item_name"), "fields": fields}
+
+    def flow_nodes(self, item_id):
+        """The item's flow as it stands, in order: each node's key, name, status (doing,
+        finished, not_started), when it last began and finished (ms), roles and form items with
+        their values. None offline. One page of `workflow get-node` holds 20 nodes."""
+        raw, page = [], 1
+        while True:
+            data = self.meegle("workflow", "get-node", "--work-item-id", str(item_id), "--page-num", str(page))
+            if data is None:
+                return None
+            batch = data.get("list") or []
+            raw += batch
+            if not batch or not (data.get("pagination") or {}).get("has_more"):
+                break
+            page += 1
+        nodes = []
+        for n in raw:
+            rec = space.node_record(n)
+            rec["status"] = (n.get("basic") or {}).get("status")
+            rec["started_at"] = (n.get("schedule") or {}).get("actual_begin_time")
+            rec["finished_at"] = (n.get("schedule") or {}).get("actual_finish_time")
+            values = {f.get("field_key"): f.get("value") for f in n.get("form_items") or [] if isinstance(f, dict)}
+            for f in rec["required"] + rec["optional"]:
+                f["value"] = values.get(f["field_key"])
+            nodes.append(rec)
+        if not nodes:
+            raise LedgerError("读不到 #%s 的节点：它的类型不是节点流程，或者工作项不在这个空间" % item_id)
+        return space.ordered(nodes)
+
+    def unfinished(self, item_id, node_key):
+        """What the space says a node still lacks before it can be confirmed: [{class, key, ...}]."""
+        data = self.meegle("workflow", "list-state-required", "--work-item-id", str(item_id),
+                           "--state-key", node_key, "--mode", "unfinished")
+        if data is None:
+            return None
+        return [f for f in data.get("form_items") or [] if isinstance(f, dict) and not f.get("finished")]
+
+    def op_records(self, item_id, module, start=None):
+        """The item's operation records of one module (node_mod, field_mod ...), oldest first,
+        from `start` (ms) on. A page holds 20; --start only works together with --end."""
+        args = ["workitem", "list-op-records", "--work-item-id", str(item_id), "--op-record-module", module]
+        if start is not None:
+            args += ["--start", str(int(start)), "--end", str(int(time.time() * 1000) + 60000)]
+        out, token = [], None
+        for _ in range(60):
+            data = self.meegle(*(args + (["--start-from", token] if token else [])))
+            if data is None:
+                return None
+            out += data.get("op_records") or []
+            token = data.get("start_from")
+            if not data.get("has_more") or not token:
+                return out
+        raise LedgerError("#%s 的操作记录翻了 60 页还没读完" % item_id)
 
     def people(self, it, item_id, keys=None):
         """Fill in the person fields `workitem get` leaves empty (决定人 reads back as null).
@@ -461,7 +539,8 @@ class Ledger:
         if not wid:
             return
         if keys is None:
-            keys = [self.key_of(wid, f["id"]) for f in self.spec.fields_of(wid) if f.get("type") == "user"]
+            keys = [f["field_key"] for f in self.space_type(wid).get("fields") or []
+                    if f.get("field_type") == "user" and str(f.get("field_key")).startswith("field_")]
         keys = [k for k in dict.fromkeys(keys) if k and plain(it["fields"].get(k)) is None]
         num = str(item_id).strip().lstrip("#")
         if not keys or not num.isdigit():
@@ -482,17 +561,17 @@ class Ledger:
             elif v not in (None, "", {}, []):
                 print("提醒：人员字段 %s 的 MQL 输出读不懂，按空的处理" % k)
 
-    def text_of(self, it, fid):
-        """Plain text of a rule field on a work item read with item(); None if empty or absent.
+    def text_of(self, it, ref):
+        """Plain text of a field on a work item read with item(); None if empty or absent.
 
         When the item's type cannot be read, shared fields (main_doc, sequence,
         sender ...) are still found through any type that has them.
         """
         if not it:
             return None
-        wids = [it["type"]] if it.get("type") else [w["id"] for w in self.spec.work_items()]
+        wids = [it["type"]] if it.get("type") else list(self.contract.types())
         for wid in wids:
-            key = self.key_of(wid, fid)
+            key = self.key_of(wid, ref)
             if key and key in it["fields"]:
                 return plain(it["fields"].get(key))
         return None
@@ -631,9 +710,51 @@ def created_id(out, what):
 
 # --------------------------------------------------------------- drafts
 HEADER = re.compile(r"^- ([^：:]+)[：:]\s*(.*)$")
+SHEETS = {"研究任务单": "research_task", "反馈": "feedback"}
+SHEET_KEYS = {"research_task": ["流程", "发出方", "关联工作项"], "feedback": ["发出方", "关联工作项"]}
+LINK_LINE = re.compile(r"^(- 关联工作项[：:][ \t]*)([^；;\n]*)(.*)$", re.M)
+PLACEHOLDERS = {"", "待建", "待登记", "空", "无", "-", "—"}
+
+
+def header_of(text):
+    """The `- 键：值` lines before the first section, as a dict (the first of a repeated key wins)."""
+    header = {}
+    for line in text.splitlines():
+        m = HEADER.match(line)
+        if m and m.group(1) not in header:
+            header[m.group(1)] = m.group(2).strip()
+        if line.startswith("## "):
+            break
+    return header
+
+
+def title_of(text):
+    return next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), "")
+
+
+def link_line(text, ref, item_id):
+    """The draft with its work item in the 关联工作项 header line.
+
+    A placeholder (待建, 待登记, empty ...) becomes ref; whatever follows the first ；
+    (；来源工作项 #2100) is kept. A line that already names this item is left alone.
+    Anything else is neither a placeholder nor this item: LedgerError, before a
+    document carries a wrong ID.
+    """
+    head = text.split("\n## ", 1)[0]
+    m = LINK_LINE.search(head)
+    if not m:
+        raise LedgerError("包头里没有“关联工作项”一行：登记新工作项的草稿写“- 关联工作项：待建”")
+    value, num = m.group(2).strip(), re.escape(str(item_id))
+    if value.strip("（）()〔〕[] ") in PLACEHOLDERS:
+        return text[:m.start()] + m.group(1) + ref + m.group(3) + text[m.end():]
+    if re.fullmatch(r"#?%s|\[#?%s\]\(\S+\)" % (num, num), value):
+        return text
+    raise LedgerError("包头的“关联工作项”写的是“%s”：登记新工作项的草稿这一行写“待建”，登记时换成新建的工作项 ID" % value)
 
 
 class Draft:
+    """A package draft: 需求包, 交付包 or 决策包."""
+
     def __init__(self, spec, path):
         self.path = path
         with open(path, encoding="utf-8") as f:
@@ -641,23 +762,19 @@ class Draft:
         errors, _ = orgspec.lint_text(spec, self.text)
         if errors:
             raise LedgerError("草稿没通过检查，先改好：\n" + "\n".join(errors))
-        self.header = {}
-        for line in self.text.splitlines():
-            m = HEADER.match(line)
-            if m and m.group(1) not in self.header:
-                self.header[m.group(1)] = m.group(2).strip()
-            if line.startswith("## "):
-                break
+        self.header = header_of(self.text)
         if "包类型" not in self.header:
             raise LedgerError("草稿的包头没有“包类型”：%s" % path)
         names = {v: k for k, v in spec.terms["pkg"].items()}
         self.pid = names[self.header["包类型"].split("（")[0].strip()]
         rels = {v: k for k, v in spec.terms["rel"].items()}
         self.rel = rels.get(self.header.get("关系", "").strip())
-        title = next((l[2:].strip() for l in self.text.splitlines() if l.startswith("# ")), "")
+        title = title_of(self.text)
         self.task = re.split(r"[：:]", title, 1)[-1].strip() if title else os.path.basename(path)
         m = re.search(r"（([A-Za-z]+-p[0-2]-[\w]+)）", self.header.get("发出方", ""))
         self.author = m.group(1) if m else None
+        m = re.search(r"（([A-Za-z]+-p[0-2]-[\w]+)）", self.header.get("接收方", ""))
+        self.receiver = m.group(1) if m else None
         seq_by_cn = {spec.term("seq", s): s for s, _, _ in spec.sequences()}
         self.sender_seq = next((s for cn, s in seq_by_cn.items() if self.header.get("发出方", "").startswith(cn)), None)
         self.receiver_seq = next((s for cn, s in seq_by_cn.items() if self.header.get("接收方", "").startswith(cn)), None)
@@ -665,6 +782,9 @@ class Draft:
         self.linked = re.findall(r"#(\d+)", link)
         src = re.search(r"来源工作项[：:\s]*#?(\d+)", self.text)
         self.source = src.group(1) if src else None
+        ref = re.search(r"#?(\d{3,})", self.header.get("所属研究任务", ""))
+        self.task_ref = ref.group(1) if ref else None
+        self.flow = None
 
     def section(self, name):
         m = re.search(r"\n## %s\n(.*?)(?:\n## |\Z)" % re.escape(name), self.text, re.S)
@@ -679,12 +799,50 @@ class Draft:
         return "\n".join(l for l in self.text.splitlines() if not l.startswith("# ")).strip() + "\n"
 
 
+def sheet_kind(path):
+    """research_task or feedback when the file is a 研究任务单 or a 反馈; None for a package draft."""
+    with open(path, encoding="utf-8") as f:
+        title = title_of(f.read())
+    return next((kind for word, kind in SHEETS.items() if re.match(r"%s\s*[：:]" % word, title)), None)
+
+
+class Sheet(Draft):
+    """A 研究任务单 or a 反馈: `# 研究任务单：<任务名>`, header lines, then sections. Not a
+    package: nobody receives it; it becomes the main document of a work item of its own."""
+
+    def __init__(self, spec, path, kind):
+        self.path, self.kind = path, kind
+        with open(path, encoding="utf-8") as f:
+            self.text = f.read()
+        self.header = header_of(self.text)
+        word = next(w for w, k in SHEETS.items() if k == kind)
+        missing = [k for k in SHEET_KEYS[kind] if k not in self.header]
+        if missing:
+            raise LedgerError("%s的开头缺这几行：%s" % (word, "、".join("“- %s：…”" % k for k in missing)))
+        self.pid, self.rel, self.receiver, self.receiver_seq, self.linked = None, None, None, None, []
+        self.task = re.split(r"[：:]", title_of(self.text), 1)[-1].strip()
+        if not self.task:
+            raise LedgerError("%s的标题要写成“# %s：<名字>”" % (word, word))
+        sender = self.header.get("发出方", "").strip()
+        if re.search(r"[<>]", self.task + sender + self.header.get("流程", "")):
+            raise LedgerError("%s的标题或开头几行还是模板里的占位（<…>），先填好再登记" % word)
+        m = re.search(r"（([A-Za-z]+-p[0-2]-[\w]+)）", sender)
+        self.author = m.group(1) if m else (sender or None)        # a session, or 研究员, 导师 ...
+        seq_by_cn = {spec.term("seq", s): s for s, _, _ in spec.sequences()}
+        self.sender_seq = next((s for cn, s in seq_by_cn.items() if sender.startswith(cn)), None)
+        src = re.search(r"来源工作项[：:\s]*#?(\d+)", self.text)
+        self.source = src.group(1) if src else None
+        ref = re.search(r"#?(\d{3,})", self.header.get("所属研究任务", ""))
+        self.task_ref = ref.group(1) if ref else None
+        self.flow = self.header.get("流程", "").strip() or None
+
+
 STATUS_SECTION = "## 状态包\n\n### 简介\n\n%s### 当前状态\n\n### 近期变化\n\n### 风险\n"
 
 
 def cognitive_layer(body):
-    """The 认知层 paragraph of a draft; a 送审包 has none and uses its 待审结论. '' when neither."""
-    for heading in ("认知层", "待审结论"):
+    """What a new 状态包 starts from: the 认知层 of a package, the 目标 of a 研究任务单. '' when neither."""
+    for heading in ("认知层", "目标"):
         m = re.search(r"^## %s[ \t]*\n(.*?)(?=^## |\Z)" % heading, body, re.M | re.S)
         if m and m.group(1).strip():
             return m.group(1).strip()
@@ -747,7 +905,7 @@ def safe_name(path):
 
 def receipt_path(lg, path, item_id):
     """packages/sent/<ID>.json, or <ID>-<draft file>.json when another draft already holds <ID>.json
-    (a second 立项单 attached to the same project with --existing)."""
+    (the same draft file name registered again)."""
     return receipt_file(lg, [str(item_id), "%s-%s" % (item_id, safe_name(path))], path)
 
 
@@ -854,198 +1012,154 @@ def merge_pairs(*lists):
     return list(merged.values())
 
 
-def write_project_id(lg, item_id):
-    if lg.mode != "apply":
-        return
-    m = os.path.join(lg.root, "feishu", "ids.json")
-    ids = load_json(m, {})
-    if (ids.get("meegle") or {}).get("project_item_id") == item_id:
-        return
-    ids.setdefault("meegle", {})["project_item_id"] = item_id
-    save_json(m, ids)
-
-
 def work_item_type(draft):
     if draft.pid == "request":
         return "cross_request" if draft.rel == "cross" else "same_seq"
-    if draft.pid in ("review", "decision"):
-        return draft.pid
+    if draft.pid == "decision":
+        return "decision"
     raise LedgerError("%s是答复，不新建工作项；用 reply" % draft.header["包类型"])
 
 
-def parent_node(lg, draft, wid, source):
-    seq = draft.sender_seq
-    if draft.pid == "request" and draft.rel == "execute":
+def parent_node(lg, wid, seq, rel, source):
+    if wid == "same_seq" and rel == "execute":
         if not source:
-            raise LedgerError("执行关系的需求包要写来源工作项（所属阶段的下发需求包）：--source <ID>")
+            raise LedgerError("执行关系的需求包要写来源工作项（它所属的下发需求包）：--source <ID>")
         node = lg.node_of(lg.doc_url(source))
         if not node:
             raise LedgerError("来源工作项 #%s 的主文档不是知识库文档，没法把执行需求包挂在它下面" % source)
         return node
-    key = {"same_seq": "same_seq/%s" % seq, "cross_request": "cross_request",
-           "review": "review/%s" % seq, "decision": "decision"}[wid]
+    key = "same_seq/%s" % seq if wid == "same_seq" else wid
     n = lg.nodes.get(key)
     if not n or not n.get("node_token"):
         raise LedgerError("ids.json 里没有知识库节点 %s；先跑 ensure-node %s" % (key, key))
     return n["node_token"]
 
 
-def ensure_role(lg, wid, item_id):
-    """After create, check that the researcher is the current operator (the state's role is 研究员).
-
-    Returns "ok", "added", "unknown" (could not tell) or None (not checked: not
-    apply mode, or the dictionary has no 研究员 role).
-    """
+def ensure_roles(lg, wid, item_id):
+    """After create, check that every role of the item has the researcher in it; add where it
+    does not. Returns "ok", "added", "unknown" (could not tell) or None (not checked)."""
     if lg.mode != "apply":
         return None
-    role = lg.researcher_role(wid)
-    if not role:
-        return None
     try:
-        data = lg.get(item_id)            # the default answer carries current_status_operator
-        entry = next((f for f in (data or {}).get("work_item_fields") or []
-                      if isinstance(f, dict) and f.get("key") == "current_status_operator"), None)
-        if entry is None:
-            print("提醒：读不到 #%s 的“当前负责人”，没法确认研究员角色有没有人；请在网页上核对。" % item_id)
+        data = lg.get(item_id, ["_all"])
+        members = ((data or {}).get("work_item_attribute") or {}).get("role_members")
+        if not isinstance(members, list):
+            print("提醒：读不到 #%s 的角色人员，没法确认各节点有没有负责人；请在网页上核对。" % item_id)
             return "unknown"
-        if entry.get("value") and lg.me() in json.dumps(entry.get("value"), ensure_ascii=False):
+        me = lg.me()
+        empty = [r.get("key") for r in members if isinstance(r, dict) and r.get("key")
+                 and me not in json.dumps(r.get("members") or [], ensure_ascii=False)]
+        if not empty:
             return "ok"
         lg.meegle("workitem", "update", "--work-item-id", str(item_id), "--role-operate",
-                  json.dumps([{"op": "add", "role_key": role, "user_keys": [lg.me()]}]), write=True)
-        print("建工作项时带的角色人员没生效，已用 --role-operate 把研究员补进“%s”角色。" % lg.spec.term("role", "researcher"))
+                  json.dumps([{"op": "add", "role_key": r, "user_keys": [me]} for r in empty]), write=True)
+        print("建工作项时带的角色人员没全生效，已用 --role-operate 把研究员补进：%s。" % "、".join(empty))
         return "added"
     except LedgerError as e:
         print("提醒：没能核对 #%s 的角色人员：%s" % (item_id, str(e)[:200]))
         return "unknown"
 
 
-def template_entry(lg, wid):
-    tpl = (lg.types.get(wid) or {}).get("template_id")
-    if not tpl:
-        if lg.mode != "offline":
-            raise LedgerError("ids.json 里没有%s的模板 ID；先跑 setup.py feishu --live --apply" % lg.spec.term("wi", wid))
-        tpl = "<模板 ID>"
-    return {"field_key": "template", "field_value": str(tpl)}
+def flow_entry(lg, wid, name=None):
+    """The `template` field of workitem create: which flow the new item follows."""
+    tid, flow = space.flow_of(lg.snap, (lg.types.get(wid) or {}).get("type_key"), name)
+    if not tid:
+        if lg.mode == "offline":
+            return {"field_key": "template", "field_value": "<流程 ID>"}
+        flows = "、".join(f.get("name") or "" for f in (lg.space_type(wid).get("flows") or {}).values())
+        if not flows:
+            raise LedgerError("feishu/space.json 里没有%s的流程；先跑 setup.py feishu --live --apply" % lg.spec.term("wi", wid))
+        raise LedgerError("%s有这些流程：%s；%s" % (lg.spec.term("wi", wid), flows,
+                                               "没有“%s”" % name if name else "要写明走哪一个"))
+    return {"field_key": "template", "field_value": str(tid)}
 
 
-def rewrite_link(lg, path, text, item_id):
-    if lg.mode == "apply":
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text.replace("关联工作项：待建", "关联工作项：#%s" % item_id))
+def space_url(lg):
+    host = (lg.ids.get("meegle") or {}).get("host") or "project.feishu.cn"
+    return "https://%s/%s" % (host, lg.simple_name or lg.key)
 
 
-def register_project(lg, path, pairs, resume=False, existing=False, doc=None):
-    """立项单: create the project work item with the charter as its main document.
+def open_tasks(lg):
+    """The research tasks that are not archived: [(id, name)]. [] offline."""
+    main = lg.contract.main_line()
+    if lg.mode == "offline" or main not in lg.types:
+        return []
+    rows = []
+    for mql in mql_text(lg, "tasks"):
+        rows += query_all(lg, mql)
+    return [(str(r.get("work_item_id")), r.get("name") or "") for r in rows]
 
-    With existing=True, a project already recorded in ids.json gets the new
-    charter as its main document instead (no second project is created).
+
+def task_of(lg, wid, given):
+    """The research task a new item belongs to: what was given, else the only one that is open."""
+    if given:
+        return item_id_of(given)
+    tasks = open_tasks(lg)
+    if len(tasks) == 1:
+        return tasks[0][0]
+    if lg.mode == "offline":
+        return "<所属研究任务 ID>"
+    key = lg.key_of(wid, "task_ref")
+    must = any(c.get("required") and c.get("field_key") == key for c in lg.space_type(wid).get("create_fields") or [])
+    if not must:
+        return None
+    raise LedgerError("没法确定这份包属于哪条研究任务：空间里没归档的研究任务有 %d 条%s。包头加一行“- 所属研究任务：#<ID>”，或者登记时加 --task <ID>" % (
+        len(tasks), "（%s）" % "、".join("#%s %s" % t for t in tasks[:6]) if tasks else ""))
+
+
+def first_step_is_the_senders(lg, wid, nodes):
+    """The first node only records that the sender put the item in (跨序列需求的“提出”): its
+    role is the issuer and everything it requires is filled in when the item is created."""
+    first = next((n for n in nodes or [] if n["status"] == "doing"), None)
+    if not first or first["prev"] or len(nodes) < 3:
+        return None
+    created = {c["field_key"] for c in lg.space_type(wid).get("create_fields") or [] if c.get("required")}
+    issuer = (lg.roles.get(wid) or {}).get("issuer")
+    if first["roles"] == [issuer] and first["required"] and all(r["field_key"] in created for r in first["required"]):
+        return first
+    return None
+
+
+def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=None):
+    """Register a draft: a work item with the draft as its main document.
+
+    需求包 → 同序列需求 or 跨序列需求; 决策包 → 决策; 研究任务单 → 研究任务; 反馈 → 反馈.
+    Everything that can fail is checked before the work item exists: the header, the
+    fields the new-item page requires, the parent node. The item is created with a
+    link to the space as its main document, since the page requires one; the document
+    is created next, with the item's ID in its title and header, and written back.
     """
-    project = (lg.ids.get("meegle") or {}).get("project_item_id")
-    again = "。立项单改过、要换主文档的，把修订版另存成新的草稿文件，再用 register <新文件> --existing 登记"
-    rec = check_receipt(lg, path, resume or bool(doc) and bool(find_receipt(lg, path)), again) if lg.mode != "offline" else None
-    pairs = merge_pairs((rec or {}).get("pairs"), resolved_pairs(lg, pairs))
-    sets = parse_sets(lg, "project", pairs)               # a bad --set value stops before anything is written
-    if project and not rec and not existing:
-        raise LedgerError("已经有项目 #%s。要把这份立项单换成它的主文档，加 --existing：ledger.py register %s --existing" % (
-            project, path))
-    if existing and not project and not rec:
-        raise LedgerError("ids.json 里没有已有的项目（meegle.project_item_id）。去掉 --existing 新建项目，或者先把项目 ID 写进 feishu/ids.json")
-    with open(path, encoding="utf-8") as f:
-        text = f.read()
-    title = next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), "")
-    name = re.split(r"[：:]", title, 1)[-1].strip()
-    parent = (lg.nodes.get("overview") or {}).get("node_token")
-    if not parent:
-        raise LedgerError("ids.json 里没有“项目总览”节点；先跑 ensure-node overview")
-    owners = None
-    if rec:
-        item_id = rec["work_item_id"]
-    elif project and existing:
-        item_id = str(project)
-        save_receipt(lg, path, item_id, "created", pairs=pairs)
-        print("把立项单挂到已有的项目 #%s 上。" % item_id)
-    else:
-        owners = lg.role_owners("project")
-        fields = [{"field_key": "name", "field_value": name}, template_entry(lg, "project")]
-        fields += [v for _, v in sets]
-        if owners:
-            fields.append(owners)
-        created = lg.meegle("workitem", "create", "--work-item-type", lg.api("project"), "--fields",
-                            json.dumps(fields, ensure_ascii=False), write=True)
-        item_id = created_id(created, "项目") if created is not None else "<项目工作项 ID>"
-        save_receipt(lg, path, item_id, "created", pairs=pairs)
-        write_project_id(lg, item_id)                     # a revised charter with --existing finds it at once
-    role = None
-    state = {}
-
-    def remember(**kw):
-        state.update(kw)
-        save_receipt(lg, path, item_id, "created", **kw)
-
-    def create():
-        body = "\n".join(l for l in text.splitlines() if not l.startswith("# ")).replace(
-            "关联工作项：待建", "关联工作项：#%s" % item_id)
-        return lg.create_doc(parent, title, body + "\n", created=lambda d: remember(docx=d, doc_unknown=False))
-
-    try:
-        if owners:
-            role = ensure_role(lg, "project", item_id)
-        url = main_document(lg, rec or {}, doc, "“项目总览”节点（%s）" % parent, create, remember)
-        updates = [{"field_key": lg.field("project", "main_doc")["field_key"], "field_value": url}]
-        updates += [v for _, v in sets]                   # --existing: the --set values go in with the main document
-        lg.meegle("workitem", "update", "--work-item-id", item_id, "--fields",
-                  json.dumps(updates, ensure_ascii=False), write=True)
-    except LedgerError as e:
-        if state.get("doc_unknown", (rec or {}).get("doc_unknown")) and not (state.get("docx") or state.get("doc")):
-            raise WriteMaybeDone("%s\n项目 #%s 已经在了，建立项单文档没有拿到确定的结果：先在网页上“项目总览”节点下核对。建好了的，运行 ledger.py register %s --resume --doc <文档链接> --apply；确认没建成的，用 --doc new" % (
-                e, item_id, path))
-        raise LedgerError("%s\n项目 #%s 已经在了；修好后运行 ledger.py register %s --resume --apply 接着做（--set 的值已记在回执里）" % (
-            e, item_id, path))
-    if lg.mode == "apply":
-        write_project_id(lg, item_id)
-        rewrite_link(lg, path, text, item_id)
-        save_receipt(lg, path, item_id, "registered", doc=url)
-    if rec:
-        who = "（接着上次做完；角色人员请在网页上核对。）"
-    elif owners and role in ("ok", "added"):
-        who = "负责人角色填的是研究员。"
-    elif owners and role == "unknown":
-        who = "负责人角色没能核对，请研究员在网页上看一眼。"
-    elif owners:
-        who = "负责人角色随创建写入了研究员（预览时不核对）。"
-    elif project and existing:
-        who = ""
-    else:
-        who = "负责人角色没填上，请研究员在网页上补。"
-    print("登记：项目 #%s，立项单放在项目总览下。%s" % (item_id, who))
-    return item_id
-
-
-def register(lg, path, source=None, extra=None, pairs=None, resume=False, existing=False, doc=None):
     spec = lg.spec
-    with open(path, encoding="utf-8") as f:
-        first = next((l for l in f.read().splitlines() if l.startswith("# ")), "")
-    if first.startswith("# 立项单"):
-        return register_project(lg, path, pairs, resume, existing, doc)
-    d = Draft(spec, path)
-    wid = work_item_type(d)
+    kind = sheet_kind(path)
+    d = Sheet(spec, path, kind) if kind else Draft(spec, path)
+    wid = kind or work_item_type(d)
     if not d.author:
-        raise LedgerError("包头的发出方要带会话名，比如“算法 +2（Alg-p2-01）”")
+        raise LedgerError("发出方要带会话名，比如“算法 +2（Alg-p2-01）”")
     rec = check_receipt(lg, path, resume or bool(doc) and bool(find_receipt(lg, path))) if lg.mode != "offline" else None
     if rec:
-        source = source or rec.get("source")
+        source, task = source or rec.get("source"), task or rec.get("task")
         pairs = merge_pairs(rec.get("pairs"), resolved_pairs(lg, pairs))   # rewritten with the main document
     source = item_id_of(source or d.source) if (source or d.source) else None
-    pkg = spec.pkg(d.pid)
-    name = spec.rules["naming"]["work_item"].replace("<包名>", pkg).replace("<作者会话名>", d.author).replace("<任务名>", d.task)
+    link_line(d.text, "#0", "0")                      # a 关联工作项 line that is no placeholder stops here
+    word = next((w for w, k in SHEETS.items() if k == kind), None)
+    if kind == "research_task":
+        name, title = d.task, spec.rules["naming"]["task_doc"].replace("<任务名>", d.task)
+    elif kind == "feedback":
+        name = "%s：%s" % (word, d.task)
+        title = "工作项 <工作项 ID>｜%s" % name
+    else:
+        pkg = spec.pkg(d.pid)
+        name = spec.rules["naming"]["work_item"].replace("<包名>", pkg).replace("<作者会话名>", d.author).replace("<任务名>", d.task)
+        title = spec.rules["naming"]["main_doc"].replace("<包名>", pkg).replace("<作者会话名>", d.author).replace("<任务名>", d.task)
 
-    # Everything that can fail is checked before the work item exists.
-    fields = [{"field_key": "name", "field_value": name}, template_entry(lg, wid)]
+    fields = [{"field_key": "name", "field_value": name}, flow_entry(lg, wid, d.flow)]
     required = [("sender", d.author)]
-    seq = d.receiver_seq if wid == "cross_request" else d.sender_seq
+    # a sheet the researcher or the mentor is the sender of belongs to the entry's sequence
+    seq = d.receiver_seq if wid == "cross_request" else d.sender_seq or ("pmo" if kind else None)
     if not seq:
-        raise LedgerError("从包头的发出方、接收方认不出序列")
-    required.append(("sequence", spec.term("seq", seq)))
+        raise LedgerError("从发出方、接收方认不出序列：写成“<序列名> +<职级>（<会话名>）”")
+    if "sequence" in lg.contract.slots(wid, "fields"):
+        required.append(("sequence", spec.term("seq", seq)))
     if wid == "same_seq":
         if not d.rel:
             raise LedgerError("同序列需求要写关系：下发或执行")
@@ -1054,43 +1168,48 @@ def register(lg, path, source=None, extra=None, pairs=None, resume=False, existi
         if expected != d.rel:                       # +2 发下发关系的包，+1 发执行关系的包
             raise LedgerError("关系“%s”和发出方 %s 的职级对不上：+2 发的同序列需求是下发，+1 发的是执行；退回作者改包头" % (
                 spec.term("rel", d.rel), d.author))
-        required.append(("relation", spec.term("rel", d.rel)))
+        required += [("relation", spec.term("rel", d.rel)), ("owner_session", d.receiver or "待派")]
     if wid == "cross_request":
         if not (d.sender_seq and d.receiver_seq):
             raise LedgerError("跨序列需求要认得出发起序列和承接序列")
         required += [("from_sequence", spec.term("seq", d.sender_seq)), ("to_sequence", spec.term("seq", d.receiver_seq))]
     if source:
         required.append(("source_item", source))
-    for fid, raw in required:
-        fields.append(lg.entry(wid, fid, raw))
+    if "task_ref" in lg.contract.slots(wid, "fields"):
+        task = task_of(lg, wid, task or d.task_ref)
+        if task:
+            required.append(("task_ref", task))
+    for ref, raw in required:
+        fields.append(lg.entry(wid, ref, raw))
     optional = []
-    if utc_noon_ms(d.header.get("回复期限", "")):
+    has_due = "due" in lg.contract.slots(wid, "fields")          # a decision has no deadline: it waits for the researcher
+    if has_due and utc_noon_ms(d.header.get("回复期限", "")):
         optional.append(("due", d.header["回复期限"]))
-    elif re.search(r"\d{4}-\d{1,2}-\d{1,2}", d.header.get("回复期限", "")):
+    elif has_due and re.search(r"\d{4}-\d{1,2}-\d{1,2}", d.header.get("回复期限", "")):
         print("提醒：回复期限“%s”不是存在的日期，截止时间没写；改好后用 update 补" % d.header["回复期限"])
     if wid == "decision":
-        optional += [("urgency", d.header.get("紧急程度")), ("recommendation", d.section("建议")[:500]),
-                     ("default_action", d.header.get("默认处理")), ("channel", d.header.get("渠道"))]
-    if wid == "review":
-        optional += [("claim_type", d.section_choice("结论类型")), ("usage", d.section_choice("用途"))]
-    project = (lg.ids.get("meegle") or {}).get("project_item_id")
-    if project:
-        optional.append(("project_ref", str(project)))
-    optional += list((extra or {}).items())
-    for fid, raw in optional:
-        if not raw or "/" in str(raw) and fid in ("urgency", "channel"):
+        optional.append(("urgency", d.header.get("紧急程度")))
+    for ref, raw in optional:
+        if not raw or "/" in str(raw) and ref == "urgency":       # the template's "插队/今天/本周/可延后" left as it was
             continue
         try:
-            fields.append(lg.entry(wid, fid, raw))
+            fields.append(lg.entry(wid, ref, raw))
         except (LedgerError, KeyError, orgspec.OrgSpecError) as e:
-            print("提醒：跳过字段 %s（不影响登记，之后可以用 update 补）：%s" % (fid, e))
+            print("提醒：跳过字段 %s（之后可以用 update 补）：%s" % (ref, e))
     sets = parse_sets(lg, wid, pairs)                 # on --resume, all values are written again with the main document
     if not rec:
         fields += [v for _, v in sets]
+    doc_key = lg.field(wid, "main_doc")["field_key"]
+    fields = [f for f in fields if f["field_key"] != doc_key] + [{"field_key": doc_key, "field_value": space_url(lg)}]
+    have = {f["field_key"] for f in fields if f.get("field_value") not in (None, "")}
+    lacking = [c["name"] for c in lg.space_type(wid).get("create_fields") or [] if c.get("required") and c["field_key"] not in have]
+    if lacking and not rec:
+        raise LedgerError("新建%s时这些字段必填，草稿里读不出来：%s。在包头写上，或者登记时用 --set <字段名>=<值> 传" % (
+            spec.term("wi", wid), "、".join(lacking)))
     owners = lg.role_owners(wid)
     if owners:
         fields.append(owners)
-    parent = parent_node(lg, d, wid, source)
+    parent = parent_node(lg, wid, seq, d.rel, source)
 
     if rec:
         item_id = rec["work_item_id"]
@@ -1100,9 +1219,8 @@ def register(lg, path, source=None, extra=None, pairs=None, resume=False, existi
         created = lg.meegle("workitem", "create", "--work-item-type", lg.api(wid), "--fields",
                             json.dumps(fields, ensure_ascii=False), write=True)
         item_id = created_id(created, spec.term("wi", wid)) if created is not None else "<新工作项 ID>"
-        save_receipt(lg, path, item_id, "created", source=source, pairs=resolved_pairs(lg, pairs))
-    title = spec.rules["naming"]["main_doc"].replace("<工作项 ID>", item_id).replace("<包名>", pkg) \
-        .replace("<作者会话名>", d.author).replace("<任务名>", d.task)
+        save_receipt(lg, path, item_id, "created", source=source, task=task, pairs=resolved_pairs(lg, pairs))
+    title = title.replace("<工作项 ID>", item_id)
 
     state = {}
 
@@ -1112,59 +1230,80 @@ def register(lg, path, source=None, extra=None, pairs=None, resume=False, existi
 
     def create():
         link = lg.item_url(wid, item_id)
-        ref = "[#%s](%s)" % (item_id, link) if link else "#%s" % item_id
-        body = with_status_sections(d.body_without_title().replace("关联工作项：待建", "关联工作项：%s" % ref))
+        body = link_line(d.body_without_title(), "[#%s](%s)" % (item_id, link) if link else "#%s" % item_id, item_id)
+        if kind != "feedback":
+            body = with_status_sections(body)
         return lg.create_doc(parent, title, body, created=lambda x: remember(docx=x, doc_unknown=False))
 
     try:
         if owners and not rec:
-            ensure_role(lg, wid, item_id)
+            ensure_roles(lg, wid, item_id)
         url = main_document(lg, rec or {}, doc, "节点 %s " % parent, create, remember)
-        updates = [{"field_key": lg.field(wid, "main_doc")["field_key"], "field_value": url}]
+        updates = [{"field_key": doc_key, "field_value": url}]
         if rec:
             updates += [v for _, v in sets]
-        if wid == "same_seq" and d.rel == "execute":
-            key = lg.key_of(wid, "owner_session")
-            if key:
-                updates.append({"field_key": key, "field_value": "%s-p0-%s" % (spec.term("abbrev", d.sender_seq), item_id)})
+        if wid == "same_seq" and d.rel == "execute" and not d.receiver:
+            updates.append(lg.entry(wid, "owner_session", "%s-p0-%s" % (spec.term("abbrev", d.sender_seq), item_id)))
         lg.meegle("workitem", "update", "--work-item-id", item_id, "--fields",
                   json.dumps(updates, ensure_ascii=False), write=True)
         lg.meegle("comment", "add", "--work-item-id", item_id, "--content",
                   "%s 已登记：%s。主文档：%s" % (lg.tag, title, url), write=True)
     except LedgerError as e:
         if state.get("doc_unknown", (rec or {}).get("doc_unknown")) and not (state.get("docx") or state.get("doc")):
-            raise WriteMaybeDone("%s\n工作项 #%s 已经建了，建主文档没有拿到确定的结果：先在网页上节点 %s 下核对。建好了的，运行 ledger.py register %s --resume --doc <文档链接> --apply；确认没建成的，用 --doc new" % (
-                e, item_id, parent, path))
-        raise LedgerError("%s\n工作项 #%s 已经建了；修好后运行 ledger.py register %s --resume --apply 接着做，不会再建一个工作项（来源工作项和 --set 的值已记在回执里）" % (
+            raise WriteMaybeDone("%s\n工作项 #%s 已经建了，建主文档没有拿到确定的结果：先在网页上节点 %s 下核对。建好了的，运行 ledger.py register %s --resume --doc <文档链接> --apply；确认没建成的，运行 ledger.py register %s --resume --doc new --apply" % (
+                e, item_id, parent, path, path))
+        raise LedgerError("%s\n工作项 #%s 已经建了，主文档字段暂时指着空间首页；修好后运行 ledger.py register %s --resume --apply 接着做，不会再建一个工作项（来源工作项、所属研究任务和 --set 的值已记在回执里）" % (
             e, item_id, path))
     if lg.mode == "apply":
-        rewrite_link(lg, path, d.text, item_id)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(link_line(d.text, "#%s" % item_id, item_id))
         save_receipt(lg, path, item_id, "registered", doc=url)
+    print(("登记：%s #%s，主文档放在节点 %s 下。" if lg.mode == "apply" else "预览：会登记一条%s（#%s），主文档放在节点 %s 下。") % (
+        spec.term("wi", wid), item_id, parent))
+    after_register(lg, wid, d, item_id)
+    return item_id
+
+
+def after_register(lg, wid, d, item_id):
+    """What follows a registration: the sender's own first step is confirmed at once; for the
+    rest, the command that comes next is printed."""
+    spec = lg.spec
+    if lg.mode == "apply":
+        try:
+            first = first_step_is_the_senders(lg, wid, lg.flow_nodes(item_id))
+            if first:
+                lg.meegle("workflow", "transition", "--work-item-id", str(item_id), "--node-id", first["key"],
+                          "--action", "confirm", write=True)
+                print("“%s”是发出方自己的一步，已随登记确认。" % first["name"])
+        except LedgerError as e:
+            print("提醒：登记好了，第一步没能确认：%s。接着运行 ledger.py confirm %s --by %s --apply" % (str(e)[:200], item_id, d.author))
     if wid == "decision" and d.header.get("渠道") == spec.term("channel", "researcher"):
         sec = d.section("决定")
         content = re.search(r"决定内容[：:]\s*(.+)", sec)
         decider = re.search(r"决定人[：:]\s*(.+)", sec)
         if content and decider:
-            print("研究员主动发起的决策，接着流转：ledger.py transition %s 已决定 --set decision_content='%s' --set decider=研究员"
+            print("研究员主动发起的决策，接着确认：ledger.py confirm %s --by 研究员 --set 决定内容='%s' --set 决定人=研究员"
                   % (item_id, content.group(1).strip()))
         else:
-            print("研究员主动发起的决策，但“决定”一节没写全决定内容和决定人：退回作者补上，再流转到“已决定”。")
-    print("登记：%s #%s，主文档放在节点 %s 下。" % (spec.term("wi", wid), item_id, parent))
-    if wid == "same_seq":
-        print("请求方说马上派下一级的（登记请求写了“开工”），接着流转：ledger.py transition %s 执行中；排队没派的留在“待开工”。" % item_id)
-    return item_id
+            print("研究员主动发起的决策，但“决定”一节没写全决定内容和决定人：退回作者补上，再确认“决定”这一步。")
+    elif wid == "same_seq":
+        print("请求方说马上派下一级的（登记请求写了“开工”），接着确认：ledger.py confirm %s --by <承接方的会话名>；排队没派的留在“%s”。" % (
+            item_id, spec.term("state", "queued")))
+    elif wid in (lg.contract.main_line(), "feedback"):
+        print("接着看这一步要什么：ledger.py next %s" % item_id)
 
 
 def reply(lg, path, doc=None):
-    """Hang a 交付包 or 验收包 under the main document it answers.
+    """Hang a 交付包 under the main document of the request it answers and put its link into
+    the request's 交付包 field.
 
-    The target field and the parent node are worked out before anything is
-    written; a receipt packages/sent/reply-<ID>-<file>.json lets a rerun reuse the
-    document instead of creating a second one.
+    The target field and the parent node are worked out before anything is written; a
+    receipt packages/sent/reply-<ID>-<file>.json lets a rerun reuse the document
+    instead of creating a second one.
     """
     spec = lg.spec
     d = Draft(spec, path)
-    if d.pid not in ("delivery", "verdict"):
+    if d.pid != "delivery":
         raise LedgerError("%s要用 register 登记" % d.header["包类型"])
     if not d.linked:
         raise LedgerError("包头的“关联工作项”要写它答复的工作项 ID，比如 #2003")
@@ -1178,12 +1317,10 @@ def reply(lg, path, doc=None):
     if it is not None and not it.get("type"):
         raise LedgerError("认不出 #%s 的类型（type_key %s）；确认工作项 ID 没写错，或者先跑 setup.py feishu --live --apply 重读类型" % (
             parent_id, it.get("type_key")))
-    wid = (it and it.get("type")) or ("review" if d.pid == "verdict" else "same_seq")
-    if d.pid == "delivery" and wid not in ("same_seq", "cross_request"):
+    wid = (it and it.get("type")) or "same_seq"
+    if wid not in lg.contract.types_with("fields", "delivery_link"):
         raise LedgerError("交付包答复的是同序列需求或跨序列需求，#%s 是%s" % (parent_id, spec.term("wi", wid)))
-    if d.pid == "verdict" and wid != "review":
-        raise LedgerError("验收包答复的是送审，#%s 是%s" % (parent_id, spec.term("wi", wid)))
-    link_key = lg.field(wid, "delivery_link")["field_key"] if d.pid == "delivery" else None
+    link_key = lg.field(wid, "delivery_link")["field_key"]
     node = lg.node_of(lg.doc_url(parent_id, it))
     if not node:
         raise LedgerError("#%s 的主文档不是知识库文档，答复没处挂" % parent_id)
@@ -1203,14 +1340,10 @@ def reply(lg, path, doc=None):
 
     try:
         link = main_document(lg, dict(rec), doc, "#%s 的主文档下" % parent_id, create, remember)
-        if d.pid == "delivery":
-            lg.meegle("workitem", "update", "--work-item-id", parent_id, "--fields", json.dumps(
-                [{"field_key": link_key, "field_value": link}]), write=True)
-            lg.meegle("comment", "add", "--work-item-id", parent_id, "--content",
-                      "%s 收到%s：%s" % (lg.tag, spec.pkg("delivery"), link), write=True)
-        else:
-            lg.meegle("comment", "add", "--work-item-id", parent_id, "--content",
-                      "%s 验收包：%s" % (lg.tag, link), write=True)
+        lg.meegle("workitem", "update", "--work-item-id", parent_id, "--fields", json.dumps(
+            [{"field_key": link_key, "field_value": link}]), write=True)
+        lg.meegle("comment", "add", "--work-item-id", parent_id, "--content",
+                  "%s 收到%s：%s" % (lg.tag, spec.pkg("delivery"), link), write=True)
     except LedgerError as e:
         receipt = os.path.relpath(rpath, lg.root)
         if rec.get("doc_unknown") and not (rec.get("doc") or rec.get("docx")):
@@ -1220,19 +1353,8 @@ def reply(lg, path, doc=None):
             raise LedgerError("%s\n文档已经建好，回执记在 %s；修好后重跑同一条命令，会接着用这份文档，不会再建一个" % (e, receipt))
         raise LedgerError("%s\n文档还没建，飞书里没有写入；修好后重跑同一条命令即可" % e)
     remember(status="registered")
-    if d.pid == "delivery":
-        if wid == "cross_request":
-            print("跨序列交付：确认结论已有验收包后，ledger.py transition %s 已交付 --set delivery_link=%s" % (parent_id, link))
-        else:
-            print("交付包已挂到 #%s 下。执行结果要先有验收包，才流转到下一步。" % parent_id)
-    else:
-        reviewed = lg.text_of(it, "source_item") or "<被送审的工作项>"
-        conclusion = d.section_choice("结论") or "<接受/缩小/否决>"
-        print("接着流转（把值核对后执行）：")
-        if not it or it.get("state") == "待核查":
-            print("  ledger.py transition %s 核查中" % parent_id)
-        print("  ledger.py transition %s 已出结论 --set conclusion='%s' --set usable_statement=@<可使用的结论原文文件> --set invalidation=@<失效条件文件>" % (parent_id, conclusion))
-        print("  ledger.py transition %s 已验收 --set verdict='%s' --set verdict_link=%s   （否决时改流转到“执行中”，只填验收结论）" % (reviewed, conclusion, link))
+    print("交付包已挂到 #%s 下，“%s”字段已填。承接方接着请书记员确认这一步：ledger.py confirm %s --by <承接方的会话名>" % (
+        parent_id, lg.label(wid, link_key), parent_id))
     return link
 
 
@@ -1266,131 +1388,393 @@ def parse_sets(lg, wid, pairs):
     out = []
     for pair in pairs or []:
         if "=" not in pair:
-            raise LedgerError("--set 要写成 字段标识=值：%s" % pair)
-        fid, raw = pair.split("=", 1)
+            raise LedgerError("--set 要写成 字段=值：%s" % pair)
+        ref, raw = pair.split("=", 1)
         try:
-            out.append((fid, lg.entry(wid, fid, set_value(lg, raw))))
+            out.append((ref, lg.entry(wid, ref, set_value(lg, raw))))
         except (orgspec.OrgSpecError, KeyError) as e:
-            raise LedgerError("--set %s：%s（%s的字段标识见 org/org.md 的“字段”表）" % (fid, e, lg.spec.term("wi", wid)))
+            raise LedgerError("--set %s：%s（%s有哪些字段见 feishu/space.md）" % (ref, e, lg.spec.term("wi", wid)))
     return out
 
 
-def transition(lg, item_id, target, pairs, wid_hint=None):
-    """Move a work item to target. When the space answers, its form is the requirement;
-    the rules form is compared with it and differences are reported, not enforced."""
-    spec = lg.spec
+# ------------------------------------------------------------ node flows
+def typed_item(lg, item_id, wid_hint=None):
     it = lg.item(item_id)
     wid = (it and it.get("type")) or wid_hint
     if not wid:
         raise LedgerError("读不出 #%s 的类型；用 --type 指明" % item_id)
-    w = spec.work_item(wid)
-    if target in system_states(spec):
-        raise LedgerError("“%s”不是一次流转，要研究员在网页上操作" % target)
-    if target not in w["states"]:
-        raise LedgerError("%s 没有状态“%s”；可选：%s" % (spec.term("wi", wid), target, "、".join(w["states"])))
-    current = it["state"] if it else None
-    if current and [current, target] not in w["transitions"]:
-        allowed = "、".join(b for a, b in w["transitions"] if a == current) or "无"
-        raise LedgerError("%s 不能从“%s”流转到“%s”；能去：%s" % (spec.term("wi", wid), current, target, allowed))
+    return it, wid
+
+
+def current_node(nodes, item_id, wanted=None):
+    """The node an item is at. Flows are straight lines, so one node is in progress."""
+    doing = [n for n in nodes if n["status"] == "doing"]
+    if wanted:
+        hit = next((n for n in nodes if wanted in (n["key"], n["name"])), None)
+        if not hit:
+            raise LedgerError("#%s 的流程里没有节点“%s”；有：%s" % (item_id, wanted, "、".join("%s（%s）" % (n["name"], n["key"]) for n in nodes)))
+        if hit["status"] != "doing":
+            raise LedgerError("#%s 的“%s”%s，现在走到的是“%s”" % (
+                item_id, hit["name"], NODE_STATUS.get(hit["status"], hit["status"]), "、".join(n["name"] for n in doing) or "流程已经走完"))
+        return hit
+    if not doing:
+        raise LedgerError("#%s 没有进行中的节点：流程已经走完，或者工作项已终止" % item_id)
+    if len(doing) > 1:
+        raise LedgerError("#%s 有 %d 个节点同时在进行（%s）：用 --node 指明确认哪一个" % (
+            item_id, len(doing), "、".join("%s（%s）" % (n["name"], n["key"]) for n in doing)))
+    return doing[0]
+
+
+def is_last(node):
+    return not node["next"]
+
+
+def seq_of_session(lg, name):
+    """The sequence a session name such as Alg-p1-02 belongs to, by its abbreviation; None for other text."""
+    if not SESSION_NAME.match(name or ""):
+        return None
+    head = name.split("-", 1)[0].lower()
+    return next((s for s, _, abbrev in lg.spec.sequences() if abbrev.lower() == head), None)
+
+
+def is_p2_of(lg, name, seq):
+    return seq_of_session(lg, name) == seq and "-p2-" in (name or "").lower()
+
+
+def is_p0_of(lg, name, seq):
+    return seq_of_session(lg, name) == seq and "-p0-" in (name or "").lower()
+
+
+def role_slot(lg, wid, node):
+    """The contract's role slot a node belongs to."""
+    slots = {rid: slot for slot, rid in (lg.roles.get(wid) or {}).items()}
+    slot = slots.get(node["roles"][0]) if len(node["roles"]) == 1 else None
+    if not slot:
+        raise LedgerError("节点“%s”的负责角色（%s）不在约定里，判断不了谁能推进这一步：先跑 space.py check" % (
+            node["name"], "、".join(node["roles"]) or "无"))
+    return slot
+
+
+def is_scribes(lg, wid, node):
+    return lg.contract.role(role_slot(lg, wid, node))["who"] == "scribe"
+
+
+def responsible(lg, wid, it, node):
+    """(who is responsible for a node, in words; test(by) -> bool): the node's role decides
+    who may ask the scribe to finish or undo the step. The researcher may always."""
+    slot = role_slot(lg, wid, node)
+    rule = lg.contract.role(slot)
+    who, cn = rule["who"], lg.contract.name("roles", slot)
+    if who == "scribe":
+        return cn, lambda by: True
+    if who == "researcher":
+        return RESEARCHER, lambda by: by == RESEARCHER
+    if who == "sequence":
+        return "%s +2" % cn, lambda by: by == RESEARCHER or is_p2_of(lg, by, slot)
+    value = (lg.text_of(it, rule["field"][wid]) or "").strip()
+    by_cn = {cn_: s for s, cn_, _ in lg.spec.sequences()}
+    if value in by_cn:
+        return "%s（%s +2）" % (cn, value), lambda by: by == RESEARCHER or is_p2_of(lg, by, by_cn[value])
+    if SESSION_NAME.match(value):
+        seq = seq_of_session(lg, value)
+        # a +0 goes by two names: its pool slot (Alg-p0-01) and, on a work item, a work name after the item (Alg-p0-2101)
+        p0 = "-p0-" in value.lower()
+        return "%s（%s）" % (cn, value), lambda by: by == RESEARCHER or by.lower() == value.lower() or bool(seq) and (
+            is_p2_of(lg, by, seq) or p0 and is_p0_of(lg, by, seq))
+    if value == RESEARCHER:
+        return "%s（研究员）" % cn, lambda by: by == RESEARCHER
+    return "%s（工作项上还没记是谁）" % cn, lambda by: bool(by)
+
+
+def check_by(lg, wid, it, node, by, what):
+    label, allowed = responsible(lg, wid, it, node)
+    if is_scribes(lg, wid, node):
+        return label
+    if not by:
+        raise LedgerError("“%s”这一步的负责方是%s：加 --by <提出请求的会话名>；研究员交代的写 --by 研究员" % (node["name"], label))
+    if not allowed(by):
+        raise LedgerError("“%s”这一步的负责方是%s，%s 不能请书记员%s；退回请求方，让负责的会话来提" % (node["name"], label, by, what))
+    return label
+
+
+def clock(ms):
+    return datetime.datetime.fromtimestamp(ms / 1000).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def check_sign(lg, task_id, decision_id, what, since=None):
+    """A signature is a decision that is decided, approved and made for this task. since (ms)
+    is when the step it is used on began: a decision made before that was made for an
+    earlier step, so one decision passes one gate once."""
+    gate = lg.contract.flow["sign_gate"]
+    did = item_id_of(decision_id)
+    it = lg.item(did)
+    if it is None:
+        return did
+    dtype = lg.spec.term("wi", gate["type"])
+    if it.get("type") != gate["type"]:
+        raise LedgerError("%s要填一条%s工作项的 ID；#%s 是%s" % (what, dtype, did, lg.spec.term("wi", it["type"]) if it.get("type") else "别的类型"))
+    problems = []
+    states = [lg.state(gate["type"], s) for s in gate["states"]]
+    if it["state"] not in states:
+        problems.append("状态是“%s”，要是%s" % (it["state"], "或".join("“%s”" % s for s in states)))
+    approved = lg.spec.term("sign", gate["approved"])
+    result = lg.text_of(it, gate["result"])
+    if result != approved:
+        problems.append("%s是%s，要是“%s”" % (lg.spec.field_name(gate["result"]), "“%s”" % result if result else "空的", approved))
+    task = (lg.text_of(it, gate["task"]) or "").strip().lstrip("#")
+    if task != str(task_id):
+        problems.append("%s是%s，不是 #%s" % (lg.spec.field_name(gate["task"]), " #" + task if task else "空的", task_id))
+    if since and not problems:
+        decided = (lg.flow_nodes(did) or [{}])[0].get("finished_at")
+        if decided and decided < since:
+            problems.append("它是 %s 决定的，#%s 现在这一步是 %s 开始的；一条决定只用在它决定时所在的那一步，请研究员就现在这一步重新决定" % (
+                clock(decided), task_id, clock(since)))
+    if problems:
+        raise LedgerError("%s用的%s #%s 不合格：%s" % (what, dtype, did, "；".join(problems)))
+    return did
+
+
+def sign_slots(lg, wid, node):
+    """[(slot, field_key)] of the signature fields a node's form requires."""
+    keys = lg.field_keys.get(wid) or {}
+    required = {r["field_key"] for r in node["required"]}
+    return [(s, keys[s]) for s in lg.contract.signatures() if keys.get(s) in required]
+
+
+def raw_text(value):
+    """A field value read with `workitem get`, as the operation records write values: a list of strings."""
+    if value in (None, "", [], {}):
+        return []
+    if isinstance(value, list):
+        return [x for v in value for x in raw_text(v)]
+    if isinstance(value, dict):
+        for k in ("value", "timestamp", "id", "user_key"):
+            if value.get(k) not in (None, ""):
+                return [str(value[k])]
+        return [json.dumps(value, ensure_ascii=False, sort_keys=True)]
+    return [str(value)]
+
+
+def frozen_changes(lg, wid, item_id, it, nodes):
+    """Changes to the frozen fields after the signing step was last finished, as lines.
+
+    The signing step is the node whose form requires the contract's sealed_by field;
+    what it and the nodes before it require is frozen from the moment it was finished.
+    Two things are compared. The operation records name every change made since, on
+    the web page as well; but a record takes a while to show up. So the value each
+    field had at the signing, taken from the records before it, is also compared with
+    the value the item has now.
+    """
+    freeze = lg.contract.flow["freeze"]
+    seal = (lg.field_keys.get(wid) or {}).get(freeze["sealed_by"])
+    idx = next((i for i, n in enumerate(nodes) if seal in [r["field_key"] for r in n["required"]]), None)
+    if seal is None or idx is None or not nodes[idx].get("finished_at"):
+        return []
+    since = nodes[idx]["finished_at"]
+    frozen = {r["field_key"]: r for n in nodes[:idx + 1] for r in n["required"]}
+    history = {}
+    for rec in sorted(lg.op_records(item_id, "field_mod") or [], key=lambda r: r.get("operation_time") or 0):
+        for c in rec.get("record_contents") or []:
+            key = (c.get("object") or {}).get("object_value") if isinstance(c, dict) else None
+            if key in frozen:
+                history.setdefault(key, []).append((rec.get("operation_time") or 0, c))
+
+    def show(values):
+        return "、".join(map(str, values or [])) or "空"
+
+    lines = []
+    for key, f in frozen.items():
+        name = f.get("name") or key
+        after = [(t, c) for t, c in history.get(key, []) if t > since]
+        before = [(t, c) for t, c in history.get(key, []) if t <= since]
+        for t, c in after:
+            stamp = datetime.datetime.fromtimestamp(t / 1000).astimezone().isoformat(timespec="seconds")
+            lines.append("%s：%s，%s → %s" % (name, stamp, show(c.get("old")), show(c.get("new"))))
+        if not after and before and f.get("field_type") != "user":
+            signed, current = [str(x) for x in before[-1][1].get("new") or []], raw_text(it["fields"].get(key))
+            if signed != current:
+                lines.append("%s：签字时是 %s，现在是 %s（操作记录里还没有这次改动）" % (name, show(signed), show(current)))
+    return lines
+
+
+def step_lines(lg, wid, it, node, nodes):
+    """What `next` shows for the node an item is at."""
+    label, _ = responsible(lg, wid, it, node)
+    lines = ["  这一步：%s（%s），负责方：%s" % (node["name"], node["key"], label)]
+    for r in node["required"]:
+        filled = plain(it["fields"].get(r["field_key"])) is not None or r.get("value") not in (None, "", [])
+        slot = next((s for s, k in (lg.field_keys.get(wid) or {}).items() if k == r["field_key"]), None)
+        lines.append("    %s %s%s" % ("已填" if filled else "待填", r.get("name") or r["field_key"], "（%s）" % slot if slot else ""))
+    if not node["required"]:
+        lines.append("    没有必填项")
+    for slot, _ in sign_slots(lg, wid, node):
+        lines.append("    “%s”填一条研究员批准的决策工作项的 ID，确认前由脚本核对" % lg.spec.field_name(slot))
+    after = [n["name"] for n in nodes if n["key"] in node["next"]]
+    lines.append("  下一步：%s" % ("、".join(after) if after else "没有了，这是最后一步"))
+    return lines
+
+
+def next_step(lg, item_id):
+    """`ledger.py next`: where an item is and what its step still needs. Reads only."""
+    it, wid = typed_item(lg, item_id)
+    if it is None:
+        return None
+    nodes = lg.flow_nodes(item_id)
+    lines = ["#%s  %s%s  %s  %s" % (item_id, lg.spec.term("wi", wid), "·" + it["flow"] if it.get("flow") and len(lg.space_type(wid).get("flows") or {}) > 1 else "",
+                                  it["state"], it["name"])]
+    doing = [n for n in nodes if n["status"] == "doing"]
+    if not doing:
+        lines.append("  流程已经走完。" if all(n["status"] == "finished" for n in nodes) else "  没有进行中的节点：工作项可能已终止。")
+    for node in doing:
+        lines += step_lines(lg, wid, it, node, nodes)
+        cmd = "archive %s" % item_id if is_last(node) else "confirm %s --by <会话名>" % item_id
+        lines.append("  书记员推进：ledger.py %s" % cmd)
+    reason = lg.text_of(it, "blocked_reason") if "blocked_reason" in lg.contract.slots(wid, "fields") else None
+    if reason:
+        lines.append("  阻塞中（%s 起）：%s" % ((lg.text_of(it, "blocked_since") or "?")[:10], reason))
+    return "\n".join(lines)
+
+
+def confirm(lg, item_id, by=None, pairs=None, node=None, decision=None, wid_hint=None):
+    """Finish the step a work item is at.
+
+    The space says what the step still lacks; --set values are written first. The
+    scripts' own checks come before anything is written: who asks, the signature a
+    required field refers to, and, before the step that requires the conclusion,
+    whether a frozen field was changed after it was signed.
+    """
+    it, wid = typed_item(lg, item_id, wid_hint)
+    spec = lg.spec
     sets = parse_sets(lg, wid, pairs)
-    given = {fid for fid, _ in sets}
-    if target == "阻塞" and "blocked_since" not in given:
-        sets += parse_sets(lg, wid, ["blocked_since=%s" % datetime.date.today().isoformat()])   # local date
-
-    # What the space offers: the transition id and its form.
-    options = lg.meegle("workflow", "list-state-transitions", "--work-item-id", str(item_id))
-    tid, space_form = "<transition_id>", None
-    if options is not None:
-        choices = options.get("transition") or []
-        t = next((c for c in choices if c.get("state_name") == target), None)
-        if not t:
-            raise LedgerError("空间里 #%s 从“%s”去不了“%s”；能去：%s" % (
-                item_id, options.get("state_name") or current, target,
-                "、".join(c.get("state_name", "") for c in choices) or "无"))
-        tid = t.get("id")
-        if tid in (None, ""):
-            raise LedgerError("空间给的流转没有 id：%s" % json.dumps(t, ensure_ascii=False)[:300])
-        space_form = {f.get("key"): f.get("name") for f in t.get("confirm_form") or [] if f.get("key")}
-
-    # What the rules say the form should be. Without the current state (offline), only
-    # what every transition into the target requires: a transition without a form requires nothing.
-    notes = []
-    if current is None:
-        incoming = [a for a, b in w["transitions"] if b == target]
-        per_source = []
-        for a in incoming:
-            f = next((f for f in w.get("forms", []) if f["from"] == a and f["to"] == target), None)
-            per_source.append((f or {}).get("required", []))
-        common = set(per_source[0]).intersection(*per_source[1:]) if per_source else set()
-        required = [fid for req in per_source for fid in req if fid in common]
-        required = list(dict.fromkeys(required))
-        if len(incoming) > 1:
-            notes.append("不知道当前状态，只按所有能进入“%s”的流转都要求的字段检查" % target)
-    else:
-        form = next((f for f in w.get("forms", []) if f["from"] == current and f["to"] == target), None)
-        required = list((form or {}).get("required", []))
-    rule_keyed, rule_unbuilt = {}, []
-    for fid in required:
-        key = lg.key_of(wid, fid)
-        if key:
-            rule_keyed[key] = fid
-        else:
-            rule_unbuilt.append(fid)
-    by_key = lg.fid_by_key(wid)
-    unbuilt_by_name = {spec.field_name(f["id"]): f["id"] for f in spec.fields_of(wid) if not lg.key_of(wid, f["id"])}
-
-    def label(key, name=None):
-        fid = by_key.get(key)
-        if fid:
-            return "%s（%s，用 --set 传）" % (fid, spec.field_name(fid))
-        if name in unbuilt_by_name:
-            return "%s（%s：空间里已经建了，还没读回；先跑 setup.py feishu --live --apply，再用 --set %s=… 传）" % (
-                unbuilt_by_name[name], name, unbuilt_by_name[name])
-        return "%s（%s：规则文件里没有这个字段；请研究员在网页上流转时填，或者更新规则文件）" % (key, name or key)
-
-    given_keys = {v["field_key"] for _, v in sets}
-    wanted = set(space_form) if space_form is not None else set(rule_keyed)
-    people = [k for k in wanted - given_keys if k in by_key and spec.field(wid, by_key[k]).get("type") == "user"]
-    if it and people:
-        lg.people(it, item_id, people)                 # 决定人 already filled in counts
-    have_keys = {k for k, v in (it["fields"] if it else {}).items() if plain(v)}
-    if space_form is not None:
-        need = space_form
-        missing = [label(k, n) for k, n in need.items() if k not in given_keys and k not in have_keys]
-    else:
-        need = {k: spec.field_name(fid) for k, fid in rule_keyed.items()}
-        missing = [label(k) for k in need if k not in given_keys and k not in have_keys]
-        missing += ["%s（%s：还没绑定；空间里没有的建好，名字不同的用 --map 指认，再跑 setup.py feishu --live --apply）" % (fid, spec.field_name(fid))
-                    for fid in rule_unbuilt]
-    if space_form is not None:
-        rule_only = [rule_keyed[k] for k in rule_keyed if k not in space_form] + rule_unbuilt
-        space_only = [k for k in space_form if k not in rule_keyed]
-        if rule_only or space_only:
-            notes.append("空间里这一步的流转表单是 %s，规则文件写的是 %s；以空间为准，差异报给研究员核对" % (
-                "、".join(space_form.values()) or "无",
-                "、".join(spec.field_name(f) for f in list(rule_keyed.values()) + rule_unbuilt) or "无"))
-    if missing:
-        raise LedgerError("流转到“%s”要填：%s。%s" % (
-            target, "、".join(missing), ("（%s）" % "；".join(notes)) if notes else ""))
-    for n in notes:
-        print("提醒：%s。" % n)
+    if (lg.field_keys.get(wid) or {}).get("blocked_reason") in [v["field_key"] for _, v in sets]:
+        raise LedgerError("阻塞原因用 update 写，不随确认节点写")
+    nodes = lg.flow_nodes(item_id)
+    if nodes is None:                                   # offline: nothing can be read, show the commands
+        if sets:
+            lg.meegle("workitem", "update", "--work-item-id", str(item_id), "--fields",
+                      json.dumps([v for _, v in sets], ensure_ascii=False), write=True)
+        lg.meegle("workflow", "transition", "--work-item-id", str(item_id), "--node-id", node or "<当前节点>",
+                  "--action", "confirm", write=True)
+        return
+    cur = current_node(nodes, item_id, node)
+    if is_last(cur) and len(nodes) > 1:
+        raise LedgerError("“%s”是最后一步，要先把主文档移到归档节点：用 ledger.py archive %s" % (cur["name"], item_id))
+    check_by(lg, wid, it, cur, by, "确认这一步")
+    given = {v["field_key"]: v["field_value"] for _, v in sets}
+    lacking = lg.unfinished(item_id, cur["key"]) or []
+    missing = [lg.label(wid, f.get("key")) for f in lacking if f.get("class") == "field" and given.get(f.get("key"), "") == ""]
+    missing += [lg.label(wid, k) for k, v in given.items() if v == "" and k in {r["field_key"] for r in cur["required"]}
+                and lg.label(wid, k) not in missing]
+    other = sorted({str(f.get("class")) for f in lacking if f.get("class") != "field"})
+    if missing or other:
+        parts = []
+        if missing:
+            parts.append("要先填：%s（用 --set <字段名>=<值> 传）" % "、".join(missing))
+        if other:
+            parts.append("空间还要求别的东西（%s），命令行填不了：请研究员在网页上看这个节点" % "、".join(other))
+        raise LedgerError("#%s 的“%s”还不能确认。%s" % (item_id, cur["name"], "；".join(parts)))
+    for slot, key in sign_slots(lg, wid, cur):
+        value = given.get(key) or plain(it["fields"].get(key))
+        check_sign(lg, item_id, value, "“%s”" % spec.field_name(slot), cur.get("started_at"))
+    freeze = lg.contract.flow["freeze"]
+    if (lg.field_keys.get(wid) or {}).get(freeze["checked_before"]) in {r["field_key"] for r in cur["required"]}:
+        changed = frozen_changes(lg, wid, item_id, it, nodes)
+        if changed and not decision:
+            raise LedgerError("#%s 签字以后，冻结的字段被改过：\n  %s\n这一步先不确认。请研究员决定：退回到签字那一步或之前，改完重新签字；"
+                              "或者认可这些改动，写成决策包，批准后重跑并加 --decision <决策工作项 ID>" % (item_id, "\n  ".join(changed)))
+        if changed:
+            check_sign(lg, item_id, decision, "认可冻结字段的改动", cur.get("started_at"))
+            print("提醒：冻结的字段在签字后改过（%d 处），研究员已用决策 #%s 认可。" % (len(changed), item_id_of(decision)))
     if sets:
         lg.meegle("workitem", "update", "--work-item-id", str(item_id), "--fields",
                   json.dumps([v for _, v in sets], ensure_ascii=False), write=True)
-    lg.meegle("workflow", "transition-state", "--work-item-id", str(item_id), "--transition-id", str(tid), write=True)
+    lg.meegle("workflow", "transition", "--work-item-id", str(item_id), "--node-id", cur["key"], "--action", "confirm", write=True)
     if lg.mode == "apply":
-        after = lg.item(item_id)
-        if after and after["state"] != target:
-            raise LedgerError("流转后回读状态是“%s”，不是“%s”" % (after["state"], target))
-    print("流转：#%s %s→%s" % (item_id, current or "?", target))
+        after = lg.flow_nodes(item_id)
+        done = next(n for n in after if n["key"] == cur["key"])
+        if done["status"] != "finished":
+            raise LedgerError("确认后回读，“%s”还是%s" % (cur["name"], NODE_STATUS.get(done["status"], done["status"])))
+        state = (lg.item(item_id) or {}).get("state")
+        print("确认：#%s “%s”完成，现在到“%s”，状态“%s”。" % (
+            item_id, cur["name"], "、".join(n["name"] for n in after if n["status"] == "doing") or "流程末尾", state))
+    else:
+        print("预览：会确认 #%s 的“%s”（%s）。" % (item_id, cur["name"], cur["key"]))
+
+
+def rollback(lg, item_id, to, reason, by=None, decision=None, wid_hint=None):
+    """Send a work item back to a step it has finished.
+
+    Who decides: on the main line the researcher, with an approved decision; elsewhere
+    whoever is responsible for the step the item is at (the sender who does not accept
+    a delivery, the receiver who hands a request back). When the item only waits for the
+    scribe to archive it, whoever is responsible for the step it goes back to. The space
+    keeps the values of the undone steps, so their required fields are cleared: the
+    steps have to be done again before they can be confirmed again. Fields the new-item
+    page requires are the item's own and stay.
+    """
+    it, wid = typed_item(lg, item_id, wid_hint)
+    if not (reason or "").strip():
+        raise LedgerError("回滚要写原因：--reason <为什么退回>")
+    nodes = lg.flow_nodes(item_id)
+    if nodes is None:
+        lg.meegle("workflow", "transition", "--work-item-id", str(item_id), "--node-id", to, "--action", "rollback",
+                  "--rollback-reason", reason, write=True)
+        return
+    target = next((n for n in nodes if to in (n["key"], n["name"])), None)
+    if not target:
+        raise LedgerError("#%s 的流程里没有节点“%s”；有：%s" % (item_id, to, "、".join("%s（%s）" % (n["name"], n["key"]) for n in nodes)))
+    if target["status"] != "finished":
+        raise LedgerError("只能退回到已完成的节点；“%s”%s" % (target["name"], NODE_STATUS.get(target["status"], target["status"])))
+    doing = [n for n in nodes if n["status"] == "doing"]
+    if wid in lg.contract.flow.get("rollback_needs_decision", []):
+        if not decision:
+            raise LedgerError("%s的回退由研究员决定：退到哪一步、为什么，写成决策包，研究员批准后重跑并加 --decision <决策工作项 ID>" % lg.spec.term("wi", wid))
+        since = max([n.get("started_at") or 0 for n in doing] or [n.get("finished_at") or 0 for n in nodes]) or None
+        reason = "%s（研究员决定 #%s）" % (reason.strip(), check_sign(lg, item_id, decision, "回退", since))
+    elif decision:
+        raise LedgerError("%s的退回不走决策：由这一步的负责方提，加 --by <会话名>；研究员交代的写 --by 研究员" % lg.spec.term("wi", wid))
+    elif doing:
+        check_by(lg, wid, it, target if is_scribes(lg, wid, doing[0]) else doing[0], by, "回滚")
+    elif by != RESEARCHER:
+        raise LedgerError("#%s 的流程已经走完，重新打开要研究员交代：加 --by 研究员" % item_id)
+    start = nodes.index(target)
+    end = max([nodes.index(n) for n in doing] or [len(nodes) - 1])
+    kept = {c["field_key"] for c in lg.space_type(wid).get("create_fields") or [] if c.get("required")}
+    clear = {}
+    for n in nodes[start:end + 1]:
+        for r in n["required"]:
+            old = plain(it["fields"].get(r["field_key"]))
+            if r["field_key"] not in kept and old is not None:
+                clear[r["field_key"]] = (r.get("name") or r["field_key"], old)
+    lg.meegle("workflow", "transition", "--work-item-id", str(item_id), "--node-id", target["key"], "--action", "rollback",
+              "--rollback-reason", reason, write=True)
+    if clear:
+        lg.meegle("workitem", "update", "--work-item-id", str(item_id), "--fields",
+                  json.dumps([{"field_key": k, "field_value": ""} for k in clear], ensure_ascii=False), write=True)
+    applied = lg.mode == "apply"
+    print(("回滚：#%s 退回到“%s”，原因：%s" if applied else "预览：会把 #%s 退回到“%s”，原因：%s") % (item_id, target["name"], reason))
+    for name, old in clear.values():
+        print("  %s %s，原值：%s" % ("清空" if applied else "会清空", name, old if len(old) <= 120 else old[:120] + "…"))
+    if lg.mode == "apply":
+        after = lg.flow_nodes(item_id)
+        if next(n for n in after if n["key"] == target["key"])["status"] != "doing":
+            raise LedgerError("回滚后回读，“%s”不在进行中" % target["name"])
+        print("现在状态“%s”。被退回的各步重做后再确认。" % (lg.item(item_id) or {}).get("state"))
 
 
 def update(lg, item_id, pairs, wid_hint=None):
-    it = lg.item(item_id)
-    wid = (it and it.get("type")) or wid_hint
-    if not wid:
-        raise LedgerError("读不出 #%s 的类型；用 --type 指明" % item_id)
+    """Write field values. 阻塞原因 carries its date: setting it sets 阻塞开始日期 to today
+    unless given, clearing it clears both."""
+    it, wid = typed_item(lg, item_id, wid_hint)
     sets = parse_sets(lg, wid, pairs)
+    keys = lg.field_keys.get(wid) or {}
+    by_key = {v["field_key"]: v for _, v in sets}
+    reason, since = keys.get("blocked_reason"), keys.get("blocked_since")
+    if reason in by_key and since and since not in by_key:
+        if by_key[reason]["field_value"] == "":
+            sets.append(("blocked_since", {"field_key": since, "field_value": ""}))
+        else:
+            sets += parse_sets(lg, wid, ["blocked_since=%s" % datetime.date.today().isoformat()])   # local date
     lg.meegle("workitem", "update", "--work-item-id", str(item_id), "--fields",
               json.dumps([v for _, v in sets], ensure_ascii=False), write=True)
 
@@ -1470,23 +1854,91 @@ def append(lg, item_id, path):
             "--content", "-", write=True, stdin=content)
 
 
-def archive(lg, item_id):
+def archive(lg, item_id, moved=False):
+    """Move the main document's subtree to 归档文档/<序列>, then finish the last step of the
+    flow. With moved=True the document is already there and only the step is finished."""
     it = lg.item(item_id)
     url = lg.doc_url(item_id, it)
+    wid = it.get("type") if it else None
     seq_cn = lg.text_of(it, "sequence")
     seq = next((s for s, cn, _ in lg.spec.sequences() if cn == seq_cn), None)
     if it is not None and not seq:
         raise LedgerError("认不出 #%s 属于哪个序列（“序列”字段是 %s），没法决定归档到哪" % (item_id, seq_cn or "空的"))
+    last, archived = None, None
+    if it is not None:
+        if not wid:
+            raise LedgerError("认不出 #%s 的类型（type_key %s）；先跑 setup.py feishu --live --apply 重读类型" % (item_id, it.get("type_key")))
+        archived = lg.state(wid, lg.contract.flow["archive_node"]["state"])
+        if it["state"] == archived:
+            print("#%s 已经是“%s”，不用再归档。" % (item_id, archived))
+            return
+        nodes = lg.flow_nodes(item_id)
+        last = next((n for n in nodes if is_last(n)), None)
+        if not last or last["status"] != "doing":
+            raise LedgerError("#%s 还没走到最后一步“%s”：现在在“%s”。前面的步骤确认完再归档" % (
+                item_id, (last or {}).get("name") or "归档", "、".join(n["name"] for n in nodes if n["status"] == "doing") or "流程之外"))
     key = "archive/%s" % (seq or "<序列>")
-    n = lg.nodes.get(key) if (lg.nodes.get(key) or {}).get("node_token") else None
-    if not n and lg.mode != "offline":
-        raise LedgerError("ids.json 里没有归档节点 %s；先跑 ensure-node %s" % (key, key))
-    node = lg.node_of(url)
-    if not node:
-        raise LedgerError("#%s 的主文档不是知识库文档，没法移动" % item_id)
-    lg.lark("wiki", "+move", "--node-token", node, "--target-parent-token", (n or {}).get("node_token") or "<%s 的节点>" % key,
-            write=True)
-    print("整棵子树移到 %s 下；移动的是原节点，文档链接不变。接着把工作项流转到“归档”。" % key)
+    if not moved:
+        n = lg.nodes.get(key) if (lg.nodes.get(key) or {}).get("node_token") else None
+        if not n and lg.mode != "offline":
+            raise LedgerError("ids.json 里没有归档节点 %s；先跑 ensure-node %s" % (key, key))
+        node = lg.node_of(url)
+        if not node:
+            raise LedgerError("#%s 的主文档不是知识库文档，没法移动" % item_id)
+        lg.lark("wiki", "+move", "--node-token", node, "--target-parent-token", (n or {}).get("node_token") or "<%s 的节点>" % key,
+                write=True)
+    try:
+        lg.meegle("workflow", "transition", "--work-item-id", str(item_id), "--node-id", last["key"] if last else "<最后一个节点>",
+                  "--action", "confirm", write=True)
+        if lg.mode == "apply":
+            state = (lg.item(item_id) or {}).get("state")
+            if state != archived:
+                raise LedgerError("确认后回读状态是“%s”，不是“%s”" % (state, archived))
+    except LedgerError as e:
+        if lg.mode == "apply" and not moved:
+            raise LedgerError("%s\n主文档已经移到 %s 下；修好后运行 ledger.py archive %s --moved --apply，只确认最后一步" % (e, key, item_id))
+        raise
+    if lg.mode != "apply":
+        print("预览：会%s确认 #%s 的最后一步。" % ("" if moved else "把主文档整棵子树移到 %s 下，再" % key, item_id))
+    elif moved:
+        print("归档：#%s 的最后一步已确认（主文档此前已移到 %s 下）。" % (item_id, key))
+    else:
+        print("归档：#%s 的主文档整棵子树移到 %s 下（移动的是原节点，文档链接不变），最后一步已确认。" % (item_id, key))
+
+
+LIST_ITEM = re.compile(r'<li\b[^>]*?\bid="([^"]+)"[^>]*>(.*?)</li>', re.S)
+
+
+def relink(lg, item_id):
+    """Put the work item into the 关联工作项 line of its main document, when the document
+    was created with a placeholder there. The block is replaced in place: the document
+    keeps its identity and link."""
+    it = lg.item(item_id)
+    url = lg.doc_url(item_id, it)
+    data = lg.lark("docs", "+fetch", "--doc", url, "--detail", "with-ids")
+    if data is None:
+        lg.lark("docs", "+update", "--doc", url, "--command", "block_replace", "--start-block-id", "<“关联工作项”那一行的 block_id>",
+                "--end-block-id", "<同一个 block_id>", "--doc-format", "markdown", "--content", "-", write=True,
+                stdin="- 关联工作项：#%s\n" % item_id)
+        return
+    hit = None
+    for m in LIST_ITEM.finditer(doc_content(data)):
+        text = re.sub(r"<[^>]+>", "", m.group(2)).strip()
+        if re.match(r"关联工作项\s*[：:]", text):
+            hit = (m.group(1), text)
+            break
+    if not hit:
+        raise LedgerError("#%s 的主文档开头找不到“关联工作项”一行" % item_id)
+    block, text = hit
+    link = lg.item_url(it["type"], item_id) if it.get("type") else None
+    line = "- " + text
+    fixed = link_line(line, "[#%s](%s)" % (item_id, link) if link else "#%s" % item_id, item_id)
+    if fixed == line:
+        print("#%s 的主文档已经写着它的 ID，不用改。" % item_id)
+        return
+    lg.lark("docs", "+update", "--doc", url, "--command", "block_replace", "--start-block-id", block, "--end-block-id", block,
+            "--doc-format", "markdown", "--content", "-", write=True, stdin=fixed + "\n")
+    print("已把 #%s 写进主文档的“关联工作项”一行。" % item_id)
 
 
 def existing_node(lg, space, parent, key, title):
@@ -1591,20 +2043,42 @@ def mql_text(lg, name, sequence=None):
     """MQL for a named query. Every query leaves out the system state 已终止:
     views hide terminated items by default, MQL does not."""
     terminated = system_states(lg.spec)
+
+    names = {s: cn for s, cn, _ in lg.spec.sequences()}
+    if sequence and sequence not in names:
+        hit = [s for s, cn in names.items() if cn == sequence]
+        if not hit:
+            raise LedgerError("没有序列“%s”；--sequence 写标识或中文名：%s" % (sequence, "、".join("%s（%s）" % kv for kv in names.items())))
+        sequence = hit[0]
+
+    def of_sequence(wid):
+        return "`%s` = '%s'" % (lg.field(wid, "sequence")["field_key"], lg.spec.term("seq", sequence))
+
     if name.startswith("source:"):
         src = item_id_of(name.split(":", 1)[1])
         if sequence:
             raise LedgerError("source:<ID> 查的是由某个工作项引出的所有工作项，不按序列筛；去掉 --sequence")
         return [_select(lg, w, "`%s` = '%s' AND %s" % (lg.field(w, "source_item")["field_key"], src, _not_in(terminated)))
-                for w in ("same_seq", "cross_request", "review", "decision")]
+                for w in lg.contract.types_with("fields", "source_item") if w in lg.types]
+    if name == "blocked":                               # blocked is two fields on an item, not a state
+        out = []
+        for w in lg.contract.types_with("fields", "blocked_reason"):
+            if w in lg.types:
+                parts = ["`%s` IS NOT NULL" % lg.field(w, "blocked_reason")["field_key"],
+                         _not_in([lg.state(w, "archived")] + terminated)]
+                out.append(_select(lg, w, " AND ".join(parts + ([of_sequence(w)] if sequence else []))))
+        return out
     if name not in QUERIES:
-        raise LedgerError("没有查询 %s；可选：%s、source:<ID>" % (name, "、".join(QUERIES)))
-    wid, cond, not_in, _ = QUERIES[name]
+        raise LedgerError("没有查询 %s；可选：%s、source:<ID>" % (name, "、".join(QUERY_NAMES)))
+    wid, keep, leave, cond, _ = QUERIES[name]
     parts = [cond] if cond else []
-    if not_in is not None:
-        parts.append(_not_in(not_in + terminated))
+    if keep:
+        parts.append("`work_item_status` IN (%s)" % ", ".join("'%s'" % lg.state(wid, s) for s in keep) if len(keep) > 1
+                     else "`work_item_status` = '%s'" % lg.state(wid, keep[0]))
+    else:
+        parts.append(_not_in([lg.state(wid, s) for s in leave] + terminated))
     if sequence:
-        parts.append("`%s` = '%s'" % (lg.field(wid, "sequence")["field_key"], lg.spec.term("seq", sequence)))
+        parts.append(of_sequence(wid))
     return [_select(lg, wid, " AND ".join(parts))]
 
 
@@ -1692,7 +2166,7 @@ def query_all(lg, mql):
         if count is None and len(got) < QUERY_PAGE:
             break
     if count is not None and len(rows) < count or count is None and (page >= QUERY_MAX_PAGES or not session):
-        print("提醒：%s只读出 %d 项（每页 50 项，没翻完）；完整结果看网页上的视图。" % (
+        print("提醒：%s只读出 %d 项（每页 50 项，没翻完）；完整结果在飞书项目的网页上看。" % (
             "共 %d 项，" % count if count is not None else "", len(rows)))
     return rows
 
@@ -1712,17 +2186,25 @@ def query(lg, name, sequence=None, as_json=False):
 
 
 def digest(lg, item_id):
-    """`ledger.py get`: type, state, name and the rule fields that have a value."""
+    """`ledger.py get`: type, state, flow, name and the fields that have a value, by their names
+    in the space; a field the contract names shows its slot too."""
     it = lg.item(item_id)
     if it is None:
         return None
     lg.people(it, item_id)
-    lines = ["#%s  %s  %s  %s" % (item_id, lg.spec.term("wi", it["type"]) if it["type"] else "?", it["state"], it["name"])]
-    if it["type"]:
-        for fid in dict.fromkeys(f["id"] for f in lg.spec.fields_of(it["type"])):
-            text = lg.text_of(it, fid)
+    wid = it["type"]
+    flows = lg.space_type(wid).get("flows") or {} if wid else {}
+    lines = ["#%s  %s%s  %s  %s" % (item_id, lg.spec.term("wi", wid) if wid else "?",
+                                  "·" + it["flow"] if it.get("flow") and len(flows) > 1 else "", it["state"], it["name"])]
+    if wid:
+        slots = {k: s for s, k in (lg.field_keys.get(wid) or {}).items()}
+        fields = [f for f in lg.space_type(wid).get("fields") or [] if str(f.get("field_key")).startswith("field_")]
+        if not fields:                                   # no snapshot: at least the slots
+            fields = [{"field_key": k, "name": lg.spec.field_name(s)} for k, s in slots.items()]
+        for f in fields:
+            text = plain(it["fields"].get(f["field_key"]))
             if text:
-                lines.append("  %s（%s）：%s" % (fid, lg.spec.field_name(fid), text))
+                lines.append("  %s%s：%s" % (f["name"], "（%s）" % slots[f["field_key"]] if f["field_key"] in slots else "", text))
     return "\n".join(lines)
 
 
@@ -1763,6 +2245,7 @@ def main(argv=None):
     ap.add_argument("--offline", action="store_true", help="不调用飞书，只打印命令")
     sub = ap.add_subparsers(dest="cmd")
     p = sub.add_parser("get"); p.add_argument("id"); p.add_argument("--raw", action="store_true")
+    p = sub.add_parser("next"); p.add_argument("id")
     p = sub.add_parser("query"); p.add_argument("name"); p.add_argument("--sequence"); p.add_argument("--json", action="store_true")
     p = sub.add_parser("mql"); p.add_argument("name"); p.add_argument("--sequence")
     p = sub.add_parser("trace"); p.add_argument("id")
@@ -1771,18 +2254,29 @@ def main(argv=None):
         p = sub.add_parser(name); p.add_argument("draft"); p.add_argument("--apply", action="store_true")
         p.add_argument("--doc", help="上次建文档没有确定结果时：已建好的文档链接，或 new 重新建")
         if name == "register":
-            p.add_argument("--source")
-            p.add_argument("--set", action="append")
+            p.add_argument("--source", help="来源工作项的 ID")
+            p.add_argument("--task", help="所属研究任务的 ID；空间里只有一条没归档的研究任务时不用写")
+            p.add_argument("--set", action="append", help="字段=值；字段写名字、约定里的标识或 field_key")
             p.add_argument("--resume", action="store_true")
-            p.add_argument("--existing", action="store_true", help="立项单：挂到 ids.json 里已有的项目上")
-    p = sub.add_parser("transition"); p.add_argument("id"); p.add_argument("state")
-    p.add_argument("--set", action="append"); p.add_argument("--type"); p.add_argument("--apply", action="store_true")
+    p = sub.add_parser("confirm"); p.add_argument("id")
+    p.add_argument("--by", help="请书记员确认这一步的会话名；研究员交代的写 研究员")
+    p.add_argument("--set", action="append"); p.add_argument("--node", help="有几个节点同时进行时指明哪一个")
+    p.add_argument("--decision", help="冻结的字段在签字后改过时：研究员认可这些改动的决策工作项 ID")
+    p.add_argument("--type"); p.add_argument("--apply", action="store_true")
+    p = sub.add_parser("rollback"); p.add_argument("id")
+    p.add_argument("--to", required=True, help="退回到哪个已完成的节点：节点 ID 或名字")
+    p.add_argument("--reason", required=True)
+    p.add_argument("--by", help="请书记员回滚的会话名；研究员交代的写 研究员")
+    p.add_argument("--decision", help="研究员批准回退的决策工作项 ID；研究任务的回退必填")
+    p.add_argument("--type"); p.add_argument("--apply", action="store_true")
     p = sub.add_parser("update"); p.add_argument("id"); p.add_argument("--set", action="append", required=True)
     p.add_argument("--type"); p.add_argument("--apply", action="store_true")
     p = sub.add_parser("comment"); p.add_argument("id"); p.add_argument("--text", required=True); p.add_argument("--apply", action="store_true")
     for name in ("status-block", "append"):
         p = sub.add_parser(name); p.add_argument("id"); p.add_argument("--file", required=True); p.add_argument("--apply", action="store_true")
     p = sub.add_parser("archive"); p.add_argument("id"); p.add_argument("--apply", action="store_true")
+    p.add_argument("--moved", action="store_true", help="主文档已经移到归档节点下，只确认最后一步")
+    p = sub.add_parser("relink"); p.add_argument("id"); p.add_argument("--apply", action="store_true")
     p = sub.add_parser("ensure-node"); p.add_argument("key"); p.add_argument("--apply", action="store_true")
     args = ap.parse_args(argv)
     if not args.cmd:
@@ -1792,8 +2286,12 @@ def main(argv=None):
     lg = Ledger(project_root(), mode)
     m = lg.ids.get("meegle") or {}
     if mode != "offline" and not (m.get("bound_at") and m.get("types")):  # a binding time with no type is no binding
-        print("出错：这个项目还没绑定飞书空间。先跑 setup.py feishu --target <项目目录> --live 看匹配结果，核对后加 --apply；"
+        print("出错：这个项目还没绑定飞书空间。先跑 setup.py feishu --target <项目目录> --live 看绑定结果，核对后加 --apply；"
               "绑定以前台账脚本不读也不写飞书。")
+        return 1
+    if mode != "offline" and lg.ids.get("schema") != space.IDS_SCHEMA:
+        print("出错：feishu/ids.json 是旧版的绑定（%s）。这一版只认用节点流程的空间：照 setup 技能用模板建空间，"
+              "再跑 setup.py feishu --target <项目目录> --live --apply 重新绑定。" % (lg.ids.get("schema") or "没有 schema"))
         return 1
     moved = other_space(load_json(os.path.join(lg.root, "spec", "task.json"), {}), m)
     if mode != "offline" and moved:
@@ -1810,7 +2308,7 @@ def main(argv=None):
                 except codex_runtime.RuntimeError as e:
                     raise LedgerError(str(e))
             run_command(lg, args)
-    except (LedgerError, orgspec.OrgSpecError, ET.ParseError, OSError) as e:
+    except (LedgerError, orgspec.OrgSpecError, space.SpaceError, ET.ParseError, OSError) as e:
         print("出错：%s" % e)
         return 1
     if mode == "preview" and lg.planned:
@@ -1824,6 +2322,8 @@ def run_command(lg, args):
             print(json.dumps(lg.get(args.id, ["_all"]), ensure_ascii=False, indent=2))
         else:
             print(digest(lg, args.id) or "")
+    elif args.cmd == "next":
+        print(next_step(lg, args.id) or "")
     elif args.cmd == "query":
         query(lg, args.name, args.sequence, args.json)
     elif args.cmd == "mql":
@@ -1833,11 +2333,13 @@ def run_command(lg, args):
     elif args.cmd == "status":
         status(lg, args.id)
     elif args.cmd == "register":
-        register(lg, args.draft, args.source, pairs=args.set, resume=args.resume, existing=args.existing, doc=args.doc)
+        register(lg, args.draft, args.source, pairs=args.set, resume=args.resume, doc=args.doc, task=args.task)
     elif args.cmd == "reply":
         reply(lg, args.draft, args.doc)
-    elif args.cmd == "transition":
-        transition(lg, args.id, args.state, args.set, args.type)
+    elif args.cmd == "confirm":
+        confirm(lg, args.id, args.by, args.set, args.node, args.decision, args.type)
+    elif args.cmd == "rollback":
+        rollback(lg, args.id, args.to, args.reason, args.by, args.decision, args.type)
     elif args.cmd == "update":
         update(lg, args.id, args.set, args.type)
     elif args.cmd == "comment":
@@ -1847,7 +2349,9 @@ def run_command(lg, args):
     elif args.cmd == "append":
         append(lg, args.id, args.file)
     elif args.cmd == "archive":
-        archive(lg, args.id)
+        archive(lg, args.id, args.moved)
+    elif args.cmd == "relink":
+        relink(lg, args.id)
     elif args.cmd == "ensure-node":
         if args.key == "all":
             ensure_all_nodes(lg)

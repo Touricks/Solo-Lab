@@ -213,12 +213,12 @@ def check_meegle(inv, c, who, data, soft, rewritable):
     updated = new_args if new_args != inv.args else None
     if key in pol.get("meegle_write", ()):
         return Verdict("allow", "%s 在 %s 的写入白名单里" % (key, name)), updated
-    return refuse(who, data, "（%s）不能执行写命令 %s。工作项、字段、状态和文档只由书记员写；先写成草稿，请书记员登记。" % (name, key)), None
+    return refuse(who, data, "（%s）不能执行写命令 %s。工作项、字段、节点和文档只由书记员写；先写成草稿，请书记员登记。" % (name, key)), None
 
 
-LEDGER_READS = {"", "get", "query", "mql", "trace", "status", "-h", "--help"}
-LEDGER_WRITE_WORDS = {"register", "reply", "transition", "update", "comment", "status-block", "append",
-                      "archive", "ensure-node"}
+LEDGER_READS = {"", "get", "next", "query", "mql", "trace", "status", "-h", "--help"}
+LEDGER_WRITE_WORDS = {"register", "reply", "confirm", "rollback", "update", "comment", "status-block", "append",
+                      "archive", "relink", "ensure-node"}
 _WORDS = "|".join(re.escape(w) for w in sorted(LEDGER_WRITE_WORDS, key=len, reverse=True))
 CODE_WRITE = re.compile(r"(?<![\w-])['\"](?:%s)['\"](?!\s*:)|ledger\.py['\"]?\s+(?:-\S+\s+)*(?:%s)\b" % (_WORDS, _WORDS))
 CODE_RUNS_LEDGER = re.compile(r"run_(?:path|module)\([^)]*ledger")

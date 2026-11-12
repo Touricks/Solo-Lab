@@ -273,14 +273,14 @@ class Pool:
         if duplicate and duplicate.get("fingerprint") != fingerprint:
             raise RuntimeError("相同消息 key 对应不同内容")
         # Network reads must not hold the pool lock used by every role's hooks.
-        gate = self.dispatch_gate(to, kind, package, work_item) if kind in ("assign", "review") and not duplicate else None
+        gate = self.dispatch_gate(to, kind, package, work_item) if kind == "assign" and not duplicate else None
         with self.locked() as state:
             sender, b = self.binding_for(state, thread or os.environ.get("CODEX_THREAD_ID", ""))
             recipient = state["bindings"].get(to)
             if not b or not recipient:
                 raise RuntimeError("发出方和接收方必须已绑定")
-            if kind in ("assign", "review") and not (package and work_item):
-                raise RuntimeError("派活/送审必须给任务包路径和已登记的工作项 ID")
+            if kind == "assign" and not (package and work_item):
+                raise RuntimeError("派活必须给任务包路径和已登记的工作项 ID")
             request = dict(sender=sender, to=to, kind=kind, text=text, package=package, work_item=work_item)
             fingerprint = hashlib.sha256(json.dumps(request, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
             key = key or fingerprint
@@ -312,7 +312,7 @@ class Pool:
     def dispatch_gate(self, to, kind, package, work_item, starting=False):
         import ledger
         if not package or not work_item or not str(work_item).isdigit():
-            raise RuntimeError("派活/送审必须给任务包路径和已登记的工作项 ID")
+            raise RuntimeError("派活必须给任务包路径和已登记的工作项 ID")
         binding = self.load()["bindings"].get(to)
         if not binding:
             raise RuntimeError("接收方必须已绑定")
@@ -328,7 +328,7 @@ class Pool:
             if not value or re.search(r"[<>]|待定|待补|TODO", value, re.I):
                 raise RuntimeError("任务包必须明确“%s”，先由发出方澄清，不扩大授权范围" % label)
             scopes[key] = value
-        expected_package = "送审包" if kind == "review" else "需求包"
+        expected_package = "需求包"
         if not re.search(r"^- 包类型：" + expected_package + r"\s*$", body, re.M):
             raise RuntimeError("消息类型与任务包不匹配：需要" + expected_package)
         lg = ledger.Ledger(str(self.root), "preview")
@@ -342,22 +342,18 @@ class Pool:
                 raise RuntimeError("任务包没有该工作项的完整登记回执，请先交书记员登记")
             item = lg.item(work_item)
             wid = item.get("type") if item else None
-            allowed = {"same_seq": ("执行中",), "review": ("待核查",),
-                       "cross_request": ("已接单",) if starting else ("待接单", "已接单")}
-            if (kind == "review" and wid != "review") or (kind == "assign" and wid not in ("same_seq", "cross_request")):
+            if wid not in ("same_seq", "cross_request"):
                 raise RuntimeError("工作项类型与消息不匹配")
+            doing = lg.state(wid, "doing")
+            allowed = {"same_seq": (doing,),
+                       "cross_request": (doing,) if starting else (lg.state("cross_request", "waiting"), doing)}
             if item.get("state") not in allowed[wid]:
-                raise RuntimeError("工作项 #%s 当前为%s；须由书记员先流转至%s并回读，不能先写产物后补开工" %
+                raise RuntimeError("工作项 #%s 当前为%s；须由书记员先确认节点、让它走到%s并回读，不能先写产物后补开工" %
                                    (work_item, item.get("state"), "/".join(allowed[wid])))
             if lg.text_of(item, "main_doc") != receipt.get("doc") or not receipt.get("doc"):
                 raise RuntimeError("工作项主文档与登记回执不一致")
             if wid == "same_seq" and lg.text_of(item, "owner_session") != to:
                 raise RuntimeError("工作项负责会话与接收池位不一致，先交书记员更新")
-            if wid == "review":
-                source = lg.text_of(item, "source_item")
-                source_item = lg.item(ledger.item_id_of(source)) if source else None
-                if not source_item or source_item.get("state") != "待验收":
-                    raise RuntimeError("送审前来源工作项必须回读为待验收")
         except ledger.LedgerError as exc:
             raise RuntimeError("派活检查未通过：" + str(exc)) from exc
         return dict(scopes, state=item["state"], checked_at=now(), work_item=str(work_item),
@@ -369,8 +365,8 @@ class Pool:
         thread = thread or os.environ.get("CODEX_THREAD_ID", "")
         name, _ = self.binding_for(state, thread)
         message = state["messages"].get(mid)
-        if not message or message["to"] != name or message["kind"] not in ("assign", "review"):
-            raise RuntimeError("只有派活/送审的接收方能记录开工检查")
+        if not message or message["to"] != name or message["kind"] != "assign":
+            raise RuntimeError("只有派活的接收方能记录开工检查")
         if not message.get("received_at"):
             raise RuntimeError("先 ack 记录收到，再检查开工")
         gate = self.dispatch_gate(name, message["kind"], message["package"], message["work_item"], starting=True)
@@ -480,7 +476,7 @@ def main(argv=None):
     p = sub.add_parser("replace"); p.add_argument("slot"); p.add_argument("--expected-thread", required=True); p.add_argument("--reason", required=True)
     p = sub.add_parser("observe"); p.add_argument("--file", required=True)
     p = sub.add_parser("focus"); p.add_argument("action", choices=("open", "close")); p.add_argument("--topic")
-    p = sub.add_parser("message"); p.add_argument("to"); p.add_argument("--kind", required=True, choices=("assign", "report", "register", "review", "decide", "notify")); p.add_argument("--text", required=True); p.add_argument("--package"); p.add_argument("--work-item"); p.add_argument("--key")
+    p = sub.add_parser("message"); p.add_argument("to"); p.add_argument("--kind", required=True, choices=("assign", "report", "register", "decide", "notify")); p.add_argument("--text", required=True); p.add_argument("--package"); p.add_argument("--work-item"); p.add_argument("--key")
     p = sub.add_parser("receipt"); p.add_argument("id"); p.add_argument("status", choices=("queued", "delivered", "failed", "unknown")); p.add_argument("--evidence", required=True)
     p = sub.add_parser("ack"); p.add_argument("id"); p.add_argument("--handled", action="store_true")
     p = sub.add_parser("start"); p.add_argument("id")

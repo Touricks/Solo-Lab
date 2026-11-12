@@ -126,7 +126,7 @@ def adapt(base, original, target, spec, task, policy, seqs):
         elif role == "pmo-scribe":
             text += base.scaffold("codex/scribe.md.tmpl") + "\n"
         else:
-            text += "交付先经过独立质量验收，再向上级交回；需签字的决定提交入口。交付包和验收包挂到原工作项，不另建同类任务。\n"
+            text += "交付包写明材料来源和运行 ID，交回上一级；正式分数只认质量序列在冻结的 Eval Set 上跑出的。需签字的决定提交入口。交付包挂到原工作项，不另建同类任务。\n"
         put(".agent-org/roles/%s.md" % role, text)
     put("org/grants.md", "# 角色与写入职责\n\n")
     put("org/grants.md", plan.files["org/grants.md"][0] +

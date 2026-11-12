@@ -4,7 +4,7 @@
     python3 -I scripts/setup.py precheck
     python3 -I scripts/setup.py init --target DIR --task task.json [--sequences product,alg,...] [--apply]
     python3 -I scripts/setup.py feishu --target DIR [--map ID=NAME ...] [--live] [--apply]
-    python3 -I scripts/setup.py template [--space NAME] [--target DIR] [--live]
+    python3 -I scripts/setup.py template [--space NAME] [--target DIR]
     python3 -I scripts/setup.py check --target DIR
     python3 -I scripts/setup.py pool --target DIR
 
@@ -14,18 +14,19 @@ packages/, inbox/, spec/ and a copy of the plugin's scripts and rules into
 overwritten: a different version goes next to them as <file>.new. Running it
 twice with the same inputs writes nothing.
 
-feishu binds the rules' types and fields to the space spec/task.json names: by
---map, else the key bound last time, else the same name. It writes the keys to
-feishu/ids.json and a build-and-check list to feishu/migration.md. It only reads
-Feishu; the ledger refuses to touch Feishu until a binding has been applied. When
-no type matches, it points to copying the space from the template, and --apply
-records the space without a binding time.
+feishu binds the project to the space spec/task.json names. With --live it reads the
+space's structure (space.py snapshot), fills the slots of the contract
+(orgspec/contract.json) by --map, else what was bound last time, else identifier, else
+name, and checks that the flows can be driven. It writes feishu/ids.json (the binding),
+feishu/space.json and space.md (the structure), feishu/binding.md (what is missing) and
+org/phases.md (the flows of the main-line type). It only reads Feishu; the ledger
+refuses to touch Feishu until a binding has been applied. When no type matches, it
+points to creating the space from the template, and --apply records the space without
+a binding time.
 
-template checks the space that project spaces are copied from (feishu.template_space
-in the task file, else std_template): its types, states, roles, fields and options
-must carry the rules' own names, so that a copy binds without --map, and it must
-hold no work items, since it is only a copy source. It always reads Feishu (--live
-is accepted, as for feishu) and writes nothing.
+template runs the same contract check on any space, such as the one a template is
+published from (--space, or feishu.template_space in the task file). It only reads
+Feishu and writes nothing.
 
 Every role runs as a desktop session the researcher can see (the session pool): init adds
 the pool hooks and .claude/agent-org/pool-plan.json, and `setup.py pool` prints the
@@ -50,17 +51,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import orgspec  # noqa: E402
 import ledger  # noqa: E402
+import space  # noqa: E402
 import project_paths  # noqa: E402
 
 PLUGIN_ROOT = orgspec.PLUGIN_ROOT
 SCAFFOLD = os.path.join(PLUGIN_ROOT, "scaffold")
 TEMPLATES = os.path.join(PLUGIN_ROOT, "skills", "packages", "assets")
 MIN_VERSIONS = {"lark-cli": "1.0.96", "meegle": "1.0.23", "claude": "2.1.219"}
-DEFAULT_TEMPLATE_SPACE = "std_template"
 DEFAULT_MODELS = {"p2": "opus", "p1": "sonnet", "p0": "sonnet", "pmo-p2": "opus",
                   "pmo-router": "sonnet", "pmo-scribe": "haiku", "quality-p1": "opus"}
 REQUIRED_SEQUENCES = ("pmo", "quality")
-BIN_SCRIPTS = ("orgspec.py", "ledger.py", "route.py", "export_field_dictionary.py", "pool.py", "project_paths.py")
+BIN_SCRIPTS = ("orgspec.py", "ledger.py", "route.py", "space.py", "pool.py", "project_paths.py")
 HOOK_SCRIPTS = ("guard.py", "audit.py", "instances.py", "inbox.py", "feishu_cmd.py")
 SHARED_HOOK_SCRIPTS = ("pool.py",)         # kept in scripts/, copied into the hooks too
 POOL_DEFAULTS = {"p1": 1, "p0": 1, "later": [], "max_sessions": 30}
@@ -68,8 +69,7 @@ POOL_SESSIONS = (7, 57)
 
 SCRIBE_LARK = ["docs +create", "docs +update", "wiki +node-create", "wiki +move",
                "drive +add-comment", "drive +add-reply", "drive +resolve-comment", "drive +upload"]
-SCRIBE_MEEGLE = ["workitem create", "workitem update", "workflow transition-state", "comment add",
-                 "view create-fixed", "view update-fixed", "attachment +upload", "attachment prepare-upload"]
+SCRIBE_MEEGLE = ["workitem create", "workitem update", "comment add", "attachment +upload", "attachment prepare-upload"]
 READ_ALLOW = [
     "Bash(lark-cli docs +fetch *)", "Bash(lark-cli docs +search *)", "Bash(lark-cli wiki +node-list *)",
     "Bash(lark-cli wiki +node-get *)", "Bash(lark-cli wiki +space-list *)",
@@ -79,15 +79,20 @@ READ_ALLOW = [
     "Bash(meegle workitem get *)", "Bash(meegle workitem query *)", "Bash(meegle workitem meta-types *)",
     "Bash(meegle workitem meta-fields *)", "Bash(meegle workitem meta-roles *)",
     "Bash(meegle workitem meta-create-fields *)", "Bash(meegle workitem list-op-records *)",
-    "Bash(meegle comment list *)", "Bash(meegle workflow list-state-transitions *)",
+    "Bash(meegle comment list *)", "Bash(meegle workflow get-node *)",
     "Bash(meegle workflow list-state-required *)", "Bash(meegle project search *)",
     "Bash(meegle view search *)", "Bash(meegle view get *)", "Bash(meegle user me *)",
     "Bash(meegle auth status)", "Bash(meegle telemetry status)", "Bash(meegle version)",
     "Bash(python3 -I .claude/agent-org/bin/ledger.py get *)",
+    "Bash(python3 -I .claude/agent-org/bin/ledger.py next *)",
     "Bash(python3 -I .claude/agent-org/bin/ledger.py query *)",
     "Bash(python3 -I .claude/agent-org/bin/ledger.py trace *)",
     "Bash(python3 -I .claude/agent-org/bin/ledger.py status *)",
     "Bash(python3 -I .claude/agent-org/bin/ledger.py mql *)",
+    "Bash(python3 -I .claude/agent-org/bin/space.py snapshot *)",
+    "Bash(python3 -I .claude/agent-org/bin/space.py bind *)",
+    "Bash(python3 -I .claude/agent-org/bin/space.py check *)",
+    "Bash(python3 -I .claude/agent-org/bin/space.py show *)",
     "Bash(python3 -I .claude/agent-org/bin/route.py classify *)",
     "Bash(python3 -I .claude/agent-org/bin/orgspec.py lint *)",
     "Bash(python3 -I .claude/agent-org/bin/orgspec.py show *)",
@@ -377,10 +382,10 @@ def build_policy(spec, task, seqs):
     entry = rules["entry"]
     policy = {
         "version": POLICY_VERSION,
-        "entry_role": entry["main_agent"],
+        "entry_role": entry["role"],
         "router_role": entry["router"],
         "scribe_role": entry["scribe"],
-        "single_claim_roles": [entry["main_agent"], entry["scribe"]],
+        "single_claim_roles": [entry["role"], entry["scribe"]],
         "channel": "send_message",
         "agents": agents,
         "default_agent": {"tag": "[unknown]", "abbrev": "", "rank": 0, "sequence": "", "sequence_cn": "", "limit": 0,
@@ -407,8 +412,8 @@ ROUTE = "python3 -I .claude/agent-org/bin/route.py"
 POOL_ALLOW = ["Bash(%s %s)" % (ROUTE, c) for c in ("pool", "audit")] + [
     "Bash(%s %s *)" % (ROUTE, c) for c in ("claim", "expect", "pool", "refill", "audit", "notify", "focus")]
 SCRIBE_ALLOW = ["Bash(python3 -I .claude/agent-org/bin/ledger.py %s *)" % w
-                for w in ("register", "reply", "transition", "update", "comment", "status-block", "append", "archive",
-                          "ensure-node")]
+                for w in ("register", "reply", "confirm", "rollback", "update", "comment", "status-block", "append", "archive",
+                          "relink", "ensure-node")]
 POOL_HOOK_EVENTS = ("Stop", "StopFailure", "Notification", "PermissionRequest", "PermissionDenied", "PostCompact")
 # The desktop app's terminal panel tool runs shell commands outside the Bash tool. A matcher with
 # regex characters is an unanchored regex, so it gets its own anchored group.
@@ -537,16 +542,16 @@ def common_role_lines(spec, seq, rank, name, pol, task, policy):
         writable, code_list(task["protected_paths"]), "改动要研究员确认" if name in policy["h_writers"] else "不能改"))
     for doc in docs:
         how = "" if doc == "spec/requirements.md" else "用技能 `agent-org:spec` 访谈研究员后写，每条标来源；"
-        lines.append("- 你负责起草%s `%s`：%s研究员签字后生效。" % (SPEC_DOC_NAMES[doc], doc, how))
+        lines.append("- 你负责起草%s `%s`：%s验证流程第 4 步研究员签字时，它和别的前四步产出一起冻结。" % (SPEC_DOC_NAMES[doc], doc, how))
     return lines
 
 
 def sequence_lines(seq):
     lines = []
     if seq == "quality":
-        lines.append("- 质量序列自己的产出在序列内验收，不送审；同序列需求的“送审包”一栏填序列内验收用的交付包链接。")
+        lines.append("- 正式分数只由质量序列在冻结的 Eval Set 上跑出，正式集每一轮只跑一次；别的序列自己跑的是开发分，不进结论。评测协议的只读路径只有质量序列能改，改动要研究员确认。")
     if seq == "liaison":
-        lines.append("- 汇报材料写成草稿，由书记员上传到知识库的“汇报文档”节点，研究员确认后自己转交导师。导师不用飞书：不给导师开任何飞书权限，也不为导师建视图。")
+        lines.append("- 材料写成草稿，由书记员上传到知识库的“汇报文档”节点；每份材料发出前要研究员签字（走决策包），研究员自己转交。读者不用飞书：不给他们开任何飞书权限。读者是研究员本人或组织里的会话的东西，不归外联写。")
     return lines
 
 
@@ -564,15 +569,15 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
         "- 会话名：%s会话标签是 `%s`。" % (session, pol["tag"]),
         "- 开工或接手：先读交给你的包；再用 `python3 -I .claude/agent-org/bin/ledger.py get <工作项 ID>` 读工作项，读主文档的“状态包”接上进度。不靠对话记状态。",
         "- 写包用技能 `agent-org:packages`（模板副本在 `.claude/agent-org/templates/`）。草稿写到 `packages/drafts/%s/`，文件名照 `%s`；写完跑 `python3 -I .claude/agent-org/bin/orgspec.py lint <路径>`。" % (seq, n["draft"]),
-        "- 交回：给派活方发消息，首行写 `%s：<包名> <包路径>`，下面是三行以内的摘要；要送审的加一行“待送审：<送审包路径>”。发完把回执（delivered 或 queued，以及 message_id）写进本轮的最后一句。" % msg_head(spec, "report", receiver="<派活方会话名>"),
+        "- 交回：给派活方发消息，首行写 `%s：<包名> <包路径>`，下面是三行以内的摘要。发完把回执（delivered 或 queued，以及 message_id）写进本轮的最后一句。" % msg_head(spec, "report", receiver="<派活方会话名>"),
     ]
     dispatch = ("再跑 `python3 -I .claude/agent-org/bin/route.py pool --role %s` 找空闲的会话。有空闲的：登记请求写“开工：是”，拿到【%s #ID】后发 "
-                "`%s：<包名> <包路径>`%s。没有空闲的：登记请求写“开工：否”，活留在“待开工”排队；等有会话空出来，先请书记员把它流转到“执行中”，再派。")
+                "`%s：<包名> <包路径>`%s。没有空闲的：登记请求写“开工：否”，活留在“待开工”排队；等有会话空出来，先请书记员确认“开工”这一步（`ledger.py confirm <工作项 ID> --by <承接方的会话名>`），再派。")
     if rank == 2:
         lines.append(("- 派 +1：先写下发关系的需求包，给 `%s` 发【%s】（写草稿路径）。" % (scribe, reg))
                      + dispatch % (pol["spawn"][0], receipt, msg_head(spec, "assign", receiver="<+1 的池位名>"), ""))
     elif rank == 1:
-        lines.append(("- 派 +0：执行关系的需求包按验收标准划分，不按运行次数划分。先给 `%s` 发【%s】（写草稿路径和“来源工作项 #<所属阶段的下发需求包 ID>”）。" % (scribe, reg))
+        lines.append(("- 派 +0：执行关系的需求包按验收标准划分，不按运行次数划分。先给 `%s` 发【%s】（写草稿路径和“来源工作项 #<它所属的下发需求包 ID>”）。" % (scribe, reg))
                      + dispatch % (pol["spawn"][0], receipt, msg_head(spec, "assign", receiver="<+0 的池位名>"),
                                    "，消息里单独写一行“会话名：%s-p0-<工作项 ID>”" % pol["abbrev"]))
     else:
@@ -581,12 +586,12 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
         lines.append("- 上限和补位：每个角色 +1 最多 3 个会话、+0 最多 5 个。没有空闲会话就排队；研究员在这一轮明确说“补位”或“再开一个 …”时，+2 才开新会话（开法照 `route.py claim` 输出里“补位用”那一行，开好马上 `route.py expect` 预登记），其余时候只运行 `route.py refill <角色>` 记一条补位请求，不提卡片。+1 不自己开会话。")
     if rank == 2:
         lines.append("- 你开的会话每结束一轮，应用会叫醒你一次。这不算交回：先跑 `route.py pool --queue <你的会话名>`，有等你派的活、又有空闲会话就派出去，没有就一句话结束本轮。")
-        lines.append("- 跨序列的需求包、送审包、决策包写成草稿发给入口 `%s`（【%s】【%s】【%s】），由入口转交；你不直接给别的序列派活。执行结果先送审，拿到验收包再交上一级。入口转来本序列 +1、+0 送审的验收包时，照它接着安排。" % (
-            entry, spec.term("msg", "report"), spec.term("msg", "review"), spec.term("msg", "decide")))
+        lines.append("- 跨序列的需求包、决策包写成草稿发给入口 `%s`（【%s】【%s】），由入口转交；你不直接给别的序列派活。" % (
+            entry, spec.term("msg", "report"), spec.term("msg", "decide")))
+        lines.append("- 研究任务走到你们序列负责的那一步时，这一步归你推进：先用 `python3 -I .claude/agent-org/bin/ledger.py next <研究任务 ID>` 看这一步必填什么，序列内的活派 +1，要别的序列配合就发跨序列的需求包；产出齐了，给 `%s` 发【%s】请它确认节点，写明各必填字段的值。正式分数只认质量序列在冻结的 Eval Set 上跑出的。" % (scribe, reg))
     else:
         if seq != "quality":
-            lines.append("- 执行结果先送审，拿到验收包再交上一级。送审包直接给入口 `%s` 发【%s #<被送审工作项 ID>】，写送审包路径；入口拿到验收包后会发【%s】把验收包路径告诉你。" % (
-                entry, spec.term("msg", "review"), spec.term("msg", "notice")))
+            lines.append("- 交付包里写明材料来源、每个变体的结果和运行 ID，失败的也列。你自己跑出的分数是开发分，只用来调试，不当结论写。")
         lines.append("- 需要别的序列配合的、要拍板的事，写进交给上一级的交付包，由本序列 +2 交给入口；你不直接找别的序列。")
     lines += common_role_lines(spec, seq, rank, name, pol, task, policy)
     if rank == 2:
@@ -625,15 +630,6 @@ def agent_file(spec, seq, rank, task, policy):
 POOL_DESC = "不要用 Agent 工具派这个角色，给它的会话发消息。"
 
 
-def lead_by_phase_text(spec, seqs=None):
-    rows = []
-    for item in spec.rules["entry"]["lead_by_phase"]:
-        names = ["%s +2（`%s`）" % (spec.term("seq", s), agent_name(s, 2)) for s in item["sequences"] if seqs is None or s in seqs]
-        if names:
-            rows.append("%s：%s" % (item["phase"], "、".join(names)))
-    return bullets(rows + [spec.render(spec.rules["entry"]["focus_rule"])])
-
-
 def entry_values(spec, policy):
     """The parts of the entry's definition that name sessions and message heads."""
     pol = policy["agents"]["pmo-p2"]
@@ -649,12 +645,11 @@ def entry_values(spec, policy):
         "entry_dispatch": "**派活。** 照派发图给这些角色的会话发消息：%s。先跑 `python3 -I .claude/agent-org/bin/route.py pool --role <角色>` 找人：有空闲的发给空闲的，优先发给台账里“负责会话”对应的那个；显示“研究员在用”的不打断，用 `route.py notify <会话名> --text '...' --work-item <ID>` 留言，紧急的才发消息。消息首行写 `%s：<包名> <包路径>`，下面写要它做什么；正文不复述，包在文件里。回执是 delivered 或 queued 才算发出；对方收没收到，以对方 hook 记在 `.claude/logs/dispatch.jsonl` 的时间为准。\n\n**登记。** 工作项、字段、状态和文档只由书记员写。要登记的东西写成一条“%s”，发给 `%s`，它写完回【%s #ID】：" % (
             targets, msg_head(spec, "assign", sender=me, receiver="<+2 的会话名>"), spec.term("msg", "register_request"), scribe,
             spec.term("msg", "register_receipt")),
-        "entry_review": "**送审。** 各级的送审包都发给你（【%s #被送审工作项 ID】）。先请书记员登记送审包，再把送审工作项流转到“核查中”，然后给 `Quality-p2-01` 发【%s #送审工作项 ID】，写送审包路径。验收包回来、书记员流转好以后，给送审方（发【%s】给你的那个会话）发【%s #被送审工作项 ID】，写验收包路径；送审方是 +1、+0 的，再用 `route.py notify` 给它所在序列的 +2 留一句。执行结果先送审，再交上一级；没有验收包的交付包不转。\n\n**补充信息（R1、R2）。** 在工作项下加带标签的评论（请书记员登记，或自己 `meegle comment add`），再给负责会话发【%s #ID】说明一句；它正被研究员直接用着的，改用 `route.py notify` 留言。【%s】只由派活方发。" % (
-            spec.term("msg", "review"), spec.term("msg", "assign"), spec.term("msg", "review"), spec.term("msg", "notice"),
+        "entry_extra_info": "**补充信息（R1、R2）。** 在工作项下加带标签的评论（请书记员登记，或自己 `meegle comment add`），再给负责会话发【%s #ID】说明一句；它正被研究员直接用着的，改用 `route.py notify` 留言。【%s】只由派活方发。" % (
             spec.term("msg", "notice"), spec.term("msg", "resume")),
-        "entry_queue": "给 `%s` 发【%s】汇总成队列：每件写选项、代价、建议和默认处理。研究员在本会话里" % (router, spec.term("msg", "assign")),
-        "entry_focus": "**研究员直接委托。** 平时研究员找你；特殊情况下研究员会直接点开某个 +2 的会话交代事情，也会按阶段和主责序列的 +2 深谈。当前阶段和主责序列见 `org/phases.md`：\n\n%s\n\n这时那个会话会自己运行 `route.py focus open`，并用 `route.py notify` 告诉你。`route.py pool` 显示它“研究员在用”期间，你不给它派活，新信息用 `route.py notify <会话名> --text '...' --work-item <ID>` 留在它的收件箱。谈定的事它会写成决策包（渠道：研究员主动发起）交给你：照 R6 请书记员建决策工作项并直接流转到“已决定”，“待签版本”写了要更新的字段的一并写进去，再通知受影响的会话。谈定的事没写进台账就不算数。\n\n**会话池。** 研究员说“恢复”时，运行 `route.py pool --recover`，照它列的清单发消息（你自己派出去的发【%s #ID】，别人派的请派活方发），先让书记员补完写到一半的登记。研究员在本会话明确说“补位”或“再开一个 …”时才开会话：路由和书记员由你开，其余序列的会话由那个序列的 +2 开；开法照 `route.py claim` 输出里的开池表，开好马上 `route.py expect` 预登记。没人要求时不开会话，也不提卡片；补位请求（`route.py refill`）放进每日决策队列。派一批活之前先看额度：5 小时额度用了八成以上，只派紧急程度为“插队”的。你开的会话每结束一轮，应用会叫醒你一次，这不算交回：先跑 `route.py pool --queue %s`，有待开工的活又有空闲会话就派出去，没有就一句话结束本轮。" % (
-            lead_by_phase_text(spec, policy.get("sequences")), spec.term("msg", "resume"), me),
+        "entry_queue": "给 `%s` 发【%s】汇总成队列：每件写选项、代价和建议。研究员在本会话里" % (router, spec.term("msg", "assign")),
+        "entry_focus": "**研究员直接委托。** 平时研究员找你；特殊情况下研究员会直接点开某个 +2 的会话交代事情，也会和研究任务当前这一步的负责序列的 +2 深谈。每条研究任务走到哪一步、由谁负责，用 `ledger.py query tasks` 和 `ledger.py next <ID>` 看，两个流程的对照在 `org/phases.md`。\n\n%s\n\n这时那个会话会自己运行 `route.py focus open`，并用 `route.py notify` 告诉你。`route.py pool` 显示它“研究员在用”期间，你不给它派活，新信息用 `route.py notify <会话名> --text '...' --work-item <ID>` 留在它的收件箱。谈定的事它会写成决策包（渠道：研究员主动发起）交给你：照 R6 请书记员建决策工作项，填上决定内容和决定人后确认“决定”这一步，“待签版本”写了要更新的字段的一并写进去，再通知受影响的会话。谈定的事没写进台账就不算数。\n\n**会话池。** 研究员说“恢复”时，运行 `route.py pool --recover`，照它列的清单发消息（你自己派出去的发【%s #ID】，别人派的请派活方发），先让书记员补完写到一半的登记。研究员在本会话明确说“补位”或“再开一个 …”时才开会话：路由和书记员由你开，其余序列的会话由那个序列的 +2 开；开法照 `route.py claim` 输出里的开池表，开好马上 `route.py expect` 预登记。没人要求时不开会话，也不提卡片；补位请求（`route.py refill`）放进每日决策队列。派一批活之前先看额度：5 小时额度用了八成以上，只派紧急程度为“插队”的。你开的会话每结束一轮，应用会叫醒你一次，这不算交回：先跑 `route.py pool --queue %s`，有待开工的活又有空闲会话就派出去，没有就一句话结束本轮。" % (
+            bullets([spec.render(spec.rules["entry"]["focus_rule"])]), spec.term("msg", "resume"), me),
         "entry_permissions": "**权限提示。** 每个会话的权限提示只出现在它自己的会话里；`route.py pool --watch` 把等研究员批准的会话列在最前。请研究员不要对飞书写操作的提示选“不再询问”。",
     }
 
@@ -689,14 +684,14 @@ def pmo_file(spec, rank, task, policy):
         return render(scaffold("agents/router.md.tmpl"), common)
     intake = "\n\n会话池里各会话直接给你发【%s】。一次处理一条；你在忙时，后来的消息会自动排队。写完给请求方回 `%s：<写了什么>`，下面列出异常。写台账前先不加 `--apply` 预览，确认后再加；`ledger.py` 自己会加文件锁，同一时间只有一个写入。" % (
         spec.term("msg", "register_request"), msg_head(spec, "register_receipt", sender=scribe, receiver="<请求方会话名>"))
-    common.update({"description_json": yaml_str(prefix + "项目管理 +0（书记员）。台账和文档唯一的写入方：按登记请求和需求包建工作项、上传文档、写字段、流转状态。"),
+    common.update({"description_json": yaml_str(prefix + "项目管理 +0（书记员）。台账和文档唯一的写入方：按登记请求和需求包建工作项、上传文档、写字段、确认和回滚节点、归档。"),
                    "docs_tree": spec.docs_tree(), "scribe_intake": intake})
     return render(scaffold("agents/scribe.md.tmpl"), common)
 
 
 def task_summary(task):
     lines = ["- 名称：%s（%s）" % (task["name"], task["description"]),
-             "- 研究问题、目标和判据：立项单（飞书项目里“项目”工作项的主文档）和 `spec/requirements.md`。",
+             "- 研究问题、目标和判据：研究任务单（飞书项目里“研究任务”工作项的主文档）和 `spec/requirements.md`。",
              "- 实验规格：`spec/spec.md`，写可改范围、目标指标、实验资源和搜索方法。可写路径：%s，只有工程序列能写。" % (
                  code_list(task["editable_paths"])),
              "- 评测协议：`spec/eval-protocol.md`，写数据、划分、打分和证据标准。只读路径：%s。" % code_list(task["protected_paths"])]
@@ -710,11 +705,11 @@ def where_text(task, ids):
     state = ("- 会话池的认领表和各会话的状态在 `.claude/state/`，由 hook 维护，不要手改；派活、交回和认领的记录在 `.claude/logs/dispatch.jsonl`；"
              "开池清单在 `.claude/agent-org/pool-plan.json`；飞书写操作的日志在 `feishu/write-log.jsonl`；收件箱在 `inbox/`。")
     return "\n".join([
-        "- 台账：飞书项目空间「%s」，project_key %s；字段字典在 `feishu/field-dictionary.md`。" % (
+        "- 台账：飞书项目空间「%s」，project_key %s；空间的结构（类型、流程、字段）在 `feishu/space.md`。" % (
             fs.get("meegle_space", "未填"), "`%s`" % m["project_key"] if m.get("project_key") else "待填（跑 `setup.py feishu`）"),
         "- 任务包：飞书知识库空间「%s」%s；发出前的草稿在 `packages/drafts/<序列>/`。" % (
             fs.get("wiki_space", "未填"), "，space_id `%s`" % w["space_id"] if w.get("space_id") else ""),
-        "- 实验规格、评测协议和需求文档在 `spec/`，运行记录在 `runs/`，阶段和主责序列在 `org/phases.md`。",
+        "- 实验规格、评测协议和需求文档在 `spec/`，运行记录在 `runs/`，研究任务的流程（每一步谁负责、必填什么）在 `org/phases.md`。",
         state,
     ])
 
@@ -729,17 +724,17 @@ HARD_RULES = ("hook 只拦会损坏数据的事。在任何会话里都直接拒
 def shared_mechanics(spec, policy):
     agents = policy["agents"]
     entry, router, scribe = (agents[r]["fixed_session"] for r in ("pmo-p2", "pmo-router", "pmo-scribe"))
-    words = "、".join("【%s】" % spec.term("msg", k) for k in ("report", "register_request", "register_receipt", "review", "decide", "resume", "notice"))
+    words = "、".join("【%s】" % spec.term("msg", k) for k in ("report", "register_request", "register_receipt", "decide", "resume", "notice"))
     return bullets([
         "本目录是会话池：每个角色是研究员看得见的一个桌面会话。侧栏顶层是 %d 个序列的 +2，各自下面挂本序列的 +1 和 +0；入口 `%s` 下面挂路由 `%s` 和书记员 `%s`。研究员平时找入口，特殊情况直接点开某个会话交代。" % (
             len(policy.get("sequences") or []), entry, router, scribe),
         "认领：只有开局第一句写着“认领 <角色>（会话名 <名字>）”的会话才认领，照那句话运行 `python3 -I .claude/agent-org/bin/route.py claim <角色> --as <会话名>`，读输出里的角色说明，它就是本会话的工作说明。第一句没有这句话的，是研究员自己的会话：不要自己认领，也不替池里的角色干活。",
         "找人：派活前先跑 `python3 -I .claude/agent-org/bin/route.py pool --role <角色>`，看各会话忙不忙、手上是哪个工作项、桌面会话 ID，照脚本的建议发给空闲的会话。没有空闲的就排队，台账里“待开工”的工作项就是队列。",
-        "发消息：派活、交回、登记请求、送审、需拍板都用会话管理工具发消息，按对方的桌面会话 ID 发，同一家族里也可以写短名（会话名的小写）。首行写抬头 `%s：<包名> <包路径>`，抬头里的会话名写池位名（`route.py pool` 列的那个，+0 也写 `Alg-p0-01` 这样的池位名），其余几种只换抬头里的词：%s。正文放在包文件里，消息里只写抬头、包路径和三行以内的摘要。回执是 delivered 或 queued 才算发出，记下 message_id；对方收没收到，以对方 hook 记在 `.claude/logs/dispatch.jsonl` 的时间为准。" % (
+        "发消息：派活、交回、登记请求、需拍板都用会话管理工具发消息，按对方的桌面会话 ID 发，同一家族里也可以写短名（会话名的小写）。首行写抬头 `%s：<包名> <包路径>`，抬头里的会话名写池位名（`route.py pool` 列的那个，+0 也写 `Alg-p0-01` 这样的池位名），其余几种只换抬头里的词：%s。正文放在包文件里，消息里只写抬头、包路径和三行以内的摘要。回执是 delivered 或 queued 才算发出，记下 message_id；对方收没收到，以对方 hook 记在 `.claude/logs/dispatch.jsonl` 的时间为准。" % (
             msg_head(spec, "assign"), words),
-        "自动提醒：你开的会话每结束一轮，应用会叫醒你一次。这不算交回：先跑 `route.py pool --queue <自己的会话名>`，有待开工的活、又有空闲会话就派出去，没有就一句话结束本轮。【%s】（比如送审的结论、补充信息）也是消息，会叫起对方的下一轮；对方在 `route.py pool` 里显示“研究员在用”的不打断，改用 `route.py notify <会话名> --text '...'` 留在它的收件箱。" % spec.term("msg", "notice"),
+        "自动提醒：你开的会话每结束一轮，应用会叫醒你一次。这不算交回：先跑 `route.py pool --queue <自己的会话名>`，有待开工的活、又有空闲会话就派出去，没有就一句话结束本轮。【%s】（比如补充信息）也是消息，会叫起对方的下一轮；对方在 `route.py pool` 里显示“研究员在用”的不打断，改用 `route.py notify <会话名> --text '...'` 留在它的收件箱。" % spec.term("msg", "notice"),
         "开会话：只有研究员在这一轮明确要求开会话（“补位”“再开一个 alg-p0”）时才开；其余时候运行 `route.py refill <角色>` 记一条补位请求，不开会话，也不提卡片。",
-        "工作项、字段、状态和文档只由唯一认领的书记员 `%s` 写，写操作都走 `ledger.py`；其他会话只能加带会话标签的评论。" % scribe,
+        "工作项、字段、节点和文档只由唯一认领的书记员 `%s` 写，写操作都走 `ledger.py`；其他会话只能加带会话标签的评论。每一步谁负责、必填什么，以飞书空间为准：`ledger.py next <工作项 ID>` 现读。" % scribe,
         "high-risk-write 和带 `--yes` 的飞书命令、在本目录切分支、stash、reset 之类的 git 命令都由研究员执行：把完整命令写给研究员。",
         "知识库、文档和云空间的命令显式带 `--as user`；收发消息和订阅事件带 `--as bot`。",
         HARD_RULES,
@@ -799,8 +794,10 @@ def org_md(spec, seqs):
     parts += ["## 任务包", "", spec.package_table(), "", "### 三种关系", "", spec.relation_matrix(), "",
               "### 包的流向", "", spec.package_routes(), "", "### 交接规则", "", spec.handoff_rules(), "",
               "## 入口和路由", "", spec.routing_table(), "", "### 派发图", "", spec.dispatch_table(), "",
-              "## 台账：飞书项目", "", spec.work_items_table(), "", "### 状态和流转表单", "", spec.flows_table(), "",
-              "### 字段", "", spec.fields_table(), "", "## 任务包文档：飞书文档", "", spec.docs_tree(), ""]
+              "## 研究任务怎么推进", "", spec.task_rules(), "",
+              "## 台账：飞书项目", "", spec.work_items_table(), "", "### 流程和字段", "", spec.rules["feishu"]["structure_note"], "",
+              "这个项目的空间结构在 `feishu/space.md`，研究任务两个流程的对照在 `org/phases.md`。", "",
+              "## 任务包文档：飞书文档", "", spec.docs_tree(), ""]
     return "\n".join(parts)
 
 
@@ -889,12 +886,14 @@ def pool_plan(spec, task, policy, seqs):
     return {"version": 1, "project": task["name"], "max_sessions": cfg["max_sessions"], "total": total, "top": tops}
 
 
-def phases_md(spec):
-    rows = []
-    for item in spec.rules["entry"]["lead_by_phase"]:
-        rows.append("| %s | 待立项时填写 | 待立项时填写 | %s | | 未开始 |" % (
-            item["phase"], "、".join(spec.term("seq", s) for s in item["sequences"])))
-    return render(scaffold("org/phases.md.tmpl"), {"rows": "\n".join(rows), "current": "未开始"})
+def phases_md(spec, snap=None, binding=None):
+    """org/phases.md: the flows of the main-line type as the space has them. Before the space
+    is bound there is nothing to show; `setup.py feishu --apply` writes it again from the snapshot."""
+    main = (((binding or {}).get("types") or {}).get(orgspec.Contract(spec).main_line()) or {}).get("type_key")
+    flows = space.flows_md(snap, types=[main]) if snap and main else ""
+    return render(scaffold("org/phases.md.tmpl"), {
+        "flows": flows or "还没读到空间里的流程：绑定飞书空间后，`setup.py feishu --live --apply` 会把两个流程的节点、负责角色和必填项写在这里。",
+        "rules": spec.task_rules()})
 
 
 SEED_PLACEHOLDERS = {
@@ -1000,7 +999,7 @@ def build_plan(target, task_path, seq_arg, runtime=None):
             put(".claude/agents/%s.md" % name, content)
     for script in BIN_SCRIPTS:
         put(".claude/agent-org/bin/" + script, read_text(os.path.join(HERE, script)), True)
-    for name in ("rules.json", "terms.zh.json"):
+    for name in ("rules.json", "terms.zh.json", "contract.json"):
         put(".claude/agent-org/orgspec/" + name, read_text(os.path.join(orgspec.ORGSPEC_DIR, name)))
     for name in sorted(os.listdir(TEMPLATES)):
         if name.endswith(".md"):
@@ -1049,6 +1048,7 @@ def build_plan(target, task_path, seq_arg, runtime=None):
         "sequences": seqs, "entry_role": policy["entry_role"],
         "task_sha256": sha256(dump_json(task)),
         "rules_sha256": sha256(read_text(spec.rules_path)), "terms_sha256": sha256(read_text(spec.terms_path)),
+        "contract_sha256": sha256(read_text(os.path.join(orgspec.ORGSPEC_DIR, "contract.json"))),
         "lark_risk": {"lark_cli_version": risk.get("lark_cli_version"), "commands": len(risk.get("commands", {}))},
         "files": {p: sha256(c) for p, (c, _, _) in sorted(f.items())},
     }
@@ -1290,6 +1290,8 @@ def check(target):
         problems.append("规则文件和项目里的副本不一致；重跑 init 预览差异")
     if m.get("terms_sha256") != sha256(read_text(os.path.join(orgspec.ORGSPEC_DIR, "terms.zh.json"))):
         problems.append("术语表和项目里的副本不一致；重跑 init 预览差异")
+    if m.get("contract_sha256") != sha256(read_text(os.path.join(orgspec.ORGSPEC_DIR, "contract.json"))):
+        problems.append("约定文件和项目里的副本不一致；重跑 init 预览差异，再跑 setup.py feishu --live 核对绑定")
     task_path = os.path.join(target, "spec", "task.json")
     fresh = None
     if os.path.isfile(task_path) and m.get("files", {}).get("spec/task.json") not in (None, sha256(read_text(task_path))):
@@ -1466,185 +1468,37 @@ def enabled_sequences(target):
 # -------------------------------------------------------------- feishu
 def normalise_ids(raw):
     """ids.json as this version writes it. Any other shape starts empty: bind again with --live.
-    A binding time without a single bound type (written before 0.2.0) counts as not bound."""
-    if raw.get("schema") == "agent-org/ids-v1":
+    A binding time without a single bound type counts as not bound."""
+    if raw.get("schema") == space.IDS_SCHEMA:
         m = raw.get("meegle") or {}
         if m.get("bound_at") and not m.get("types"):
             m.pop("bound_at")
-            return raw, ["feishu/ids.json 记着绑定时间，却一种类型都没绑上（0.2.0 以前留下的空壳记录），按没绑定处理"]
+            return raw, ["feishu/ids.json 记着绑定时间，却一种类型都没绑上，按没绑定处理"]
         return raw, []
-    notes = ["feishu/ids.json 不是这一版的格式，按空间重新绑定；--apply 时原文件备份成 ids.legacy.json"] if raw else []
-    return {"schema": "agent-org/ids-v1", "lark": {}, "meegle": {}, "wiki": {}}, notes
+    notes = ["feishu/ids.json 不是这一版的格式：这一版只认用节点流程的空间，按空间重新绑定；--apply 时原文件备份成 ids.legacy.json"] if raw else []
+    return {"schema": space.IDS_SCHEMA, "lark": {}, "meegle": {}, "wiki": {}}, notes
 
 
-FIELD_TYPES = {"select": "单选", "multi_select": "多选", "text": "单行文本", "multi_text": "多行文本", "date": "日期",
-               "link": "链接", "number": "数字", "bool": "开关", "user": "人员", "workitem_related_select": "关联工作项"}
-# Field type names a space may report for each rule type. A name outside all of them is not judged.
-# meta-fields reports 多行文本 as text, the same as 单行文本, so text passes for multi_text too.
-FIELD_TYPE_ALIASES = {"select": {"select", "radio"}, "multi_select": {"multi_select", "multi-select", "checkbox"},
-                      "text": {"text"}, "multi_text": {"multi_text", "multi-text", "multi_pure_text", "multi-pure-text", "text"},
-                      "date": {"date"}, "link": {"link"}, "number": {"number"}, "bool": {"bool", "switch"},
-                      "user": {"user"}, "workitem_related_select": {"workitem_related_select", "work_item_related_select"}}
-KNOWN_FIELD_TYPES = set().union(*FIELD_TYPE_ALIASES.values())
-
-
-def parse_maps(spec, items):
-    """--map 类型标识=类型名 / 类型标识.字段标识=字段名: what the researcher pointed at by hand."""
-    maps = {}
-    for item in items or []:
-        key, sep, value = item.partition("=")
-        key, value = key.strip(), value.strip()
-        wid, _, fid = key.partition(".")
-        ok = sep and value and any(w["id"] == wid for w in spec.work_items())
-        if ok and fid:
-            ok = any(f["id"] == fid for f in spec.fields_of(wid))
-        if not ok:
-            raise SetupError("--map 要写成 <类型标识>=<空间里的类型名> 或 <类型标识>.<字段标识>=<空间里的字段名>：%s" % item)
-        maps[key] = value
-    return maps
-
-
-def template_space(task_feishu):
-    """The space project spaces are copied from: feishu.template_space, else std_template."""
-    return str((task_feishu or {}).get("template_space") or "").strip() or DEFAULT_TEMPLATE_SPACE
-
-
-def bind(spec, ids, fd, maps, template=False):
-    """Bind the rules' types and fields to this space: what --map names, else the key bound
-    last time while it still exists, else the same name. Updates ids["meegle"] and returns the
-    problems as [对象, 问题, 怎么办] rows. With template=True the space is checked as the
-    template projects are copied from: its names must be the rules' own, so the advice is to
-    rename rather than to point with --map."""
-    m = ids.setdefault("meegle", {})
-    space = (fd or {}).get("types") or {}
-    types = m.setdefault("types", {})
-    role = spec.term("role", spec.rules["feishu"]["owner_role"])
-    problems = []
-    for w in spec.work_items():
-        wid, want = w["id"], spec.term("wi", w["id"])
-        asked, kept = maps.get(wid), (types.get(wid) or {}).get("type_key")
-        if asked:
-            hits = [k for k, t in space.items() if asked in (k, t.get("name"), t.get("api_name"))]
-        elif kept in space:
-            hits = [kept]
-        else:
-            hits = [k for k, t in space.items() if t.get("name") == want]
-        if len(hits) != 1:
-            types.pop(wid, None)
-            if hits:
-                problems.append([want, "空间里有 %d 个“%s”类型" % (len(hits), asked or want),
-                                 "同名的类型只留一个" if template else "用 `--map %s=<type_key>` 指明用哪一个" % wid])
-            else:
-                problems.append([want, "按“%s”找不到类型" % asked if asked else "空间里没有这个类型",
-                                 "照搭建手册建这个类型；已经有、只是名字不同的，改名为“%s”" % want if template else
-                                 "照下面“%s”一节建好；已经有、只是名字不同的，用 `--map %s=<空间里的类型名>` 指认" % (want, wid)])
-            continue
-        t = space[hits[0]]
-        slot = {"name": t.get("name"), "type_key": hits[0], "api_name": t.get("api_name")}
-        tpl = next((f for f in t.get("fields", []) if f.get("field_key") == "template"), None)
-        if tpl and tpl.get("options"):
-            slot["template_id"] = tpl["options"][0].get("id")
-        types[wid] = slot
-        if not any(r.get("role_name") == role for r in t.get("roles", [])):
-            problems.append([want, "没有“%s”角色" % role, "在这个类型的角色里加上“%s”，每个状态的授权角色都设成它" % role])
-        status = next((f for f in t.get("fields", []) if f.get("field_key") == "work_item_status"), None)
-        have = [o.get("name") for o in (status or {}).get("options") or []]
-        missing = [s for s in w["states"] if s not in have]
-        if have and missing:                          # the status field lists the states of the flow
-            problems.append([want, "缺状态：%s" % "、".join(missing),
-                             "在这个类型的状态流里加上，或者把现有状态改成这些名字；现有：%s" % "、".join(have)])
-    old, keys = m.get("field_keys") or {}, {}
-    for wid, slot in types.items():
-        custom = [f for f in (space.get(slot["type_key"]) or {}).get("fields", [])
-                  if str(f.get("field_key") or "").startswith("field_")]
-        by_key = {f["field_key"]: f for f in custom}
-        for f in spec.fields_of(wid):
-            fid, name = f["id"], spec.field_name(f["id"])
-            label = "%s的“%s”" % (spec.term("wi", wid), name)
-            asked, kept = maps.get("%s.%s" % (wid, fid)), (old.get(wid) or {}).get(fid)
-            if asked:
-                hits = [x for x in custom if asked in (x["field_key"], x.get("name"))]
-            elif kept in by_key:
-                hits = [by_key[kept]]
-            else:
-                hits = [x for x in custom if x.get("name") == name]
-            if not hits:
-                need = "建一个%s字段，名字写“%s”%s" % (FIELD_TYPES.get(f.get("type"), f.get("type") or ""), name,
-                                                    "，选项：%s" % "、".join(f["options"]) if f.get("options") else "")
-                problems.append([label, "按“%s”找不到字段" % asked if asked else "空间里没有",
-                                 need + ("；已经有、只是名字不同的，改成这个名字" if template else
-                                         "；已经有、只是名字不同的，用 `--map %s.%s=<空间里的字段名>` 指认" % (wid, fid))])
-                continue
-            if len(hits) > 1:
-                problems.append([label, "有 %d 个同名字段（%s）" % (len(hits), "、".join(x["field_key"] for x in hits)),
-                                 "同名的字段只留一个" if template else "用 `--map %s.%s=<field_key>` 指明用哪一个" % (wid, fid)])
-                continue
-            x = hits[0]
-            got = x.get("field_type")
-            if got in KNOWN_FIELD_TYPES and got not in FIELD_TYPE_ALIASES.get(f.get("type"), {got}):
-                problems.append([label, "空间里的类型是 %s，插件要的是%s" % (got, FIELD_TYPES.get(f.get("type"), f.get("type"))),
-                                 "改成对的类型，或者另建一个字段再指认"])
-                continue
-            keys.setdefault(wid, {})[fid] = x["field_key"]
-            have = [o.get("name") for o in x.get("options") or []]
-            missing = [o for o in f.get("options") or [] if o not in have]
-            if have and missing:
-                problems.append([label, "缺选项：%s" % "、".join(missing), "在空间里加上，或者把现有选项改成这些名字；现有：%s" % "、".join(have)])
-    m["field_keys"] = keys
-    return problems
-
-
-def binding_table(spec, ids, label="已绑定的字段"):
+def binding_doc(spec, contract, ids, snap, problems=None, notes=(), changes=(), switch=None, seqs=None):
+    """feishu/binding.md: which object of the space fills each slot of the contract, what is
+    missing, and the knowledge-base nodes and read-back values the project still needs."""
     m = ids.get("meegle") or {}
-    types, keys = m.get("types") or {}, m.get("field_keys") or {}
-    rows = []
-    for w in spec.work_items():
-        t = types.get(w["id"])
-        rows.append([spec.term("wi", w["id"]), "%s（`%s`）" % (t.get("name"), t.get("type_key")) if t else "没绑定",
-                     "%d / %d" % (len(keys.get(w["id"]) or {}), len(spec.fields_of(w["id"]))) if t else "—"])
-    return orgspec.md_table(["类型", "空间里的类型", label], rows)
-
-
-def structure_md(spec, ids):
-    """每种类型要有的东西: the states, transitions, forms, role and fields each type needs."""
-    keys = (ids.get("meegle") or {}).get("field_keys") or {}
-    role = spec.term("role", spec.rules["feishu"]["owner_role"])
-    lines = ["## 每种类型要有的东西", "",
-             "照下面逐项建或核对。每种类型都用状态流，列在最前面的状态是初始状态，每个状态的授权角色都设成“%s”。序列、发出方这些几种类型都有的字段，可以在一个类型上建好，再用“复制至其他工作项”加到别的类型上。" % role, ""]
-    for w in spec.work_items():
-        wid = w["id"]
-        forms = "；".join("%s→%s：%s" % (f["from"], f["to"], "、".join(spec.field_name(x) for x in f["required"]))
-                         for f in w.get("forms", [])) or "无"
-        lines += ["### %s（标识 `%s`）" % (spec.term("wi", wid), wid), "",
-                  bullets(["状态：%s（初始状态：%s）" % ("、".join(w["states"]), w["states"][0]),
-                           "流转：%s" % "；".join("%s→%s" % (a, b) for a, b in w["transitions"]),
-                           "流转表单必填：%s" % forms,
-                           "角色：%s" % role]), ""]
-        rows = []
-        for f in spec.fields_of(wid):
-            options = "、".join(f.get("options") or [])
-            if f.get("target"):
-                options = "指向“%s”" % spec.term("wi", f["target"])
-            rows.append([spec.field_name(f["id"]), "`%s`" % f["id"], FIELD_TYPES.get(f.get("type"), f.get("type") or ""),
-                         options, (keys.get(wid) or {}).get(f["id"]) or "没绑定", f.get("note", "")])
-        lines += [orgspec.md_table(["字段", "标识", "类型", "选项", "空间里的 field_key", "说明"], rows), ""]
-    return "\n".join(lines)
-
-
-def migration_md(spec, ids, fd, found_views=None, problems=None, switch=None, seqs=None):
-    m = ids.get("meegle") or {}
-    lines = ["# 建空间与核对清单", "",
-             "> 由 `setup.py feishu` 生成。项目空间从模板空间（默认叫 %s）复制类型、字段、流程、表单、角色和详情页。自定义视图不属于初始化，不创建、不补齐、不作为通过条件，禁止用 computer-use 配置视图。Agent 使用 ledger.py query 查询台账。结构缺项交模板维护者处理，不能让新用户现场搭模板。知识库节点由书记员用 `ledger.py ensure-node` 建。" % DEFAULT_TEMPLATE_SPACE,
-             "> 空间里已经有、只是名字和这里不同的，不必改名：用 `--map <类型标识>=<空间里的类型名>` 或 `--map <类型标识>.<字段标识>=<空间里的字段名>` 指认。绑定以后脚本按键找，空间里改名也不会断。", ""]
+    lines = ["# 绑定与核对清单", "",
+             "> 由 `setup.py feishu` 生成。插件按含义处理的类型、字段、角色和状态写在约定文件里（`.claude/agent-org/orgspec/contract.json`）；"
+             "这里列每个槽位对到空间里的哪个对象。流程、节点和必填项不在这里：它们以空间为准，读出来的结构在 `feishu/space.md`。", ""]
     if switch:
         lines += switch_md(switch)
-    lines += ["## 绑定结果", "", binding_table(spec, ids), ""]
+    lines += ["## 绑定结果", "", space.binding_md(contract, snap or {}, space.binding_of(ids)), ""]
     lines += ["## 要处理的问题", ""]
     if problems is None:
-        lines += ["还没有字段字典，没法核对：先跑 `setup.py feishu --live`。", ""]
+        lines += ["还没读过空间，没法核对：先跑 `setup.py feishu --live`。", ""]
     else:
         lines += [orgspec.md_table(["对象", "问题", "怎么办"], problems) if problems else "无。", ""]
-    lines += [structure_md(spec, ids)]
+        if problems:
+            lines += ["空间由模板建出来，缺的东西要在模板里补：把上表报给模板维护者，模板更新后重建或补齐空间，再重跑 `setup.py feishu --live`。"
+                      "空间里已经有、只是名字不同的，用 `--map <类型槽位>=<空间里的类型名>` 或 `--map <类型槽位>.<字段槽位>=<空间里的字段名>` 指认。", ""]
+    if notes or changes:
+        lines += ["## 提醒", "", bullets(list(notes) + ["空间结构和上次读到的不一样：%s" % c for c in changes]), ""]
     rows = []
     nodes = (ids.get("wiki") or {}).get("nodes") or {}
     renames = False
@@ -1662,22 +1516,21 @@ def migration_md(spec, ids, fd, found_views=None, problems=None, switch=None, se
             rows.append([title, "现名“%s”" % n.get("title"), "改名为“%s”" % spec.term("node", head)])
     lines += ["## 知识库节点", "", orgspec.md_table(["节点", "现状", "要做的"], rows) if rows else "无差异。", ""]
     if any(r[1] == "没有" for r in rows):
-        lines += ["缺的节点可以一次建齐：`ledger.py ensure-node all`，先预览，研究员确认后加 `--apply`。它先建一级节点，再建各序列的节点；"
+        lines += ["缺的节点可以一次建齐：`ledger.py ensure-node all`，先预览，再加 `--apply`。它先建一级节点，再建各序列的节点；"
                   "知识空间里已经有同名节点的直接用，不再建。要先有知识空间，步骤见 setup 技能第四步“飞书文档”一节。", ""]
     if renames:
-        lines += ["命令行没有给知识库节点改名的子命令；节点标题跟着节点文档的一级标题走。先读一遍节点文档：是空的，书记员可以写入只有新标题的正文：`lark-cli docs +update --doc <节点链接> --command overwrite --doc-format markdown --content - --as user`，正文用 heredoc 传入一行 `# <新名>`；有内容的，在网页上改名，不要覆盖。", ""]
+        lines += ["命令行没有给知识库节点改名的子命令；节点标题跟着节点文档的一级标题走。先读一遍节点文档：是空的，书记员可以写入只有新标题的正文："
+                  "`lark-cli docs +update --doc <节点链接> --command overwrite --doc-format markdown --content '# <新标题>' --as user`；"
+                  "有内容的，请研究员在网页上改标题。", ""]
     lark = ids.get("lark") or {}
     wiki = ids.get("wiki") or {}
     readback = [
         ["project_key", "有" if m.get("project_key") else "缺", "跑 `setup.py feishu --live --apply`：按 `spec/task.json` 里的空间名精确查找"],
         ["simple_name", "有" if m.get("simple_name") else "缺", "同上；工作项链接要用它"],
         ["研究员的 open_id", "有" if lark.get("researcher_open_id") else "缺", "同上：从 `lark-cli whoami` 读；没有它，飞书私聊监听不启动"],
-        ["知识空间 space_id", "有" if wiki.get("space_id") else "缺", "先在已有的知识空间里找（名字可能不一样），确认没有再建：研究员确认后由 setup 技能执行，或者研究员自己执行 `lark-cli wiki +space-create --name \"<知识空间名>\" --description \"<一句话>\" --as user`，再重跑 `setup.py feishu --live --apply`；步骤见 setup 技能第四步“飞书文档”一节"],
+        ["知识空间 space_id", "有" if wiki.get("space_id") else "缺", "先在已有的知识空间里找（名字可能不一样），确认没有再建，再重跑 `setup.py feishu --live --apply`"],
     ]
     lines += ["## 读回", "", orgspec.md_table(["项", "现状", "怎么补"], readback), ""]
-    lines += ["## 模板维护说明", "",
-              "流转表单和详情页布局由维护者在模板空间里做，复制时带入；脚本无法核对这些布局。缺项交模板维护者处理，不在新用户初始化中打开网页补配置。", "",
-              "五份包模板和字段字典由插件在本地提供，使用对应 runtime 的 templates 目录；上传知识库供人查阅是日常使用选项，不属于配置验收。", ""]
     return "\n".join(lines)
 
 
@@ -1713,16 +1566,16 @@ def find_project(data, wanted, fix=None):
     return hits[0]
 
 
-def export_dictionary(project_key, space_name, export_dir):
-    """Export a space's field dictionary into export_dir and load it."""
-    code, out, err = run([sys.executable, "-I", os.path.join(HERE, "export_field_dictionary.py"), "--project-key",
-                          project_key, "--out-dir", export_dir, "--space-name", space_name or ""], 300)
-    if code != 0:
-        raise SetupError("导出字段字典失败（退出码 %s）：%s" % (code, (err or out or "")[-500:]))
+def read_space(contract, project, maps, old_binding=None):
+    """Snapshot a space, fill the contract's slots and check the flows: (snapshot, binding,
+    problems, notes). Reads only."""
     try:
-        return json.loads(read_text(os.path.join(export_dir, "field-dictionary.json")))
-    except (OSError, ValueError) as e:
-        raise SetupError("读不了刚导出的字段字典：%s" % e)
+        snap = space.snapshot(project, space.wanted_by(contract, maps, old_binding))
+    except space.SpaceError as e:
+        raise SetupError(str(e))
+    binding, problems = space.bind(contract, snap, old_binding, maps)
+    more, notes = space.check(contract, snap, binding)
+    return snap, binding, problems + more, notes
 
 
 def optional_read(what, fn):
@@ -1734,23 +1587,24 @@ def optional_read(what, fn):
         return None
 
 
-def old_space_items(spec, project_key, type_keys):
+def old_space_items(spec, project_key, old):
     """What a space the project is leaving still holds, for the types its binding had: (types
     with any work item, open work items as lines, types that could not be checked)."""
     held, open_items, unchecked = [], [], []
     stop = ledger.system_states(spec)
-    for w in spec.work_items():
-        tkey = type_keys.get(w["id"])
+    for wid, t in (old.get("types") or {}).items():
+        tkey = t.get("type_key")
         if not tkey:
             continue
-        name = spec.term("wi", w["id"])
+        name = spec.term("wi", wid) if wid in spec.terms["wi"] else t.get("name") or wid
+        done = [s["name"] for slot, s in ((old.get("states") or {}).get(wid) or {}).items() if slot == "archived" and s.get("name")]
 
         def query(mql):
             return ledger.query_rows(cli_json(["meegle", "workitem", "query", "--project-key", project_key,
                                                "--mql", mql, "--format", "json"]))
         try:
             rows = query("SELECT `work_item_id`, `name`, `work_item_status` FROM `%s`.`%s` WHERE %s LIMIT 20" % (
-                project_key, tkey, ledger._not_in(list(w.get("end_states") or []) + stop)))
+                project_key, tkey, ledger._not_in(done + stop)))
             anything = rows or query("SELECT `work_item_id` FROM `%s`.`%s` LIMIT 1" % (project_key, tkey))
         except (SetupError, ledger.LedgerError) as e:
             print("提醒：没能查旧空间里的%s：%s" % (name, e))
@@ -1763,12 +1617,12 @@ def old_space_items(spec, project_key, type_keys):
     return held, open_items, unchecked
 
 
-def read_back(spec, ids, task_feishu, export_dir, maps, switch=None):
-    """Find the project's space, export its field dictionary, bind the rules to it, and read
-    open_id, space_id and node titles. Returns (field dictionary, empty view diagnostics,
-    binding problems). The space the task file names is looked up every time: a name can come to
-    mean another space, a key cannot. When it is not the space bound last time, the old binding
-    is dropped and `switch` gets both spaces and what the old one still holds."""
+def read_back(spec, contract, ids, task_feishu, maps, switch=None, old_snap=None):
+    """Find the project's space, read its structure, bind the contract to it, and read open_id,
+    space_id and node titles. Returns (snapshot, problems, notes, changes since the last
+    snapshot). The space the task file names is looked up every time: a name can come to mean
+    another space, a key cannot. When it is not the space bound last time, the old binding is
+    dropped and `switch` gets both spaces and what the old one still holds."""
     m = ids["meegle"]
     wanted = str(task_feishu.get("meegle_space") or "").strip() or m.get("project_key")
     if not wanted:
@@ -1780,23 +1634,25 @@ def read_back(spec, ids, task_feishu, export_dir, maps, switch=None):
         hit = {"project_key": m["project_key"], "simple_name": m.get("simple_name"), "name": m.get("space_name")}
     else:
         hit = find_project(data, wanted)
-    if m.get("project_key") and hit.get("project_key") != m["project_key"]:
+    same = not m.get("project_key") or hit.get("project_key") == m["project_key"]
+    if not same:
         print("提醒：任务文件里的空间“%s”不是上次绑定的“%s”，这是换空间：按新空间重新绑定，原来的绑定作废" % (
             wanted, m.get("space_name") or m["project_key"]))
-        old_types = {wid: t.get("type_key") for wid, t in (m.get("types") or {}).items() if t.get("type_key")}
-        held, open_items, unchecked = old_space_items(spec, m["project_key"], old_types)
+        held, open_items, unchecked = old_space_items(spec, m["project_key"], m)
         if switch is not None:
             switch.update({"old": {k: m[k] for k in ("project_key", "simple_name", "space_name", "bound_at") if m.get(k)},
                            "new": {"project_key": hit.get("project_key"), "simple_name": hit.get("simple_name"),
                                    "space_name": hit.get("name")},
-                           "bound_types": len(old_types), "held": held, "open": open_items, "unchecked": unchecked})
-        for k in ("field_keys", "views_found", "bound_at"):
+                           "bound_types": len(m.get("types") or {}), "held": held, "open": open_items, "unchecked": unchecked})
+        for k in ("types", "field_keys", "roles", "states", "bound_at", "contract_version"):
             m.pop(k, None)
-        m["types"] = {}
     m.update({"project_key": hit.get("project_key"), "simple_name": hit.get("simple_name"),
               "space_name": hit.get("name") or m.get("space_name")})
-    fd = export_dictionary(m["project_key"], m.get("space_name"), export_dir)
-    problems = bind(spec, ids, fd, maps)
+    snap, binding, problems, notes = read_space(
+        contract, {"project_key": m["project_key"], "simple_name": m.get("simple_name"), "name": m.get("space_name")},
+        maps, space.binding_of(ids))
+    space.apply_binding(ids, contract, binding)
+    changes = space.diff(old_snap, snap) if same and old_snap and old_snap.get("project_key") == snap["project_key"] else []
     lark = ids.setdefault("lark", {})
     if not lark.get("researcher_open_id"):
         who = optional_read("研究员的 open_id", lambda: cli_json(["lark-cli", "whoami"]))
@@ -1828,17 +1684,17 @@ def read_back(spec, ids, task_feishu, export_dir, maps, switch=None):
             title = ledger._find(got or {}, ("title",))
             if title:
                 n["title"] = title
-    return fd, {}, problems
+    return snap, problems, notes, changes
 
 
 def switch_md(switch):
-    """The 换空间 section of migration.md: both spaces, what the old binding loses and what the
+    """The 换空间 section of binding.md: both spaces, what the old binding loses and what the
     old space still holds."""
     o, n = switch["old"], switch["new"]
     rows = [["旧空间", o.get("space_name", ""), o.get("simple_name", ""), o.get("project_key", "")],
             ["新空间", n.get("space_name") or "", n.get("simple_name") or "", n.get("project_key") or ""]]
     lines = ["## 换空间", "",
-             "任务文件指的空间和上次绑定的不是同一个，这次按新空间重新绑定，原来的类型和字段绑定作废。知识库不跟着换。", "",
+             "任务文件指的空间和上次绑定的不是同一个，这次按新空间重新绑定，原来的绑定作废。知识库不跟着换。", "",
              orgspec.md_table(["", "空间名", "simple_name", "project_key"], rows), ""]
     if switch["held"]:
         lines += ["旧空间里还有工作项：%s。插件搬不了工作项，它们留在旧空间当档案，台账以后不再读写；没办完的要不要在新空间重建，"
@@ -1857,47 +1713,49 @@ def switch_md(switch):
 
 
 def feishu(target, maps, live, apply, leave_old=False):
+    """Bind the project to its space: find the space, read its structure, fill the contract's
+    slots, check the flows. Writes feishu/ids.json, space.json, space.md and binding.md, and
+    org/phases.md from the flows it read."""
     spec = orgspec.OrgSpec()
+    contract = orgspec.Contract(spec)
     task = (load_json_file(os.path.join(target, "spec", "task.json")) or {}).get("feishu") or {}
-    maps = parse_maps(spec, maps)
+    try:
+        maps = space.parse_maps(contract, maps)
+    except space.SpaceError as e:
+        raise SetupError(str(e))
     fd_dir = os.path.join(target, "feishu")
     ids_path = os.path.join(fd_dir, "ids.json")
     raw = load_json_file(ids_path) or {}
     ids, notes = normalise_ids(raw)
-    fd = load_json_file(os.path.join(fd_dir, "field-dictionary.json"))
-    found_views, export_dir, problems, switch = None, None, None, {}
+    snap = load_json_file(os.path.join(fd_dir, "space.json"))
+    problems, space_notes, changes, switch = None, [], [], {}
     if live:
-        if apply:
-            os.makedirs(fd_dir, exist_ok=True)
-        export_dir = tempfile.mkdtemp(prefix=".export-", dir=fd_dir if apply else None)
         try:
-            fd, found_views, problems = read_back(spec, ids, task, export_dir, maps, switch)
+            snap, problems, space_notes, changes = read_back(spec, contract, ids, task, maps, switch, snap)
         except SetupError:
-            shutil.rmtree(export_dir, ignore_errors=True)
             raise
         except Exception as e:                       # an output shape nobody expected
-            shutil.rmtree(export_dir, ignore_errors=True)
             raise SetupError("读回时遇到没见过的输出（%s: %s）；什么都没写" % (type(e).__name__, e))
-        ids["meegle"].pop("views_found", None)
         if switch and apply and not leave_old and (switch["held"] or switch["unchecked"]):
-            shutil.rmtree(export_dir, ignore_errors=True)
             why = ("旧空间“%s”里还有工作项（%s）" % (switch["old"].get("space_name", ""), "、".join(switch["held"]))
                    if switch["held"] else "没查成旧空间里的%s有没有工作项" % "、".join(switch["unchecked"]))
             raise SetupError(why + "，什么都没写。插件搬不了工作项，换空间以后它们留在旧空间，台账不再读写。先去掉 --apply 预览，"
-                             "看 migration.md 的“换空间”一节；研究员确认这些工作项可以留在旧空间以后，再加 --leave-old-items 写入")
+                             "看 binding.md 的“换空间”一节；研究员确认这些工作项可以留在旧空间以后，再加 --leave-old-items 写入")
     else:
         moved = ledger.other_space({"feishu": task}, ids.get("meegle") or {})
         if moved:
             raise SetupError("任务文件里的飞书项目空间是“%s”，上次绑定的是“%s”：加 --live 从空间读一遍再绑定" % (
                 moved, ids["meegle"]["space_name"]))
-        if fd is not None:
-            problems = bind(spec, ids, fd, maps)
+        if snap is not None:
+            binding, problems = space.bind(contract, snap, space.binding_of(ids), maps)
+            more, space_notes = space.check(contract, snap, binding)
+            problems += more
+            space.apply_binding(ids, contract, binding)
         elif maps:
-            raise SetupError("还没有字段字典，--map 没法核对：先跑 setup.py feishu --live")
-        found_views = (ids.get("meegle") or {}).get("views_found")
-    blank = fd is not None and not (ids.get("meegle") or {}).get("types")
+            raise SetupError("还没读过空间，--map 没法核对：先跑 setup.py feishu --live")
+    blank = snap is not None and not (ids.get("meegle") or {}).get("types")
     stamp = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
-    if apply and fd is not None:
+    if apply and snap is not None:
         if blank:                                    # nothing bound: the ledger keeps refusing
             ids["meegle"].pop("bound_at", None)
         else:
@@ -1909,72 +1767,68 @@ def feishu(target, maps, live, apply, leave_old=False):
     if switch:
         old, new = switch["old"], switch["new"]
         print("换空间：旧空间“%s”（simple_name %s，project_key %s）→ 新空间“%s”（simple_name %s，project_key %s），"
-              "详见 feishu/migration.md 的“换空间”一节。" % (old.get("space_name", ""), old.get("simple_name", ""),
-                                                      old.get("project_key", ""), new.get("space_name"),
-                                                      new.get("simple_name"), new.get("project_key")))
+              "详见 feishu/binding.md 的“换空间”一节。" % (old.get("space_name", ""), old.get("simple_name", ""),
+                                                    old.get("project_key", ""), new.get("space_name"),
+                                                    new.get("simple_name"), new.get("project_key")))
+    binding_path = os.path.join(fd_dir, "binding.md")
     files = {ids_path: dump_json(ids),
-             os.path.join(fd_dir, "migration.md"): migration_md(spec, ids, fd, found_views, problems, switch,
-                                                                enabled_sequences(target))}
+             binding_path: binding_doc(spec, contract, ids, snap, problems, space_notes, changes, switch, enabled_sequences(target))}
+    if snap is not None:
+        files[os.path.join(fd_dir, "space.json")] = space.dump_json(snap)
+        files[os.path.join(fd_dir, "space.md")] = space.to_markdown(snap, contract, space.binding_of(ids)) + "\n"
+        if not blank:
+            files[os.path.join(target, "org", "phases.md")] = phases_md(spec, snap, space.binding_of(ids))
     for p, content in files.items():
         current = read_text(p) if os.path.isfile(p) else None
         state = "相同" if current == content else ("新建" if current is None else "更新")
         print("[%s] %s" % (state, os.path.relpath(p, target)))
-    if export_dir:
-        print("[%s] feishu/field-dictionary.json、field-dictionary.md（刚从空间导出）" % ("写入" if apply else "不写"))
     if problems is None:
-        print("还没有字段字典，绑定不了：加 --live 从空间读。")
+        print("还没读过空间，绑定不了：加 --live 从空间读。")
     else:
-        print("绑定：%s" % ("没有问题" if not problems else "%d 个问题，见 feishu/migration.md 的“要处理的问题”" % len(problems)))
+        print("约定核对（contract_version %d）：%s" % (contract.version, "通过" if not problems else
+                                                "%d 个问题，见 feishu/binding.md 的“要处理的问题”" % len(problems)))
+    for c in changes:
+        print("变化：" + c)
     if blank:
-        print("空间“%s”里没有一种类型对得上插件的规则。项目空间要从模板空间“%s”复制：先用 `setup.py template --live` 核对模板，"
-              "再用模板的“分享空间配置”复制出项目空间，步骤见 setup 技能的搭建手册（references/build-space.md）；"
-              "企业里还没有模板的，先照手册搭模板。空间里其实有这些类型、只是名字不同的，用 --map 指认。" % (
-                  (ids.get("meegle") or {}).get("space_name") or task.get("meegle_space") or "", template_space(task)))
+        print("空间“%s”里没有一种类型对得上插件的约定。项目空间要用模板建：照 setup 技能用参考模板创建空间，再重跑这条命令；"
+              "空间里其实有这些类型、只是名字不同的，用 --map 指认。" % (
+                  (ids.get("meegle") or {}).get("space_name") or task.get("meegle_space") or ""))
     if not apply:
-        if export_dir:
-            shutil.rmtree(export_dir, ignore_errors=True)
         print("这是预览。核对绑定结果后加 --apply 写入；台账脚本在绑定写入以后才能用。")
         if not blank:                                # a blank space gets the hint, not the whole list
             print()
-            print(files[os.path.join(fd_dir, "migration.md")])
+            print(files[binding_path])
         return 0
     os.makedirs(fd_dir, exist_ok=True)
-    if os.path.isfile(ids_path) and raw.get("schema") != "agent-org/ids-v1":
+    if os.path.isfile(ids_path) and raw.get("schema") != space.IDS_SCHEMA:
         backup = os.path.join(fd_dir, "ids.legacy.json")
         if not os.path.exists(backup):
             shutil.copyfile(ids_path, backup)
-    if export_dir:
-        for name in ("field-dictionary.json", "field-dictionary.md"):
-            if os.path.isfile(os.path.join(export_dir, name)):
-                os.replace(os.path.join(export_dir, name), os.path.join(fd_dir, name))
-        shutil.rmtree(export_dir, ignore_errors=True)
     for p, content in files.items():
+        os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, "w", encoding="utf-8") as fh:
             fh.write(content)
-    print("已写入 feishu/ids.json 和 feishu/migration.md。")
+    print("已写入 %s。" % "、".join(os.path.relpath(p, target) for p in files))
     if blank:
         print("一种类型都没绑上：这次只记下空间和 open_id，没写绑定时间，台账脚本仍然不读写飞书。")
     return 0
 
 
-def check_template(target, space):
-    """Check a space as the template project spaces are copied from: the rules' names, and no
-    work items, since the template is only a copy source. Reads Feishu, writes nothing."""
+def check_template(target, name):
+    """Check a space as a template: read its structure, fill the contract's slots, check the
+    flows. Reads Feishu, writes nothing."""
     spec = orgspec.OrgSpec()
-    if not space:
+    contract = orgspec.Contract(spec)
+    if not name:
         task = (load_json_file(os.path.join(target, "spec", "task.json")) or {}).get("feishu") or {} if target else {}
-        space = template_space(task)
-    hit = find_project(cli_json(["meegle", "project", "search", "--project-key", space, "--format", "json"]), space,
-                       "把模板空间的准确名字、simple_name 或 project_key 用 --space 传进来，或者写进任务文件的 feishu.template_space")
-    export_dir = tempfile.mkdtemp(prefix="agent-org-template-")
-    try:
-        fd = export_dictionary(hit.get("project_key"), hit.get("name"), export_dir)
-    finally:
-        shutil.rmtree(export_dir, ignore_errors=True)
-    ids = {"meegle": {}}
-    problems = bind(spec, ids, fd, {}, template=True)
+        name = str(task.get("template_space") or "").strip()
+    if not name:
+        raise SetupError("要核对哪个空间：用 --space 给出它的名字、simple_name 或 project_key")
+    hit = find_project(cli_json(["meegle", "project", "search", "--project-key", name, "--format", "json"]), name,
+                       "把空间的准确名字、simple_name 或 project_key 用 --space 传进来")
+    snap, binding, problems, notes = read_space(contract, hit, {})
     held = []
-    for wid, slot in ids["meegle"]["types"].items():
+    for wid, slot in binding["types"].items():
         mql = "SELECT `work_item_id` FROM `%s`.`%s` LIMIT 1" % (hit.get("project_key"), slot["type_key"])
         try:
             rows = ledger.query_rows(cli_json(["meegle", "workitem", "query", "--project-key", hit.get("project_key"),
@@ -1985,24 +1839,15 @@ def check_template(target, space):
         if rows:
             held.append(spec.term("wi", wid))
     if held:
-        problems.append(["模板空间", "有工作项：%s" % "、".join(held),
-                         "模板只当复制源，不放工作项、不跑项目：工作项放到项目空间里，模板里的请研究员在网页上删掉"])
-    print("模板空间“%s”（simple_name %s，project_key %s）。只读了飞书，没写任何文件。" % (
+        notes = list(notes) + ["空间里有工作项（%s）：流程图是从它们读出来的；发布成模板之前，样例要不要留由模板维护者决定" % "、".join(held)]
+    print("空间“%s”（simple_name %s，project_key %s）。只读了飞书，没写任何文件。" % (
         hit.get("name"), hit.get("simple_name"), hit.get("project_key")))
     print()
-    print(binding_table(spec, ids, "对上的字段"))
-    print()
+    space.report(contract, snap, binding, problems, notes)
     if problems:
-        print("## 要处理的问题")
-        print()
-        print(orgspec.md_table(["对象", "问题", "怎么办"], problems))
-        print()
-        print(structure_md(spec, ids))
-    print("流转、流转表单和详情页脚本读不到，照 setup 技能的搭建手册（references/build-space.md）在网页上核对。")
-    if problems:
-        print("还有 %d 个问题，补好以后再跑一次 setup.py template --live。" % len(problems))
+        print("还有 %d 个问题，在空间里补好以后再跑一次。" % len(problems))
         return 1
-    print("可以当模板：项目空间从这里复制以后，绑定不用 --map。")
+    print("这个空间符合约定：用它建出来的项目空间，绑定不用 --map。")
     return 0
 
 
@@ -2029,15 +1874,14 @@ def main(argv=None):
     p = sub.add_parser("feishu")
     p.add_argument("--target", required=True)
     p.add_argument("--map", action="append", default=[],
-                   help="指认空间里名字不同的类型或字段：<类型标识>=<类型名> 或 <类型标识>.<字段标识>=<字段名或 field_key>，可重复")
+                   help="指认空间里名字不同的类型或字段：<类型槽位>=<类型名> 或 <类型槽位>.<字段槽位>=<字段名或 field_key>，可重复")
     p.add_argument("--live", action="store_true")
     p.add_argument("--apply", action="store_true")
     p.add_argument("--leave-old-items", action="store_true",
                    help="换空间时旧空间里还有工作项：研究员确认它们留在旧空间、台账以后不再读写，才加这个参数写入")
     p = sub.add_parser("template")
-    p.add_argument("--space", help="要核对的模板空间：名字、simple_name 或 project_key；不写就用任务文件的 feishu.template_space，再没有就用 std_template")
+    p.add_argument("--space", help="要核对的空间：名字、simple_name 或 project_key；不写就用任务文件的 feishu.template_space")
     p.add_argument("--target", help="项目目录：从它的 spec/task.json 读 feishu.template_space")
-    p.add_argument("--live", action="store_true", help="这条命令总是只读飞书，写不写都一样；和 feishu --live 的写法一致")
     p = sub.add_parser("check")
     p.add_argument("--target", required=True)
     p = sub.add_parser("pool")
