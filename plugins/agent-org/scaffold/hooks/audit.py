@@ -6,11 +6,9 @@ feishu/write-log.jsonl: time, session, agent, command (redacted), result,
 returned IDs and meegle trace IDs. Read-only commands are not logged.
 
 Also:
-- pool mode: completes a claim in two steps. `route.py claim` (whose Bash sees the
-  desktop session ID) leaves a pending entry; when that command has run in the
-  same session, outside any subagent, this hook turns it into the claim.
-- CLI mode: releases the slot guard.py reserved for an Agent call that ended
-  without starting a subagent.
+- completes a claim in two steps. `route.py claim` (whose Bash sees the desktop
+  session ID) leaves a pending entry; when that command has run in the same
+  session, outside any subagent, this hook turns it into the claim.
 The hook never blocks; problems are written to the log as audit_error records.
 """
 import datetime
@@ -22,7 +20,6 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import feishu_cmd as fc  # noqa: E402
-import instances  # noqa: E402
 import pool  # noqa: E402
 
 SECRET_FLAGS = {"--app-secret", "--secret", "--password", "--access-token", "--user-access-token",
@@ -67,7 +64,7 @@ CLAIM_RUN = re.compile(r"route\.py['\"]?\s+claim(?![\w-])")
 
 def finish_claim(data, policy, root, command):
     """The second step of a claim: the pending entry this session's route.py claim left."""
-    if (policy.get("mode") != "pool" or data.get("agent_id") or not CLAIM_RUN.search(command)
+    if (data.get("agent_id") or not CLAIM_RUN.search(command)
             or data.get("hook_event_name") != "PostToolUse"):
         return
     response = data.get("tool_response") or {}
@@ -112,19 +109,6 @@ def answered(root, sid, agent_id=None):
     pool.update_session(root, sid, lambda st: pool.end_wait(st, agent_id))
 
 
-def release_slot(data, policy, root):
-    """CLI mode: an Agent call that failed keeps no reserved slot. A call that succeeded started a
-    subagent, whose SubagentStart takes the slot (for a background agent, possibly after this hook)."""
-    if (policy.get("mode") == "pool" or data.get("tool_name") not in ("Agent", "Task")
-            or data.get("hook_event_name") != "PostToolUseFailure"):
-        return
-    tid = data.get("tool_use_id")
-    if not tid:
-        return
-    with instances.locked(root) as state:
-        state["pending"] = [p for p in state["pending"] if p.get("tool_use_id") != tid]
-
-
 def main():
     try:
         data = json.load(sys.stdin)
@@ -136,9 +120,7 @@ def main():
         policy = fc.load_json(os.path.join(HERE, "policy.json"), {}) or {}
         command = (data.get("tool_input") or {}).get("command") or ""
         if policy:
-            release_slot(data, policy, root)
-            if policy.get("mode") == "pool":
-                answered(root, data.get("session_id") or "", data.get("agent_id"))
+            answered(root, data.get("session_id") or "", data.get("agent_id"))
         tool = str(data.get("tool_name") or "")
         if tool not in ("Bash", "Monitor") and not tool.endswith("run_in_terminal"):
             return 0

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Session pool state for a project initialised in pool mode.
+"""Session pool state.
 
-In pool mode every org role runs as a desktop session the researcher can see and talk
+Every org role runs as a desktop session the researcher can see and talk
 to. A session becomes a role by claiming it, and a claim needs a permit:
 - a pre-registration (route.py expect) by the session that opened it, keyed by the new
   session's desktop ID (or, in a terminal, its session ID); or
@@ -513,10 +513,10 @@ def no_write(pol):
 class Identity:
     """Who a hook call comes from.
 
-    origin: subagent | entry | agent_flag | claim | permit | pending | tombstone | desk_conflict |
+    origin: subagent | agent_flag | claim | permit | pending | tombstone | desk_conflict |
             pool_unreadable | researcher.
-    researcher: the researcher drives this session (CLI main or focus session, or a pool
-    session that holds no claim, permit or tombstone): hard rules ask instead of deny.
+    researcher: the researcher drives this session (it holds no claim, permit or tombstone):
+    hard rules ask instead of deny.
     """
 
     def __init__(self, role, pol, origin, name=None, researcher=False, claim=None, conflict=None):
@@ -558,17 +558,10 @@ def identify(data, policy, root, env=None, promote_permits=True):
     agent = data.get("agent_type") or ""
     sid = data.get("session_id") or ""
     desk = env.get(DESK_ENV) or ""
-    pool_mode = policy.get("mode") == "pool"
     if data.get("agent_id"):
         pol = agents.get(agent, policy["default_agent"])
         return Identity(agent if agent in agents else (agent or "unknown"),
-                        no_write(pol) if pool_mode else pol, "subagent")
-    if not pool_mode:
-        if agent in agents:
-            return Identity(agent, agents[agent], "entry" if agent == policy["main_agent"] else "agent_flag",
-                            researcher=True)
-        main = policy["main_agent"]
-        return Identity(main, agents[main], "entry", researcher=True)
+                        no_write(pol), "subagent")
     if agent in agents:                                  # claude --agent <role> in a terminal
         return Identity(agent, no_write(agents[agent]), "agent_flag")
     pool, ok = load(root)

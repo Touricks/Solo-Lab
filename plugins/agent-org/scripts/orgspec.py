@@ -103,14 +103,9 @@ class OrgSpec:
                 out.append(to)
         return out
 
-    def dispatch_targets(self, role, seq, rank, seqs, mode="cli"):
-        """Whom a role dispatches work to, from the dispatch graph in rules.json: the assign edges,
-        plus in CLI mode the extra subagents (the scribe, Explore, Plan)."""
-        d = self.rules["dispatch"]
-        out = self._edge_targets(role, seq, rank, d["assign"], seqs)
-        if mode == "cli":
-            out += [t for t in self._edge_targets(role, seq, rank, d.get("cli_spawn_extra", []), seqs) if t not in out]
-        return out
+    def dispatch_targets(self, role, seq, rank, seqs):
+        """Whom a role dispatches work to: the assign edges of the dispatch graph in rules.json."""
+        return self._edge_targets(role, seq, rank, self.rules["dispatch"]["assign"], seqs)
 
     def dispatch_table(self):
         """The dispatch graph as text for org/org.md: who assigns work to whom, and the message kinds."""
@@ -120,8 +115,6 @@ class OrgSpec:
         def end(x):
             if x in rank_cn:
                 return "各序列 " + rank_cn[x]
-            if x in ("Explore", "Plan"):
-                return x
             seq, _, rank = x.rpartition("-")
             names = {"pmo-router": "项目管理 +1（路由）", "pmo-scribe": "项目管理 +0（书记员）"}
             return names.get(x) or "%s %s" % (self.term("seq", seq), rank_cn.get(rank, rank))
@@ -138,10 +131,9 @@ class OrgSpec:
             else:
                 how = "不限"
             kinds.append([self.term("msg", kind), how])
-        extra = "、".join("%s → %s" % (end(e["from"]), end(e["to"])) for e in d.get("cli_spawn_extra", []))
         return "\n".join([md_table(["派活方", "接活方", "范围"], rows), "",
                           md_table(["消息", "方向"], kinds), "",
-                          "CLI 模式另可派：%s。%s" % (extra, d.get("note", ""))])
+                          d.get("note", "")])
 
     def message_header_re(self):
         """The header that starts every message between pool sessions: 【派活 #2101】Alg-p2-01 → Alg-p1-01."""
@@ -348,8 +340,8 @@ class OrgSpec:
                     problems.append("%s 的流转 %s→%s 用了不存在的状态" % (w["id"], a, b))
         d = self.rules.get("dispatch") or {}
         roles = {self.role_name(x["id"], r) for x in self.rules["sequences"] for r in (0, 1, 2)}
-        ends = roles | {"p0", "p1", "p2", "Explore", "Plan"}
-        for group in ("assign", "cli_spawn_extra"):
+        ends = roles | {"p0", "p1", "p2"}
+        for group in ("assign",):
             for e in d.get(group, []):
                 for end in (e.get("from"), e.get("to")):
                     if end not in ends:

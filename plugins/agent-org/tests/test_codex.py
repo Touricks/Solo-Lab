@@ -246,7 +246,7 @@ class CodexTest(unittest.TestCase):
 
     def test_claude_defaults_unchanged_and_models_rejected(self):
         task, _, _ = setup.load_task_and_seeds(str(ROOT / "scaffold/task.example.json"))
-        self.assertEqual(task["mode"], "cli")
+        self.assertNotIn("mode", task)
         self.assertEqual(task["models"]["p2"], "opus")
         raw = json.loads(self.task.read_text()); raw["models"] = {"p2": "opus"}
         self.task.write_text(json.dumps(raw))

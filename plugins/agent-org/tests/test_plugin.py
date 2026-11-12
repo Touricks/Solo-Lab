@@ -25,6 +25,7 @@ import orgspec  # noqa: E402
 import setup  # noqa: E402
 import ledger  # noqa: E402
 import route  # noqa: E402
+import pool as pool_lib  # noqa: E402
 
 TASK = os.path.join(ROOT, "scaffold", "task.example.json")
 
@@ -149,11 +150,24 @@ class ProjectCase(unittest.TestCase):
         return p.returncode, out.get("hookSpecificOutput", {})
 
     def guard(self, agent_type, tool, tool_input, agent_id="a1"):
+        """A tool call from a subagent of that type; with agent_id=None, from a session nobody claimed."""
         data = {"tool_name": tool, "tool_input": tool_input, "cwd": self.tmp, "session_id": "s1",
                 "agent_type": agent_type}
         if agent_id:
             data["agent_id"] = agent_id
         return self.hook("guard.py", data)
+
+    def scribe(self, tool, tool_input):
+        """A tool call from the scribe's one claimed session: the only place Feishu and the ledger are written from."""
+        with open(os.path.join(self.hooks, "policy.json"), encoding="utf-8") as f:
+            policy = json.load(f)
+        with pool_lib.locked(self.tmp) as table:
+            if not pool_lib.claim_by_session(table, "s-scribe"):
+                permit = {"role": policy["scribe_role"], "via": "test", "by": "researcher"}
+                claim, note = pool_lib.promote(table, policy, permit, "s-scribe", None)
+                self.assertIsNotNone(claim, note)
+        return self.hook("guard.py", {"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": tool_input,
+                                      "cwd": self.tmp, "session_id": "s-scribe"})
 
     def draft(self, block_no, name="d.md", edit=None):
         text = example_blocks()[block_no]
@@ -255,19 +269,21 @@ class SetupTest(ProjectCase):
         self.assertEqual(acts["CLAUDE.md"], "new")
         self.assertEqual(acts["org/decisions.md"], "same")
 
-    def test_spawn_graph_and_entry(self):
+    def test_dispatch_lists_and_entry(self):
         with open(os.path.join(self.hooks, "policy.json"), encoding="utf-8") as f:
             pol = json.load(f)
-        self.assertEqual(pol["main_agent"], "pmo-p2")
+        self.assertEqual((pol["entry_role"], pol["scribe_role"]), ("pmo-p2", "pmo-scribe"))
+        for key in ("mode", "main_agent"):
+            self.assertNotIn(key, pol)
         agents = pol["agents"]
         self.assertIn("alg-p2", agents["pmo-p2"]["spawn"])
         self.assertNotIn("alg-p2", agents["pmo-router"]["spawn"])
-        self.assertEqual(agents["alg-p2"]["spawn"], ["alg-p1", "pmo-scribe"])
+        self.assertEqual(agents["alg-p2"]["spawn"], ["alg-p1"])
         self.assertEqual(agents["alg-p0"]["spawn"], [])
         self.assertTrue(agents["pmo-scribe"]["ledger_write"])
         self.assertFalse(agents["pmo-p2"]["ledger_write"])
         with open(os.path.join(self.tmp, ".claude", "settings.json"), encoding="utf-8") as f:
-            self.assertEqual(json.load(f)["agent"], "pmo-p2")
+            self.assertNotIn("agent", json.load(f))                       # every role is a pool session
 
     def test_subset_of_sequences(self):
         tmp = tempfile.mkdtemp()
@@ -290,28 +306,15 @@ class SetupTest(ProjectCase):
 
 # ---------------------------------------------------------------- hooks
 class HookTest(ProjectCase):
-    def test_p0_needs_session_name(self):
-        _, out = self.guard("alg-p1", "Agent", {"subagent_type": "alg-p0", "prompt": "去跑消融"})
-        self.assertNotEqual(out.get("permissionDecision"), "deny")         # a norm: reminded, not blocked
-        self.assertIn("会话名：Alg-p0-", out.get("additionalContext", ""))
-        _, out = self.guard("alg-p1", "Agent", {"subagent_type": "alg-p0", "prompt": "会话名：Alg-p0-2003\n去跑消融"})
-        self.assertNotEqual(out.get("permissionDecision"), "deny")
-        self.assertNotIn("会话名：Alg-p0-", out.get("additionalContext", ""))
-
-    def test_cross_sequence_spawn_is_a_reminder(self):
-        _, out = self.guard("alg-p1", "Agent", {"subagent_type": "quality-p2", "prompt": "核查"})
-        self.assertNotEqual(out.get("permissionDecision"), "deny")
-        self.assertIn("照派发图只派", out.get("additionalContext", ""))
-        _, out = self.guard("alg-p2", "Agent", {"subagent_type": "pmo-scribe", "prompt": "登记请求"})
-        self.assertNotEqual(out.get("permissionDecision"), "deny")
-        self.assertNotIn("照派发图只派", out.get("additionalContext", ""))
 
     def test_only_scribe_writes_ledger(self):
         cmd = {"command": "python3 -I .claude/agent-org/bin/ledger.py register packages/drafts/alg/x.md --apply"}
         _, out = self.guard("alg-p2", "Bash", cmd)
         self.assertEqual(out.get("permissionDecision"), "deny")
-        _, out = self.guard("pmo-scribe", "Bash", cmd)
+        _, out = self.scribe("Bash", cmd)
         self.assertNotEqual(out.get("permissionDecision"), "deny")
+        _, out = self.guard("pmo-scribe", "Bash", cmd)                    # a subagent of that type holds no claim
+        self.assertEqual(out.get("permissionDecision"), "deny")
         _, out = self.guard("alg-p2", "Bash", {"command": "python3 -I .claude/agent-org/bin/ledger.py query open"})
         self.assertNotEqual(out.get("permissionDecision"), "deny")
 
@@ -328,8 +331,10 @@ class HookTest(ProjectCase):
         cmd = {"command": "meegle workitem update --work-item-id 1 --project-key pk --fields '[]'"}
         _, out = self.guard("alg-p1", "Bash", cmd)
         self.assertEqual(out.get("permissionDecision"), "deny")
-        _, out = self.guard("alg-p1", "Bash", {"command": "meegle comment add --work-item-id 1 --content hi"})
+        _, out = self.scribe("Bash", cmd)
         self.assertNotEqual(out.get("permissionDecision"), "deny")
+        _, out = self.guard("alg-p1", "Bash", {"command": "meegle comment add --work-item-id 1 --content hi"})
+        self.assertEqual(out.get("permissionDecision"), "deny")           # comments come from claimed sessions, not subagents
 
     def test_drafts_only_own_sequence(self):
         own = os.path.join(self.tmp, "packages", "drafts", "alg", "a.md")
@@ -341,36 +346,6 @@ class HookTest(ProjectCase):
         self.assertIn("写入范围", out.get("additionalContext", ""))
         _, out = self.guard("alg-p1", "Write", {"file_path": os.path.join(self.tmp, "repo", "eval", "x.py")})
         self.assertEqual(out.get("permissionDecision"), "deny")           # the evaluation protocol stays hard
-
-    def test_focus_session_blocks_dispatch(self):
-        code, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "focus1",
-                                               "agent_type": "alg-p2", "cwd": self.tmp, "source": "startup"})
-        self.assertEqual(code, 0)
-        self.assertIn("聚焦会话", out.get("additionalContext", ""))
-        _, out = self.guard("pmo-p2", "Agent", {"subagent_type": "alg-p2", "prompt": "继续"}, agent_id=None)
-        self.assertNotEqual(out.get("permissionDecision"), "deny")        # a reminder now
-        self.assertIn("聚焦会话", out.get("additionalContext", ""))
-        self.hook("instances.py", {"hook_event_name": "SessionEnd", "session_id": "focus1", "agent_type": "alg-p2",
-                                   "cwd": self.tmp})
-        _, out = self.guard("pmo-p2", "Agent", {"subagent_type": "alg-p2", "prompt": "继续"}, agent_id=None)
-        self.assertNotEqual(out.get("permissionDecision"), "deny")
-        self.assertNotIn("聚焦会话", out.get("additionalContext", ""))
-        # The scribe's limit stays hard: a focus session running as the scribe blocks another scribe.
-        self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "focus2",
-                                   "agent_type": "pmo-scribe", "cwd": self.tmp, "source": "startup"})
-        _, out = self.guard("pmo-p2", "Agent", {"subagent_type": "pmo-scribe", "prompt": "登记请求"}, agent_id=None)
-        self.assertEqual(out.get("permissionDecision"), "deny")
-        self.assertIn("书记员同时只能有一个", out.get("permissionDecisionReason", ""))
-
-    def test_inbox_shown_once(self):
-        with contextlib.redirect_stdout(io.StringIO()):
-            route.notify(self.spec, self.tmp, "alg-p2", "规格 v3 已签字", work_item="2120")
-        data = {"hook_event_name": "UserPromptSubmit", "session_id": "f", "agent_type": "alg-p2", "cwd": self.tmp,
-                "prompt": "继续"}
-        _, out = self.hook("inbox.py", data)
-        self.assertIn("规格 v3 已签字", out.get("additionalContext", ""))
-        _, out = self.hook("inbox.py", data)
-        self.assertEqual(out, {})
 
 
 # --------------------------------------------------------------- ledger
@@ -472,13 +447,6 @@ class RouteTest(ProjectCase):
     def test_in_sequence_package_not_routed(self):
         out = route.classify_draft(self.spec, self.tmp, self.draft(0))
         self.assertIsNone(out["row"])
-
-    def test_focus_open_writes_inbox(self):
-        self.run_quiet(route.focus, self.spec, self.tmp, "open", "alg-p2", "规格 v3", offline=True)
-        with open(os.path.join(self.tmp, "inbox", "alg-p2.jsonl"), encoding="utf-8") as f:
-            self.assertIn("规格 v3", f.read())
-        out = route.classify_draft(self.spec, self.tmp, self.draft(2))
-        self.assertTrue(any("聚焦会话" in s for s in out["steps"]))
 
 
 # ------------------------------------------------- recorded Feishu shapes
@@ -1263,7 +1231,7 @@ class FourthRoundTest(ProjectCase):
 
     def test_append_from_a_file_redirect_is_explained(self):
         cmd = "lark-cli docs +update --doc https://x.feishu.cn/wiki/A --command append --doc-format markdown --content - --as user < rec.md"
-        _, out = self.guard("pmo-scribe", "Bash", {"command": cmd})
+        _, out = self.scribe("Bash", {"command": cmd})
         self.assertNotEqual(out.get("permissionDecision"), "deny")
         self.assertIn("看不到要追加的正文", out.get("additionalContext", ""))
         with open(os.path.join(self.tmp, ".claude", "logs", "guard.jsonl"), encoding="utf-8") as f:
@@ -1488,7 +1456,7 @@ class FifthRoundTest(ProjectCase):
         fifo = os.path.join(self.tmp, "pipe")
         os.mkfifo(fifo)
         cmd = "lark-cli docs +update --doc https://x.feishu.cn/wiki/A --command append --content @pipe --as user"
-        _, out = self.guard("pmo-scribe", "Bash", {"command": cmd})       # must not hang on the FIFO
+        _, out = self.scribe("Bash", {"command": cmd})       # must not hang on the FIFO
         self.assertNotEqual(out.get("permissionDecision"), "deny")        # the tag check is a reminder now
         self.assertIn("会话标签", out.get("additionalContext", ""))
         code, out = self.guard("alg-p2", "Bash", {"command": "python3 -I %s register \ud800 --apply" % self.L})
@@ -1682,7 +1650,8 @@ class SixthRoundHookTest(ProjectCase):
 
     def check(self, cases):
         for role, cmd, deny in cases:
-            code, out = self.guard(role, "Bash", {"command": cmd})
+            call = {"command": cmd}
+            code, out = self.scribe("Bash", call) if role == "pmo-scribe" else self.guard(role, "Bash", call)
             denied = out.get("permissionDecision") == "deny" or code == 2
             self.assertEqual(denied, deny, "%s: %s → %s" % (role, cmd, out.get("permissionDecisionReason")))
 
@@ -1795,7 +1764,7 @@ class SixthRoundHookTest(ProjectCase):
 
     def test_scribe_tag_check_reads_the_heredoc_fed_to_lark(self):
         append = "lark-cli docs +update --doc https://x.feishu.cn/wiki/A --command append --doc-format markdown --content - --as user"
-        _, out = self.guard("pmo-scribe", "Bash", {"command": "cat > /tmp/prev.md <<'EOF'\n[PMO+0] 上一条记录\nEOF\n%s <<'EOF'\n没有会话标签的记录\nEOF" % append})
+        _, out = self.scribe("Bash", {"command": "cat > /tmp/prev.md <<'EOF'\n[PMO+0] 上一条记录\nEOF\n%s <<'EOF'\n没有会话标签的记录\nEOF" % append})
         self.assertNotEqual(out.get("permissionDecision"), "deny")        # the tag is a norm: reminded
         self.assertIn("第一行要带会话标签", out.get("additionalContext", ""))
         self.check([
@@ -2010,7 +1979,8 @@ class SeventhRoundTest(ProjectCase):
 
     def check(self, cases):
         for role, cmd, deny in cases:
-            code, out = self.guard(role, "Bash", {"command": cmd})
+            call = {"command": cmd}
+            code, out = self.scribe("Bash", call) if role == "pmo-scribe" else self.guard(role, "Bash", call)
             denied = out.get("permissionDecision") == "deny" or code == 2
             self.assertEqual(denied, deny, "%s: %r → %s %s" % (role, cmd, code, out.get("permissionDecisionReason")))
 
@@ -2284,8 +2254,8 @@ class SpecAndRoutingTest(ProjectCase):
 
     def test_task_file_holds_only_what_scripts_use(self):
         task = setup.load_task(TASK)
-        self.assertEqual(tuple(task), tuple(k for k in setup.TASK_KEYS if k != "pool"))   # pool only in pool mode
-        self.assertEqual(task["mode"], "cli")
+        self.assertEqual(tuple(task), tuple(k for k in setup.TASK_KEYS if k != "mode"))   # mode is read, not kept
+        self.assertEqual(task["pool"], setup.POOL_DEFAULTS)
         self.assertEqual(json.loads(self.read("spec/task.json")), task)
         claude = self.read("CLAUDE.md")
         for part in ("`spec/spec.md`", "`spec/eval-protocol.md`", "可写路径：`repo/**`", "只读路径：`repo/eval/**`、`data/eval/**`"):
@@ -2912,23 +2882,19 @@ class FeishuDocsTest(ProjectCase):
 
 
 # ---------------------------------------------------------- pool mode
-OLD_SPAWN = {   # 0.4.0's spawn_list, kept here to check the dispatch graph in rules.json gives the same lists
-    ("pmo", 2): lambda seqs: ["%s-p2" % s for s in seqs if s != "pmo"] + ["pmo-router", "pmo-scribe", "Explore", "Plan"],
-    ("pmo", 1): lambda seqs: ["pmo-scribe"],
-    ("pmo", 0): lambda seqs: [],
-}
-
-
-def old_spawn(seq, rank, seqs):
-    if (seq, rank) in OLD_SPAWN:
-        return OLD_SPAWN[(seq, rank)](seqs)
+def assign_targets(seq, rank, seqs):
+    """Who a role hands work to, written out by hand to check the assign edges in rules.json."""
+    if (seq, rank) == ("pmo", 2):
+        return ["%s-p2" % s for s in seqs if s != "pmo"] + ["pmo-router"]
+    if (seq, rank) == ("pmo", 1):
+        return ["pmo-scribe"]
     if rank == 0:
         return []
-    return ["%s-p%d" % (seq, rank - 1), "pmo-scribe"]
+    return ["%s-p%d" % (seq, rank - 1)]
 
 
 class PoolProjectCase(unittest.TestCase):
-    """A fresh project initialised with "mode": "pool", with fake Feishu IDs."""
+    """A fresh project with its pool settings written out, and fake Feishu IDs."""
 
     POOL = {"p1": 1, "p0": 1, "later": [], "max_sessions": 30}
     L = ".claude/agent-org/bin/ledger.py"
@@ -2940,7 +2906,7 @@ class PoolProjectCase(unittest.TestCase):
         self.spec = orgspec.OrgSpec()
         with open(TASK, encoding="utf-8") as f:
             task = json.load(f)
-        task.update(mode="pool", pool=dict(self.POOL))
+        task.update(pool=dict(self.POOL))
         self.task_path = os.path.join(self.tmp, "agent-org.task.json")
         with open(self.task_path, "w", encoding="utf-8") as f:
             json.dump(task, f, ensure_ascii=False)
@@ -3050,7 +3016,8 @@ class PoolSetupTest(PoolProjectCase):
         self.assertNotIn("Bash(python3 -I .claude/agent-org/bin/route.py release *)", allow)
         self.assertIn("Edit(/.claude/state/**)", settings["permissions"]["ask"])
         policy = json.loads(self.read(".claude/hooks/policy.json"))
-        self.assertEqual((policy["mode"], policy["version"]), ("pool", 4))
+        self.assertNotIn("mode", policy)
+        self.assertEqual(policy["version"], setup.POLICY_VERSION)
         self.assertEqual(policy["pool"], self.POOL)
         for key in ("lark_ask", "meegle_ask", "docs_create_parents"):
             self.assertNotIn(key, policy["agents"]["alg-p1"])
@@ -3142,24 +3109,28 @@ class PoolSetupTest(PoolProjectCase):
                 json.dump(task, f, ensure_ascii=False)
             with self.assertRaises(setup.SetupError, msg=str(bad)):
                 setup.load_task(path)
+        for mode in ("cli", "desktop"):
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(dict(base, mode=mode), f, ensure_ascii=False)
+            with self.assertRaises(setup.SetupError) as refused:
+                setup.load_task(path)
+            self.assertIn("CLI 模式已取消", str(refused.exception))
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(dict(base, mode="desktop"), f, ensure_ascii=False)
-        with self.assertRaises(setup.SetupError):
-            setup.load_task(path)
+            json.dump(dict(base, mode="pool"), f, ensure_ascii=False)
+        self.assertNotIn("mode", setup.load_task(path))
         with open(path, "w", encoding="utf-8") as f:
             json.dump(dict(base, pool=dict(self.POOL, later=["liaison"])), f, ensure_ascii=False)
         with self.assertRaises(setup.SetupError):
             setup.build_plan(self.tmp, path, "pmo,quality,alg")
 
-    def test_dispatch_targets_match_the_old_spawn_lists(self):
+    def test_dispatch_targets_are_the_assign_edges(self):
         seqs = [s for s, _, _ in self.spec.sequences()]
         for seq in seqs:
             for rank in (2, 1, 0):
                 role = setup.agent_name(seq, rank)
-                self.assertEqual(self.spec.dispatch_targets(role, seq, rank, seqs, "cli"), old_spawn(seq, rank, seqs), role)
+                self.assertEqual(self.spec.dispatch_targets(role, seq, rank, seqs), assign_targets(seq, rank, seqs), role)
         some = ["pmo", "quality", "alg"]
-        self.assertEqual(self.spec.dispatch_targets("pmo-p2", "pmo", 2, some, "cli"), old_spawn("pmo", 2, some))
-        self.assertEqual(self.spec.dispatch_targets("alg-p2", "alg", 2, seqs, "pool"), ["alg-p1"])
+        self.assertEqual(self.spec.dispatch_targets("pmo-p2", "pmo", 2, some), assign_targets("pmo", 2, some))
 
     def test_pool_checklist(self):
         out = io.StringIO()
@@ -3284,19 +3255,6 @@ class PoolClaimTest(PoolProjectCase):
         self.assertEqual((pl["claims"]["Quality-p2-01"]["session_id"], pl["claims"]["Quality-p1-01"]["session_id"]),
                          ("s-q2", "s-q1"))
 
-    def test_cli_mode_needs_no_claim(self):
-        tmp = tempfile.mkdtemp(prefix="agent-org-cli-")
-        try:
-            with contextlib.redirect_stdout(io.StringIO()):
-                plan = setup.build_plan(tmp, TASK, None)
-                setup.apply_plan(tmp, plan, setup.actions_for(tmp, plan))
-            p = subprocess.run([sys.executable, "-I", "-B", os.path.join(tmp, self.R), "claim", "alg-p1"],
-                               capture_output=True, text=True, env=dict(clean_env(), CLAUDE_PROJECT_DIR=tmp))
-            self.assertEqual(p.returncode, 0)
-            self.assertIn("CLI 模式", p.stdout)
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
-
 
 class PoolGuardTest(PoolProjectCase):
     W = "python3 -I .claude/agent-org/bin/ledger.py register packages/drafts/alg/x.md --apply"
@@ -3403,16 +3361,10 @@ class PoolGuardTest(PoolProjectCase):
         self.assertEqual(out, {})
 
 
-class CliGuardStaysTest(ProjectCase):
-    """CLI mode keeps the scribe's hard limit and asks the researcher in the main session."""
+class AskAndIdentityFlagTest(ProjectCase):
+    """A session nobody claimed is the researcher's: asked before a ledger write. lark-cli calls get the identity flag."""
 
-    def test_second_scribe_is_denied(self):
-        _, out = self.guard("pmo-p2", "Agent", {"subagent_type": "pmo-scribe", "prompt": "登记请求"}, agent_id=None)
-        self.assertNotEqual(out.get("permissionDecision"), "deny")
-        _, out = self.guard("pmo-p2", "Agent", {"subagent_type": "pmo-scribe", "prompt": "登记请求"}, agent_id=None)
-        self.assertEqual(out.get("permissionDecision"), "deny")
-
-    def test_main_session_asks_and_bypass_denies(self):
+    def test_researcher_session_asks_and_bypass_denies(self):
         cmd = {"command": "python3 -I .claude/agent-org/bin/ledger.py register packages/drafts/alg/x.md --apply"}
         _, out = self.guard("", "Bash", cmd, agent_id=None)
         self.assertEqual(out.get("permissionDecision"), "ask")
@@ -3425,20 +3377,11 @@ class CliGuardStaysTest(ProjectCase):
         _, out = self.guard("alg-p2", "Bash", {"command": "lark-cli docs +fetch --doc https://x.feishu.cn/wiki/A"})
         self.assertNotEqual(out.get("permissionDecision"), "deny")
         self.assertIn("--as user", out.get("additionalContext", ""))
-        _, out = self.guard("pmo-scribe", "Bash", {"command": "lark-cli docs +create --title t --markdown x"})
+        _, out = self.scribe("Bash", {"command": "lark-cli docs +create --title t --markdown x"})
         self.assertEqual(out.get("permissionDecision"), "allow")
         self.assertTrue(out.get("updatedInput", {}).get("command", "").endswith("--as user"))
-        _, out = self.guard("pmo-scribe", "Bash", {"command": "lark-cli docs +create --title t --markdown x --as bot"})
+        _, out = self.scribe("Bash", {"command": "lark-cli docs +create --title t --markdown x --as bot"})
         self.assertEqual(out.get("permissionDecision"), "deny")
-
-    def test_inbox_and_feishu_still_reach_the_entry(self):
-        with contextlib.redirect_stdout(io.StringIO()):
-            route.notify(self.spec, self.tmp, "pmo-p2", "补充：数据集换成 v2")
-        route.append_inbox(self.tmp, "feishu", {"id": "m1", "ts": "2026-11-03T08:00:00+08:00", "from": "研究员（飞书私聊）",
-                                                "text": "今天先看评测", "read": False})
-        _, out = self.hook("inbox.py", {"hook_event_name": "UserPromptSubmit", "session_id": "e", "cwd": self.tmp, "prompt": "早"})
-        self.assertIn("数据集换成 v2", out.get("additionalContext", ""))
-        self.assertIn("今天先看评测", out.get("additionalContext", ""))
 
 
 class PoolHookTest(PoolProjectCase):
@@ -4013,7 +3956,7 @@ class PoolReviewStateTest(PoolProjectCase):
 
 
 class ReviewTextTest(PoolProjectCase):
-    """Fixes from the adversarial review of 0.5.0: generated text in both modes."""
+    """Fixes from the adversarial review of 0.5.0: generated text."""
 
     def test_pool_role_texts(self):
         p1, p0, q0 = (self.read(".claude/agents/%s.md" % r) for r in ("alg-p1", "alg-p0", "quality-p0"))
@@ -4024,19 +3967,8 @@ class ReviewTextTest(PoolProjectCase):
         self.assertIn("消息抬头都用它", p0)
         self.assertNotIn("执行结果可以直接送审", q0)
         self.assertNotIn("研究员在本会话里研究员", self.read(".claude/agents/pmo-p2.md"))
-        self.assertIn("会话池模式", self.read("org/decisions.md"))
+        self.assertIn("会话池（研究员 2026-11-03 起采用）", self.read("org/decisions.md"))
         self.assertIn("用 Agent 工具派书记员", self.read("CLAUDE.md"))
-
-    def test_cli_texts(self):
-        tmp = tempfile.mkdtemp(prefix="agent-org-cli-")
-        try:
-            with contextlib.redirect_stdout(io.StringIO()):
-                plan = setup.build_plan(tmp, TASK, None)
-            self.assertNotIn("会话池模式（", plan.files["org/decisions.md"][0])
-            self.assertIn("同时派第二个书记员", plan.files["CLAUDE.md"][0])
-            self.assertNotIn("研究员在本会话里研究员", plan.files[".claude/agents/pmo-p2.md"][0])
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_check_counts_sessions_and_the_checklist_shows_rebuild_lines(self):
         self.started_pool()
@@ -4051,25 +3983,12 @@ class ReviewTextTest(PoolProjectCase):
         self.assertIn("重建句", out.getvalue())
 
 
-class CliReviewTest(ProjectCase):
-    """CLI regressions found by the adversarial review of 0.5.0."""
+class FirstReviewTest(ProjectCase):
+    """Regressions found by the adversarial review of 0.5.0, outside the claim table."""
 
-    def test_session_names_go_to_the_role_inbox(self):
-        with contextlib.redirect_stdout(io.StringIO()):
-            route.notify(self.spec, self.tmp, "Alg-p2-01", "新数据到了", work_item="2101")
-        data = {"hook_event_name": "UserPromptSubmit", "session_id": "f", "agent_type": "alg-p2", "cwd": self.tmp, "prompt": "继续"}
-        _, out = self.hook("inbox.py", data)
-        self.assertIn("新数据到了", out.get("additionalContext", ""))
+    def test_notify_refuses_a_name_that_is_no_role_or_session(self):
         with self.assertRaises(SystemExit):
             route.notify(self.spec, self.tmp, "Nope-p2-01", "x")
-
-    def test_a_successful_agent_call_keeps_its_reservation(self):
-        self.guard("pmo-p2", "Agent", {"subagent_type": "pmo-scribe", "prompt": "登记请求", "run_in_background": True},
-                   agent_id=None)
-        self.hook("audit.py", {"hook_event_name": "PostToolUse", "tool_name": "Agent", "tool_use_id": None,
-                               "session_id": "s1", "tool_input": {}, "tool_response": {"status": "async_launched"}})
-        _, out = self.guard("pmo-p2", "Agent", {"subagent_type": "pmo-scribe", "prompt": "登记请求"}, agent_id=None)
-        self.assertEqual(out.get("permissionDecision"), "deny")
 
     def test_an_ask_keeps_the_identity_rewrite(self):
         _, out = self.guard("", "Bash", {"command": "lark-cli docs +create --title t --markdown x"}, agent_id=None)
@@ -4223,7 +4142,7 @@ class PoolSecondReviewTest(PoolProjectCase):
 
 
 class SecondReviewSetupTest(ProjectCase):
-    """Second review: paths through symlinks, the guard/policy pair, the hard-rule wording (CLI)."""
+    """Second review: paths through symlinks, the guard/policy pair, the hard-rule wording."""
 
     def test_a_protected_path_that_is_a_symlink_stays_protected(self):
         outside_dir = tempfile.mkdtemp(prefix="agent-org-data-")
@@ -4267,10 +4186,10 @@ class SecondReviewSetupTest(ProjectCase):
         with open(os.path.join(self.tmp, "CLAUDE.md"), encoding="utf-8") as f:
             claude = f.read()
         self.assertIn("在任何会话里都直接拒绝", claude)
-        self.assertIn("同时派第二个书记员", claude)
+        self.assertIn("用 Agent 工具派书记员", claude)
         self.assertIn("弹窗询问", claude)
 
-    def test_cli_notify_only_to_sessions_that_read_inboxes(self):
+    def test_notify_by_role_only_when_the_role_has_one_session(self):
         with self.assertRaises(SystemExit):
             route.notify(self.spec, self.tmp, "alg-p1", "x")
         with contextlib.redirect_stdout(io.StringIO()):
@@ -4453,7 +4372,7 @@ class PoolThirdReviewTest(PoolProjectCase):
 
 
 class ThirdReviewSetupTest(ProjectCase):
-    """Third review: guard/policy pairs and mode switches during an upgrade (CLI project)."""
+    """Third review: guard/policy pairs during an upgrade."""
 
     def set_policy(self, **fields):
         path = os.path.join(self.hooks, "policy.json")
@@ -4467,38 +4386,12 @@ class ThirdReviewSetupTest(ProjectCase):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(policy, f, ensure_ascii=False)
 
-    def test_a_mode_switch_waits_for_the_pair(self):
-        with open(os.path.join(self.hooks, "guard.py"), "a", encoding="utf-8") as f:
-            f.write("\n# local change\n")
-        self.set_policy(version=3, mode=None)                       # as left by an older plugin
-        with open(TASK, encoding="utf-8") as f:
-            task = json.load(f)
-        task.update(mode="pool", pool={"p1": 1, "p0": 1, "later": [], "max_sessions": 30})
-        path = os.path.join(self.tmp, "task-pool.json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(task, f, ensure_ascii=False)
-        with contextlib.redirect_stdout(io.StringIO()):
-            plan = setup.build_plan(self.tmp, path, None)
-        acts = {rel: kind for kind, rel, _ in setup.actions_for(self.tmp, plan)}
-        self.assertEqual(acts[".claude/settings.json"], "held")
-        self.assertEqual(acts["CLAUDE.md"], "held")
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            setup.apply_plan(self.tmp, plan, setup.actions_for(self.tmp, plan))
-            setup.report(self.tmp, plan, setup.actions_for(self.tmp, plan), True)
-            setup.check(self.tmp)
-        self.assertIn("要换运行模式", out.getvalue())
-        self.assertIn("待合并", out.getvalue())
-        self.assertTrue(os.path.isfile(os.path.join(self.hooks, "policy.json.new")))
-        with open(os.path.join(self.tmp, ".claude", "settings.json"), encoding="utf-8") as f:
-            self.assertIn("agent", json.load(f))                    # still the CLI settings
-
     def test_pair_messages_say_which_way(self):
         path = os.path.join(self.hooks, "guard.py")
         with open(path, encoding="utf-8") as f:
             text = f.read()
         with open(path, "w", encoding="utf-8") as f:
-            f.write(text.replace("POLICY_VERSION = 4\n", ""))   # a guard from before policy versions
+            f.write(text.replace("POLICY_VERSION = %d\n" % setup.POLICY_VERSION, ""))   # a guard from before policy versions
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             setup.check(self.tmp)
@@ -4506,8 +4399,9 @@ class ThirdReviewSetupTest(ProjectCase):
         self.assertNotIn("改过：.claude/hooks/policy.json", out.getvalue())
 
     def test_pool_health_on_an_old_policy(self):
-        problems, _ = setup.pool_health(self.tmp, {"mode": "pool"})
-        self.assertTrue(problems and "旧版或 CLI 模式" in problems[0])
+        self.set_policy(entry_role=None)                            # as left by a plugin from before the pool
+        problems, _ = setup.pool_health(self.tmp, {})
+        self.assertTrue(problems and "还是旧版的" in problems[0])
 
 
 

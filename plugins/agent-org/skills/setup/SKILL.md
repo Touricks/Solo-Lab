@@ -104,9 +104,9 @@ python3 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live --ap
 
 两层空间的关系和实测过的坑，见 `references/feishu-space.md`；模板维护与空间复制的操作步骤见 `references/build-space.md`。
 
-## 第五步：开会话池（只在会话池模式）
+## 第五步：开会话池
 
-任务文件写了 `"mode": "pool"` 的项目做这一步，CLI 模式跳过。开池放在最后一次 `init --apply` 之后：会话开局读的 CLAUDE.md 要带上绑定后的 ID。研究员要在场，大约二十分钟。
+开池放在最后一次 `init --apply` 之后：会话开局读的 CLAUDE.md 要带上绑定后的 ID。研究员要在场，大约二十分钟。
 
 ```bash
 python3 -I "$PLUGIN/scripts/setup.py" pool --target <项目目录>
@@ -129,7 +129,7 @@ python3 -I "$PLUGIN/scripts/setup.py" check --target <项目目录>
 python3 -I -B "$PLUGIN/tests/test_plugin.py"
 ```
 
-`check` 用现在的插件按项目里的 `spec/task.json` 重新生成一遍，和初始化时逐个文件比对：列出插件、规则、术语表或 `feishu/ids.json` 变了以后要更新的文件、本地改过的文件和没合并的 `.new`；手改过 `spec/task.json`、lark-cli 风险表要换的，各自单独报。它还按 `feishu/ids.json` 核对飞书这一边：项目空间绑定了没有，知识空间记下了没有，节点骨架齐不齐。会话池模式下它再看认领表：入口或书记员有两条认领算问题；还没开齐、有待转正的许可、离线超过一天、权限模式不同类、还停在旧版规则上的会话，作为提醒列出。测试不连飞书：规则和包检查、初始化和漂移检查、真 hook 进程的拦截、按录下的飞书输出解析、用替身命令跑登记、答复、续做，setup 的读回和绑定，以及路由和私聊监听；真实写入见使用说明的“还没实测的部分”。
+`check` 用现在的插件按项目里的 `spec/task.json` 重新生成一遍，和初始化时逐个文件比对：列出插件、规则、术语表或 `feishu/ids.json` 变了以后要更新的文件、本地改过的文件和没合并的 `.new`；手改过 `spec/task.json`、lark-cli 风险表要换的，各自单独报。它还按 `feishu/ids.json` 核对飞书这一边：项目空间绑定了没有，知识空间记下了没有，节点骨架齐不齐。它再看认领表：入口或书记员有两条认领算问题；还没开齐、有待转正的许可、离线超过一天、权限模式不同类、还停在旧版规则上的会话，作为提醒列出。测试不连飞书：规则和包检查、初始化和漂移检查、真 hook 进程的拦截、按录下的飞书输出解析、用替身命令跑登记、答复、续做，setup 的读回和绑定，以及路由和私聊监听；真实写入见使用说明的“还没实测的部分”。
 
 ## 交给用户之前
 
@@ -140,8 +140,8 @@ python3 -I -B "$PLUGIN/tests/test_plugin.py"
 - 换过空间的：`feishu/ids.json` 的 project_key 和 simple_name 是新空间的，`previous_spaces` 记着旧空间。
 - 知识空间已经记进 `feishu/ids.json`，节点骨架已经建齐：`setup.py check` 没有报飞书这一边的问题。还没做的，告诉用户卡在哪一步、谁来做。
 - `org/decisions.md` 开头列出了插件定下的几处安排，请研究员逐条确认或推翻。
-- 会话池模式：`setup.py pool` 显示认领数等于清单的会话数，入口和书记员各一条；还没开池的，告诉研究员第五步怎么做。
-- 告诉用户怎么开始。CLI 模式：在项目目录里运行 `claude`，主会话就是入口 pmo-p2。会话池模式：在侧栏找 `PMO-p2-01` 说话，想直接找某个序列就点开它的会话，进度看入口终端窗格里的 `route.py pool --watch`。两种模式的第一件事都是用技能 `agent-org:charter` 立项。
+- `setup.py pool` 显示认领数等于清单的会话数，入口和书记员各一条；还没开池的，告诉研究员第五步怎么做。
+- 告诉用户怎么开始：在侧栏找 `PMO-p2-01` 说话，想直接找某个序列就点开它的会话，进度看入口终端窗格里的 `route.py pool --watch`。第一件事是用技能 `agent-org:charter` 立项。
 
 ## 不做的事
 

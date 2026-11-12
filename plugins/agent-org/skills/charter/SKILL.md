@@ -45,7 +45,7 @@ description: 为智能体组织立项：和研究员一起用 SMART 写目标和
 
 ## 交给书记员
 
-立项单写成草稿 `packages/drafts/pmo/YYYYMMDD-立项单-<项目名>.md`。研究员签字后请书记员登记（CLI 模式派 `pmo-scribe`；会话池模式给 `PMO-p0-01` 发【登记请求】）：
+立项单写成草稿 `packages/drafts/pmo/YYYYMMDD-立项单-<项目名>.md`。研究员签字后请书记员登记（给 `PMO-p0-01` 发【登记请求】）：
 
 ```text
 登记请求

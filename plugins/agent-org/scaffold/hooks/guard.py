@@ -4,9 +4,8 @@
 Reads the hook input JSON on stdin and answers Bash, Monitor, Edit, Write,
 NotebookEdit, Agent and AskUserQuestion calls, based on policy.json and lark-risk.json in this
 directory. Two kinds of checks:
-- hard rules guard data: only the scribe writes Feishu (in pool mode only the one
-  claimed scribe session, and nobody while two scribes are claimed; in CLI mode one
-  scribe at a time), the evaluation protocol's files stay read-only, high-risk and
+- hard rules guard data: only the one claimed scribe session writes Feishu (and nobody
+  while two scribes are claimed), the evaluation protocol's files stay read-only, high-risk and
   --yes Feishu commands are the researcher's, the hooks, settings, role definitions
   and claims under .claude/ are not edited, Agent calls carry no name, pool sessions
   do not dispatch the scribe with the Agent tool, do not switch branches, stash or
@@ -33,11 +32,10 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import feishu_cmd as fc  # noqa: E402
-import instances  # noqa: E402
 import pool  # noqa: E402
 
 TMP_PREFIXES = ("/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/")
-POLICY_VERSION = 4
+POLICY_VERSION = 5
 
 
 def glob_regex(pattern):
@@ -980,7 +978,7 @@ def check_pool_command(data, who, policy, root, command):
 
 
 def check_identity_vars(data, who, command):
-    """Pool mode: a command that unsets, clears or sets the session's identity variables would speak
+    """A command that unsets, clears or sets the session's identity variables would speak
     for another session to route.py and ledger.py."""
     if IDENTITY_VARS.search(command) or (CLEAR_ENV.search(command) and re.search(r"route|ledger", command)):
         return Verdict("deny", "不要改或清掉 CLAUDE_CODE_SESSION_ID、CLAUDE_CODE_HOST_SESSION_ID（unset、env -u、env -i、export -n 都算）："
@@ -1066,21 +1064,17 @@ def check_git(data, who, command, root):
 
 def check_ledger(data, who, policy, root, sub):
     scribe = policy.get("scribe_role", "pmo-scribe")
-    if policy.get("mode") == "pool":
-        fixed = (policy["agents"].get(scribe) or {}).get("fixed_session") or scribe
-        pl, ok = pool.load(root)
-        if not ok or len(pool.claims_of(pl, scribe)) > 1:
-            return Verdict("deny", "认领表读不出来，或者书记员的认领不止一条：为免两处同时写台账，所有会话都先停写。"
-                                   "请研究员用 route.py pool 核对，release 多余的认领。")
-        if who.origin == "claim" and who.role == scribe:
-            if pool.scribe_ok(pl, policy, who.claim):
-                return Verdict("allow", "唯一认领的书记员 %s 写台账" % who.name)
-            return Verdict("deny", "这条书记员认领已经失效；请研究员用 route.py pool 核对。")
-        return refuse(who, data, "（%s）不能运行 ledger.py %s：工作项、字段、状态和文档只由书记员 %s 写。写成草稿，给它发【%s】。" % (
-            who.label, sub, fixed, (policy.get("msg") or {}).get("register_request", "登记请求")))
-    if who.pol.get("ledger_write"):
-        return Verdict()
-    return refuse(who, data, "（%s）不能运行 ledger.py %s：工作项、字段、状态和文档只由书记员写。写成草稿，请书记员登记。" % (who.label, sub))
+    fixed = (policy["agents"].get(scribe) or {}).get("fixed_session") or scribe
+    pl, ok = pool.load(root)
+    if not ok or len(pool.claims_of(pl, scribe)) > 1:
+        return Verdict("deny", "认领表读不出来，或者书记员的认领不止一条：为免两处同时写台账，所有会话都先停写。"
+                               "请研究员用 route.py pool 核对，release 多余的认领。")
+    if who.origin == "claim" and who.role == scribe:
+        if pool.scribe_ok(pl, policy, who.claim):
+            return Verdict("allow", "唯一认领的书记员 %s 写台账" % who.name)
+        return Verdict("deny", "这条书记员认领已经失效；请研究员用 route.py pool 核对。")
+    return refuse(who, data, "（%s）不能运行 ledger.py %s：工作项、字段、状态和文档只由书记员 %s 写。写成草稿，给它发【%s】。" % (
+        who.label, sub, fixed, (policy.get("msg") or {}).get("register_request", "登记请求")))
 
 
 def check_bash(data, who, policy, risk, soft, command=None):
@@ -1088,11 +1082,10 @@ def check_bash(data, who, policy, risk, soft, command=None):
     command = tool_input.get("command") or "" if command is None else command
     root = project_root(data)
     verdict = Verdict()
-    if policy.get("mode") == "pool":
-        for found in (check_identity_vars(data, who, command), check_pool_command(data, who, policy, root, command),
-                      check_git(data, who, command, root)):
-            if found:
-                verdict.merge(found)
+    for found in (check_identity_vars(data, who, command), check_pool_command(data, who, policy, root, command),
+                  check_git(data, who, command, root)):
+        if found:
+            verdict.merge(found)
     if verdict.decision == "deny":
         return verdict
     ledger = ledger_write(command, data.get("cwd") or root)
@@ -1131,7 +1124,7 @@ EDIT_WINDOW = datetime.timedelta(minutes=30)
 
 
 def note_edit(root, rel, who, data, soft):
-    """Pool mode: remind both sides when two sessions change the same file within 30 minutes."""
+    """Remind both sides when two sessions change the same file within 30 minutes."""
     me = who.name or "%s:%s" % (who.role, (data.get("session_id") or "")[:8])
     path = os.path.join(pool.state_dir(root), "edits.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1213,11 +1206,10 @@ def check_path(data, who, policy, soft):
                 return Verdict("deny", "评测协议用到的文件改动要研究员确认；当前是 %s 模式，确认框弹不出来，请研究员自己改。" % data["permission_mode"])
             return Verdict("ask", "评测协议用到的文件（评测脚本、评测集和接口），改动要研究员确认。")
         return Verdict("deny", "评测协议用到的文件（评测脚本、评测集和接口）在优化过程中保持不变；只有质量序列能提出修改，并且要研究员签字。")
-    if policy.get("mode") == "pool":
-        try:
-            note_edit(project_root(data), rel, who, data, soft)
-        except Exception:                          # a soft check never blocks
-            pass
+    try:
+        note_edit(project_root(data), rel, who, data, soft)
+    except Exception:                          # a soft check never blocks
+        pass
     soft_owned = policy.get("soft_owned") or {}
     owned = False
     for r in rels:                              # each path: a soft-owned pattern first, then the first owned one
@@ -1254,47 +1246,17 @@ def check_agent(data, who, policy, soft):
     if tool_input.get("name"):
         return Verdict("deny", "派子智能体时不要带 name：开着 agent teams 时，带 name 的派发会变成队员。去掉 name 重试。")
     target = tool_input.get("subagent_type") or "general-purpose"
-    if policy.get("mode") == "pool":
-        if target == policy.get("scribe_role"):
-            fixed = (policy["agents"].get(target) or {}).get("fixed_session") or target
-            return Verdict("deny", "会话池模式下不用 Agent 工具派书记员：登记请求发消息给 %s。" % fixed)
-        if target in policy["agents"]:
-            soft.append("会话池模式下派活给 %s 的会话发消息（先跑 route.py pool --role %s），不要用 Agent 工具另派一个池外的实例。" % (target, target))
-        return Verdict()
-    spawn = who.pol.get("spawn", ())
-    if target not in spawn:
-        soft.append("（%s）照派发图只派：%s。跨序列的包、送审包和决策包写成草稿交回，由入口转交。" % (who.label, "、".join(spawn) or "无"))
-    tpol = policy["agents"].get(target)
-    if not tpol:
-        return Verdict()
-    session = None
-    if tpol["rank"] == 0 and not tpol.get("fixed_session"):
-        m = re.search(r"会话名[：:]\s*(%s-p0-\d+)(?![\w-])" % re.escape(tpol["abbrev"]), tool_input.get("prompt") or "")
-        if m:
-            session = m.group(1)
-        else:
-            soft.append("派 +0 时，在提示里单独写一行“会话名：%s-p0-<需求包的工作项 ID>”；还没有工作项的，先请书记员登记。" % tpol["abbrev"])
-    with instances.locked(project_root(data)) as state:
-        instances.prune(state)
-        running = instances.count(state, target)
-        if running >= tpol["limit"]:
-            focus = instances.focus_session(state, target)
-            if target in policy.get("hard_limits", ()):
-                return Verdict("deny", "%s 已有 %d 个在跑，上限 %d：书记员同时只能有一个，免得两处同时写台账。等它交回再派。" % (
-                    target, running, tpol["limit"]))
-            if focus:
-                soft.append("研究员正在和 %s 开聚焦会话（%s）；给它的新信息用 route.py notify %s 留在收件箱。" % (target, focus, target))
-            else:
-                soft.append("%s 已有 %d 个在跑，上限 %d；照规范把任务写进交回的内容，交回上一级排队。" % (target, running, tpol["limit"]))
-        if session and instances.name_in_use(state, session):
-            soft.append("会话名 %s 已经在跑；同一个工作项只派一个 +0。" % session)
-        instances.reserve(state, target, session, data.get("tool_use_id"))
+    if target == policy.get("scribe_role"):
+        fixed = (policy["agents"].get(target) or {}).get("fixed_session") or target
+        return Verdict("deny", "不用 Agent 工具派书记员：登记请求发消息给 %s。" % fixed)
+    if target in policy["agents"]:
+        soft.append("派活给 %s 的会话发消息（先跑 route.py pool --role %s），不要用 Agent 工具另派一个池外的实例。" % (target, target))
     return Verdict()
 
 
 def check_ask(data, who, policy, soft):
-    """Pool mode: a turn another session's message started may have nobody to answer a question."""
-    if policy.get("mode") != "pool" or who.origin != "claim":
+    """A turn another session's message started may have nobody to answer a question."""
+    if who.origin != "claim":
         return Verdict()
     st = pool.load_session(project_root(data), data.get("session_id") or "")
     if st.get("turn_origin") == "message":
@@ -1326,7 +1288,7 @@ def log(root, data, who, verdict, soft):
 
 
 def touch(root, data, who):
-    """Pool mode: a tool call means the session is working; remember when. A subagent's call
+    """A tool call means the session is working; remember when. A subagent's call
     (a background one, say) also ends a wait that was its own or nobody's (pool.end_wait); the
     session's own call, other than the one a permission prompt was raised for, means the prompt
     was answered."""
@@ -1393,8 +1355,7 @@ def evaluate(data):
         verdict = check_ask(data, who, policy, soft)
     else:
         verdict = Verdict()
-    if policy.get("mode") == "pool":
-        touch(root, data, who)
+    touch(root, data, who)
     log(root, data, who, verdict, soft)
     return verdict, soft
 

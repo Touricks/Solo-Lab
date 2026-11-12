@@ -7,7 +7,7 @@
     route.py focus open [<role or session>] --topic T | focus close [<role or session>] | focus list
     route.py listen                           Feishu DM listener: appends to inbox/feishu.jsonl
 
-Pool mode (the task file says "mode": "pool"; see pool.py):
+The session pool (see pool.py):
     route.py claim <role> [--as NAME] [--desk ID]    claim the role a permit names (the hooks confirm it)
     route.py expect NAME --role R (--desk ID | --session ID)   pre-register a session you opened
     route.py release NAME                     the researcher frees a claim (it becomes a tombstone)
@@ -74,7 +74,7 @@ def focus_state(root):
     if os.path.isfile(os.path.join(root, ".agent-org", "manifest.json")):
         import codex_runtime
         return {b["role"]: b["focus"] for b in codex_runtime.Pool(root).load()["bindings"].values() if b.get("focus")}
-    return load_json(os.path.join(root, "inbox", "focus.json"), {})
+    return {}       # a Claude pool keeps "the researcher is using it" in pool.json; pool_info reports it
 
 
 def focus_for_sequence(root, seq):
@@ -129,12 +129,10 @@ def classify_draft(spec, root, path):
         return {"row": None, "reason": "草稿没通过检查", "errors": errors, "action": "退回作者修改"}
     d = ledger.Draft(spec, path)
     to_seq = d.receiver_seq
-    pooled = (load_policy(root) or {}).get("mode") == "pool"
     notice = spec.term("msg", "notice")
     if d.pid == "decision":
         if d.header.get("渠道") == spec.term("channel", "researcher"):
-            tell = ("给“受影响的工作项”的负责会话发消息【%s #ID】；显示“研究员在用”的改用 route.py notify 留言" % notice
-                    if pooled else "通知“受影响的工作项”的负责会话（route.py notify）")
+            tell = "给“受影响的工作项”的负责会话发消息【%s #ID】；显示“研究员在用”的改用 route.py notify 留言" % notice
             return result(spec, "R6", "研究员主动发起的决策包", next_hop="pmo-scribe",
                           steps=["书记员 register 后流转到“已决定”，表单填决定内容和决定人", tell])
         return result(spec, "R5", "决策队列来的决策包", next_hop="pmo-scribe",
@@ -147,16 +145,15 @@ def classify_draft(spec, root, path):
     elif d.pid == "delivery" and d.rel == "cross":
         hop = "%s-p2" % to_seq if to_seq else None
         steps = ["确认交付物涉及的结论已有验收包", "书记员 reply，并流转跨序列需求到“已交付”",
-                 ("给 %s 的会话发消息【%s #ID】，写交付包路径" % (hop, notice)) if pooled else "恢复 %s 接收交付" % hop]
+                 "给 %s 的会话发消息【%s #ID】，写交付包路径" % (hop, notice)]
     elif d.pid == "review":
         hop = "quality-p2"
         steps = ["书记员 register，建送审（待核查）；被送审的工作项流转到“待验收”", "派 quality-p2 核查"]
     elif d.pid == "verdict":
         hop = "pmo-scribe"
         steps = ["书记员 reply，按它打印的两条流转命令改状态",
-                 ("给送审方（发【%s】给你的那个会话）发消息【%s #被送审工作项 ID】，写验收包路径；送审方是 +1、+0 的，"
-                  "再用 route.py notify 给它所在序列的 +2 留一句" % (spec.term("msg", "review"), notice))
-                 if pooled else "恢复送审方所在序列的 +2，交验收包路径"]
+                 "给送审方（发【%s】给你的那个会话）发消息【%s #被送审工作项 ID】，写验收包路径；送审方是 +1、+0 的，"
+                  "再用 route.py notify 给它所在序列的 +2 留一句" % (spec.term("msg", "review"), notice)]
     else:
         return result(spec, None, "序列内的%s不经过入口，交回本序列上一级" % spec.pkg(d.pid), next_hop=None)
     if hop and hop.endswith("-p2") and to_seq and focus_for_sequence(root, to_seq):
@@ -176,7 +173,7 @@ def result(spec, row, reason, **extra):
 
 
 def pool_info(root, session=None, item_id=None):
-    """Pool mode: where the owner session stands (desktop ID, status, the researcher using it). A +0
+    """Where the owner session stands (desktop ID, status, the researcher using it). A +0
     work name such as the ledger's 负责会话 (Alg-p0-2101) stands for the claim that owns the item."""
     if os.path.isfile(os.path.join(root, ".agent-org", "manifest.json")):
         import codex_runtime
@@ -188,7 +185,7 @@ def pool_info(root, session=None, item_id=None):
                 "status": state["sessions"].get(b["thread_id"], {}).get("status", "unknown"),
                 "researcher_using": bool(b.get("focus"))}
     policy = load_policy(root)
-    if not policy or policy.get("mode") != "pool":
+    if not policy:
         return None
     pl, ok = pool.load(root)
     if not ok:
@@ -217,19 +214,11 @@ def append_inbox(root, role, msg):
 
 
 def notify_target(spec, root, policy, role):
-    """The inbox a notify goes to. CLI: a role (a session name counts as its role). Pool: a session;
-    a role only when it can have one session, or has exactly one claim; a +0 work name goes to the
-    claim that owns the work item."""
+    """The inbox a notify goes to: a session's; a role's only when the role can have one session or
+    has exactly one claim; a +0 work name goes to the claim that owns the work item."""
     if role == "feishu":
         raise SystemExit("inbox/feishu.jsonl 只由飞书私聊监听（route.py listen）写，notify 不写它")
     roles = agent_roles(spec)
-    if policy.get("mode") != "pool":
-        found = role if role in roles else (pool.role_of(policy, role) if policy.get("agents") else None)
-        if not found:
-            raise SystemExit("没有角色 %s" % role)
-        if policy.get("agents") and (policy["agents"].get(found) or {}).get("rank") != 2:
-            raise SystemExit("CLI 模式下 %s 是子智能体，不读收件箱：新信息交给派它的上一级，或写进包里" % found)
-        return found
     pl, ok = pool.load(root)
     if role in roles:
         if pool.role_limit(policy, role) == 1:
@@ -251,14 +240,11 @@ def notify_target(spec, root, policy, role):
 
 
 def notify(spec, root, role, text, work_item=None, sender=None):
-    """Leave a message in an inbox: a role's (inbox/<role>.jsonl) or, in pool mode, a session's."""
+    """Leave a message in a session's inbox (a role's when the role has one session)."""
     policy = load_policy(root) or {}
     target = notify_target(spec, root, policy, role)
-    if policy.get("mode") == "pool":                    # the sender is whoever runs this, not --from
-        me, origin = caller(root, policy)
-        sender = sender_label(me, origin)
-    elif not sender:
-        sender = spec.rules["naming"]["fixed_sessions"]["pmo-p2"]
+    me, origin = caller(root, policy)               # the sender is whoever runs this, not --from
+    sender = sender_label(me, origin)
     msg = {"id": uuid.uuid4().hex[:12], "ts": now(), "from": sender, "text": text, "read": False}
     if work_item:
         msg["work_item"] = str(work_item).lstrip("#")
@@ -290,45 +276,11 @@ def agent_roles(spec):
 
 
 def focus(spec, root, action, role=None, topic=None, offline=False):
-    policy = load_policy(root) or {}
-    if policy.get("mode") == "pool":
-        return pool_focus(spec, root, policy, action, role, topic)
-    path = os.path.join(root, "inbox", "focus.json")
-    state = focus_state(root)
-    if action == "list":
-        for r, info in state.items():
-            print("%s：%s（%s 开始）" % (r, info.get("topic"), info.get("opened_at")))
-        if not state:
-            print("没有开着的聚焦会话。")
-        return
-    if role and role not in agent_roles(spec) and policy.get("agents"):
-        role = pool.role_of(policy, role) or role       # Alg-p2-01 means alg-p2 here
-    if not role or not role.endswith("-p2") or role not in agent_roles(spec):
-        raise SystemExit("聚焦会话只和某个序列的 +2 开，比如 alg-p2")
-    if action == "close":
-        state.pop(role, None)
-        print("已收尾：%s。确认它交回的决策包已经登记成“已决定”。" % role)
-    else:
-        state[role] = {"topic": topic or "", "opened_at": now()}
-        seq = role[:-3]
-        lines = []
-        if not offline:
-            lg = ledger.Ledger(root, "preview")
-            try:
-                for row in ledger.query(lg, "open", seq, as_json=False):
-                    lines.append("#%s %s %s" % (row.get("work_item_id"), row.get("work_item_status", ""), row.get("name", "")))
-            except ledger.LedgerError as e:
-                lines.append("（台账没读到：%s）" % str(e)[:80])
-        text = "入口登记：研究员要和你谈“%s”。本序列进行中的工作项：%s" % (topic or "未写", "；".join(lines) or "无")
-        notify(spec, root, role, text)
-        print("请研究员在本目录另开一个终端运行：claude --agent %s" % role)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+    return pool_focus(spec, root, load_policy(root) or {}, action, role, topic)
 
 
 def pool_focus(spec, root, policy, action, target, topic):
-    """Pool mode: mark a session as the researcher's for now; route.py pool will not suggest it."""
+    """Mark a session as the researcher's for now; route.py pool will not suggest it."""
     if action == "list":
         pl, _ = pool.load(root)
         rows = [r for r in pool.session_view(root, policy, pl) if r["focus"]]
@@ -402,9 +354,6 @@ def need_pool(root):
     policy = load_policy(root)
     if not policy:
         raise SystemExit("读不到 .claude/hooks/policy.json：这个目录还没初始化")
-    if policy.get("mode") != "pool":
-        print("本项目是 CLI 模式，不用认领，也没有会话池。")
-        return None
     return policy
 
 

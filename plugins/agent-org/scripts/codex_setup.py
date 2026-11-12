@@ -39,10 +39,10 @@ def codex_spec(original):
     spec.rules["limits_note"] = "会话池上限约束角色实例数量；写入任务的职责和委派按项目 AGENTS.md 执行。"
     decisions = spec.rules["plugin_decisions"]
     for i, item in enumerate(decisions):
-        if isinstance(item, str) and "工作项、字段、状态和文档仍只由书记员写" in item:
+        if "工作项、字段、状态和文档仍只由书记员写" in item:
             decisions[i] = "PMO 默认承接登记，明确委派可代办；工作项通过台账维护，独立正文按项目规范发布。"
-        elif isinstance(item, dict) and "书记员的写权只认" in item.get("text", ""):
-            item["text"] = ("Codex 会话池按原生会话 ID 路由和追溯。职责与委派见项目 AGENTS.md；"
+        elif "书记员的写权只认" in item:
+            decisions[i] = ("Codex 会话池按原生会话 ID 路由和追溯。职责与委派见项目 AGENTS.md；"
                             "同一登记请求只由一名执行者处理，台账写锁与回执保持有效。")
     return spec
 
@@ -52,7 +52,7 @@ def adapt(base, original, target, spec, task, policy, seqs):
     plan = base.Plan()
     previous = read_manifest(target)
     conflicts = []
-    plan.notes = [n for n in original.notes if "会话池模式" not in n]
+    plan.notes = [n for n in original.notes if "setup.py pool" not in n]
     plan.notes.append("Codex 会话由原生会话工具创建并保留在项目分组；创建、绑定、项目归属和 hook 运行分别验收。")
     plan.notes.append("在 Codex 的 Settings > Hooks 审阅项目 hooks；脚本不会代替用户设置信任。")
 
@@ -76,7 +76,7 @@ def adapt(base, original, target, spec, task, policy, seqs):
         "../skills-codex/ledger/references/publishing.md")))
     put("org/org.md", neutral(base.org_md(spec, seqs)))
     put("org/decisions.md", neutral(base.render(base.scaffold("org/decisions.md.tmpl"),
-        {"deviations": base.deviations_text(spec, "pool")})), keep=True)
+        {"deviations": base.deviations_text(spec)})), keep=True)
     put(".agent-org/lark-risk.json", original.files[".claude/hooks/lark-risk.json"][0])
     for name in ("orgspec.py", "ledger.py", "route.py", "project_paths.py", "codex_runtime.py", "codex_hook.py", "pool.py", "codex_upgrade.py"):
         put(".agent-org/bin/" + name, base.read_text(os.path.join(base.HERE, name)), True)

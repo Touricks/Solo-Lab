@@ -7,7 +7,7 @@ Feishu DM listener appends the researcher's messages. Each message is shown once
 and marked read only after the text is built; what does not fit in the context
 budget stays unread for the next prompt.
 
-In pool mode the hook also:
+The hook also:
 - turns the researcher's opening line in a new top-level session
   ("认领 <+2 角色>（会话名 …）") into a claim and injects the role text;
 - marks the session busy and records its permission mode;
@@ -222,17 +222,7 @@ def main():
         if data.get("agent_id"):
             return 0
         root = os.path.normpath(os.environ.get("CLAUDE_PROJECT_DIR") or data.get("cwd") or os.getcwd())
-        if policy.get("mode") == "pool":
-            parts, marks = pool_prompt(data, policy, root)
-        else:
-            role = data.get("agent_type") or policy.get("main_agent")
-            if role not in policy["agents"]:
-                return 0
-            inbox = os.path.join(root, "inbox")
-            sources = [(os.path.join(inbox, role + ".jsonl"), "收件箱里", INBOX)]
-            if role == policy.get("main_agent"):
-                sources.append((os.path.join(inbox, "feishu.jsonl"), "研究员的飞书私聊里", FEISHU))
-            parts, marks = inbox_text(sources, 0)
+        parts, marks = pool_prompt(data, policy, root)
         if parts:
             print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
                                                      "additionalContext": "\n\n".join(parts)}}, ensure_ascii=False))
