@@ -209,6 +209,13 @@ class RegisterTest(LedgerCase):
         with open(revised, encoding="utf-8") as f:
             self.assertIn("- 关联工作项：#%s" % task, f.read())
         self.assertIn("不要重复登记", self.fails(ledger.register, self.lg(), revised, existing=task))
+        with open(revised, encoding="utf-8") as f:                      # the next revision starts from the registered one
+            again = self.write(f.read().replace("产品 +2（Product-p2-01）", "算法 +2（Alg-p2-01）"), "v2b.md")
+        self.quiet(ledger.register, self.lg(), again, existing=task)
+        self.assertEqual(self.value(task, "research_task", "sender"), "Alg-p2-01")         # sender and sequence follow
+        other = self.task(name="t9.md")
+        self.assertIn("关联工作项", self.fails(ledger.register, self.lg(), again.replace("v2b", "v2c") if False else self.write(
+            open(again, encoding="utf-8").read(), "v2c.md"), existing=other))               # it names another task
         probe = self.write(SHEET % ("试探", "产品 +2（Product-p2-01）"), "v3.md")
         self.assertIn("流程在新建时选定", self.fails(ledger.register, self.lg(), probe, existing=task))
         self.assertIn("只给研究任务换主文档", self.fails(ledger.register, self.lg(), self.write(FEEDBACK, "f.md"), existing=task))

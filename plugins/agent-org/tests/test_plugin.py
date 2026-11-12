@@ -9,6 +9,7 @@ import io
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1416,6 +1417,17 @@ class PoolSetupTest(PoolProjectCase):
         few = setup.build_plan(self.tmp, self.task_path, "pmo,quality,alg")   # the default says nothing of a sequence that is off
         self.assertEqual(json.loads(few.files[".claude/agent-org/pool-plan.json"][0])["total"], 9)
 
+    def test_a_space_name_that_cannot_head_a_title_needs_a_label(self):
+        with open(self.task_path, encoding="utf-8") as f:
+            task = json.load(f)
+        task["feishu"]["meegle_space"] = "一个名字特别长的飞书项目空间" * 4
+        with open(self.task_path, "w", encoding="utf-8") as f:
+            json.dump(task, f, ensure_ascii=False)
+        os.remove(os.path.join(self.tmp, "feishu", "ids.json"))
+        with self.assertRaises(setup.SetupError) as e:
+            setup.build_plan(self.tmp, self.task_path, None)
+        self.assertIn("pool.label", str(e.exception))
+
     def test_init_refuses_the_home_directory(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -1511,6 +1523,9 @@ class PoolSetupTest(PoolProjectCase):
         text = out.getvalue()
         self.assertIn("1. PMO-p0-01（未认领）", text)
         self.assertIn("ledger.py ensure-node all --apply", text)                  # the scribe's first writes are still to do
+        scribe = text[text.index("1. PMO-p0-01"):text.index("2. PMO-p2-01")]
+        self.assertNotIn("就结束本轮", scribe)                                     # its first turn goes on to the writes
+        self.assertIn("回一句“已认领 PMO-p2-01”就结束本轮", text)
         self.assertIn("当前：0/21 条认领", text)
         self.assertNotIn("--watch", text)
         out = io.StringIO()
@@ -1605,6 +1620,34 @@ class CheckLayersTest(PoolProjectCase):
         code, out = self.check()
         self.assertEqual(code, 1)
         self.assertIn("“关联工作项”一行不是 #%s" % task, out)
+
+    def test_a_space_that_already_holds_research_tasks(self):
+        """A second directory set up against a space in use: no receipt here, the tasks are there."""
+        self.claim_all()
+        with contextlib.redirect_stdout(io.StringIO()):
+            setup.env_cmd(self.tmp, True)
+        code, text = self.check()
+        self.assertIn("空间里已经有研究任务的，加 --live 核对", text)
+        other = fake_space.SimLedger(self.tmp, "apply", self.fake, ())
+        sheet = os.path.join(self.tmp, "packages", "drafts", "pmo", "elsewhere.md")
+        shutil.copyfile(os.path.join(self.tmp, setup.FIRST_TASK), sheet)
+        with contextlib.redirect_stdout(io.StringIO()):
+            ledger.register(other, sheet)
+        sent = os.path.join(self.tmp, "packages", "sent")
+        for name in os.listdir(sent):                                        # as if registered from another directory
+            if name.endswith(".json"):
+                os.remove(os.path.join(sent, name))
+        ids = json.loads(self.read("feishu/ids.json"))
+        snap = json.loads(self.read("feishu/space.json"))
+        tokens = {n["node_token"] for n in ids["wiki"]["nodes"].values()}
+        node = lambda cmd, timeout=30: (0, json.dumps({"data": {"node": {"space_id": "space_fake"}}}), "") \
+            if "--node-token" in cmd and cmd[cmd.index("--node-token") + 1] in tokens else (1, "", "not found")
+        with mock.patch.object(setup, "run", node), \
+                mock.patch.object(setup, "read_space", lambda *a, **k: (snap, setup.space.binding_of(ids), [], [])), \
+                mock.patch.object(setup.ledger, "Ledger", lambda root, mode: fake_space.SimLedger(root, mode, self.fake, ())):
+            code, text = self.check("--live")
+        self.assertEqual(code, 0, text)
+        self.assertIn("空间里已有 1 条研究任务，这个目录里没有它们的登记回执", text)
 
     def test_sessions_are_held_against_the_clients_own_list(self):
         self.ready()
@@ -1855,7 +1898,43 @@ class PoolOpenedByTheResearcherTest(PoolProjectCase):
         _, out = self.bash("s-researcher", cmd, agent_id="a1")
         self.assertEqual(out.get("permissionDecision"), "deny")           # a subagent of the researcher's session
         _, out = self.bash("s-alg2", "python3 -I /opt/plugins/agent-org/scripts/setup.py check --target .")
-        self.assertNotEqual(out.get("permissionDecision"), "deny")
+        self.assertEqual(out.get("permissionDecision"), "deny")           # every setup.py command is the researcher's
+        self.assertIn("只由研究员的会话运行", out.get("permissionDecisionReason", ""))
+
+    def test_the_researcher_runs_the_plugins_own_setup_in_any_mode(self):
+        """After init the hook is on in the session that initialises: setup.py, where the plugin is
+        installed, has to go on working there, also when no prompt can appear."""
+        self.open_all()
+        real = shlex.quote(os.path.join(ROOT, "scripts", "setup.py"))
+        for args in ("feishu --target . --live --apply", "pool --target .", "check --target . --live",
+                     "env --target . --apply", "login", "init --target . --task agent-org.task.json --apply"):
+            for mode in ("default", "bypassPermissions"):
+                _, out = self.bash("s-researcher", "python3 -I %s %s" % (real, args), permission_mode=mode)
+                self.assertNotIn(out.get("permissionDecision"), ("deny", "ask"), (args, mode, out))
+            _, out = self.bash("s-alg2", "python3 -I %s %s" % (real, args))
+            self.assertEqual(out.get("permissionDecision"), "deny", args)
+        space_py = shlex.quote(os.path.join(ROOT, "scripts", "space.py"))
+        _, out = self.bash("s-alg2", "python3 -I %s export --space x --out .claude/settings.json" % space_py)
+        self.assertEqual(out.get("permissionDecision"), "deny")
+        _, out = self.bash("s-alg2", "python3 -I .claude/agent-org/bin/space.py check --target .")
+        self.assertNotEqual(out.get("permissionDecision"), "deny")           # reading the space is for every session
+
+    def test_a_setup_script_that_is_not_the_recorded_one_is_not_trusted(self):
+        self.open_all()
+        real = os.path.join(ROOT, "scripts", "setup.py")
+        manifest = os.path.join(self.tmp, ".claude", "agent-org", "manifest.json")
+        with open(manifest, encoding="utf-8") as f:
+            m = json.load(f)
+        self.assertEqual(sorted(os.path.basename(p) for p in m["plugin_scripts"]), ["onboarding.py", "setup.py", "space.py"])
+        m["plugin_scripts"][real] = "0" * 64                                 # another build of the plugin
+        with open(manifest, "w", encoding="utf-8") as f:
+            json.dump(m, f)
+        _, out = self.bash("s-researcher", "python3 -I %s feishu --target . --live" % shlex.quote(real), permission_mode="bypassPermissions")
+        self.assertEqual(out.get("permissionDecision"), "deny")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            setup.check(self.tmp)
+        self.assertIn("hook 不再放行研究员会话里的 setup.py", out.getvalue())
 
 
 class PoolGuardTest(PoolProjectCase):

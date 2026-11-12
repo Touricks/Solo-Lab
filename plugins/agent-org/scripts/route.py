@@ -399,9 +399,9 @@ def children_text(root, policy, claim):
         lines.append("- %s：name=%s，title=“%s”，model=%s%s\n  prompt：%s\n  background：%s\n  然后：%s" % (
             ch["name"], ch["short"], ch["title"], ch["model"], mark, ch["brief"], ch["background"], ch["expect"]))
     label = plan_of(root).get("label") or ""
-    lines.append("开局句要你开子会话的，开完以后：用 set_session_title 把本会话的标题改成“%s”，再用 move_sessions 把本会话和"
-                 "开出的子会话归入侧栏分区“%s”（没有这个分区就先用 create_section 建）；回研究员一句“已认领 %s，已开 …”。"
-                 "model 填不进去就不填，开好以后再改模型。" % (top["title"], label, claim["name"]))
+    lines.append("研究员手工开出的会话（开局句里没有“研究员的会话会开出”这句话的）：认领以后用 set_session_title 把本会话的标题改成“%s”，"
+                 "再用 move_sessions 把本会话和开出的子会话归入侧栏分区“%s”（没有这个分区就先用 create_section 建）；"
+                 "回研究员一句“已认领 %s，已开 …”。model 填不进去就不填，开好以后再改模型。" % (top["title"], label, claim["name"]))
     return "\n".join(lines)
 
 

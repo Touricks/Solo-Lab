@@ -78,7 +78,7 @@ class BindingCase(unittest.TestCase):
 class FeishuTest(BindingCase):
     def test_preview_writes_nothing_and_apply_writes_the_binding(self):
         code, text = self.feishu([], True, False)
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 0)                                    # nothing to fix: 0 in a preview and when written
         self.assertIn("约定核对（contract_version 1）：通过", text)
         self.assertIn("这是预览", text)
         self.assertEqual(os.listdir(os.path.join(self.tmp, "feishu")), [])
@@ -118,6 +118,7 @@ class FeishuTest(BindingCase):
                 out["list"] = [f for f in out.get("list") or [] if f.get("field_name") != "下一步签字"]
             return out
         code, text = self.feishu([], True, True, edit=no_signature)
+        self.assertEqual(code, 1)                                    # an initialisation stops here
         self.assertIn("1 个问题，见 feishu/binding.md", text)
         doc = self.read("feishu/binding.md")
         self.assertIn("研究任务的“下一步签字”", doc)

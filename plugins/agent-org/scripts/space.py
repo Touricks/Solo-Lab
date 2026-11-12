@@ -388,10 +388,12 @@ def check(contract, snap, binding):
     if main in (binding.get("types") or {}):
         t = type_of(snap, binding["types"][main]["type_key"])
         keys = (binding.get("field_keys") or {}).get(main) or {}
-        flows = [f for f in (t.get("flows") or {}).values() if f.get("nodes")]
+        every = list((t.get("flows") or {}).values())
+        flows = [f for f in every if f.get("nodes")]
         for rule, slot in (("签字后冻结", contract.flow["freeze"]["sealed_by"]), ("结论前核对", contract.flow["freeze"]["checked_before"])):
             key = keys.get(slot)
-            if key and flows and not any(key in [r["field_key"] for r in n["required"]] for f in flows for n in f["nodes"]):
+            held = any(key in [r["field_key"] for r in n["required"]] for f in flows for n in f["nodes"])
+            if key and flows and not held and len(flows) == len(every):      # a flow not read yet may be the one that holds it
                 problems.append(["%s的“%s”" % (contract.name("types", main), contract.name("fields", slot)),
                                  "没有节点把它设成必填，%s做不了" % rule,
                                  "%s：在对应节点的完成表单里把它设成必填" % MAINTAINER])

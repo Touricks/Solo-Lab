@@ -1169,7 +1169,10 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
         source, task = source or rec.get("source"), task or rec.get("task")
         pairs = merge_pairs(rec.get("pairs"), resolved_pairs(lg, pairs))   # rewritten with the main document
     source = item_id_of(source or d.source) if (source or d.source) else None
-    link_line(d.text, "#0", "0")                      # a 关联工作项 line that is no placeholder stops here
+    if existing:                                      # a revised sheet may already name the task it revises
+        link_line(d.text, "#%s" % item_id_of(existing), str(item_id_of(existing)))
+    else:
+        link_line(d.text, "#0", "0")                  # a 关联工作项 line that is no placeholder stops here
     word = next((w for w, k in SHEETS.items() if k == kind), None)
     if kind == "research_task":
         name, title = d.task, spec.rules["naming"]["task_doc"].replace("<任务名>", d.task)
@@ -1270,8 +1273,9 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
             ensure_roles(lg, wid, item_id)
         url = main_document(lg, rec or {}, doc, "节点 %s " % parent, create, remember)
         updates = [{"field_key": doc_key, "field_value": url}]
-        if swap:
-            updates.append({"field_key": "name", "field_value": name})
+        if swap:                                    # the task takes the name, sender and sequence of the revision
+            mine = {lg.field(wid, s)["field_key"] for s in ("sender", "sequence")}
+            updates += [{"field_key": "name", "field_value": name}] + [f for f in fields if f["field_key"] in mine]
         if rec:
             updates += [v for _, v in sets]
         if wid == "same_seq" and d.rel == "execute" and not d.receiver:

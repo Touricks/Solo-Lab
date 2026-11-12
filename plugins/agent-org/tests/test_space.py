@@ -267,6 +267,14 @@ class CheckTest(SpaceCase):
             node["required"] = [r for r in node["required"] if r["name"] != "结论"]
         problems, _ = self.check()
         self.assertEqual([p[0] for p in problems], ["研究任务的“结论”"])
+        self.flow("research_task", "试探")["nodes"] = None            # a flow not read yet may be the one that holds it
+        self.assertEqual(self.check()[0], [])
+
+    def test_the_freeze_is_not_judged_from_the_probe_flow_alone(self):
+        self.flow("research_task", "验证")["nodes"] = None
+        problems, notes = self.check()
+        self.assertEqual(problems, [])
+        self.assertTrue(any("验证" in n for n in notes))
 
     def test_a_type_without_a_flow(self):
         self.type("feedback")["flows"] = {}
