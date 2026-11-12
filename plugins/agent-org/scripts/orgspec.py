@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Read the organisation rules of the agent-org plugin.
 
-    python3 -I scripts/orgspec.py check            # validate rules.json against terms.zh.json
+    python3 -I scripts/orgspec.py check            # validate rules.json and contract.json against terms.zh.json
     python3 -I scripts/orgspec.py show packages    # print one rendered section
     python3 -I scripts/orgspec.py lint <file>...   # check package drafts and docs for stale names
 
 orgspec/rules.json holds the rules with stable English identifiers; Chinese names
 live only in orgspec/terms.zh.json. Prose in rules.json may contain tokens such as
 {pkg:request} or {seq:alg}; render() replaces them with the current names.
+orgspec/contract.json holds what the plugin and a Feishu Project template agree on: the
+slots scripts handle by meaning (class Contract).
 Python 3.9 standard library only.
 """
 import json
@@ -17,7 +19,7 @@ import sys
 
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ORGSPEC_DIR = os.path.join(PLUGIN_ROOT, "orgspec")
-TOKEN = re.compile(r"\{(pkg|rel|wi|seq|rank|node|field|role|channel|abbrev):([a-z0-9_]+)\}")
+TOKEN = re.compile(r"\{(pkg|rel|wi|seq|rank|node|field|role|channel|abbrev|state|sign):([a-z0-9_]+)\}")
 RANK_NUM = {"p0": 0, "p1": 1, "p2": 2}
 
 
@@ -365,6 +367,131 @@ class OrgSpec:
         return problems
 
 
+# -------------------------------------------------------------- contract
+FIELD_KINDS = ("select", "multi_select", "text", "multi_text", "date", "link", "number", "bool", "user")
+
+
+class Contract:
+    """orgspec/contract.json: the slots scripts handle by meaning.
+
+    A slot is a type, field, role or state the scripts must find in a space: the main-line
+    type, the field that holds the main document, the role that signs, the state that means
+    archived. Which object of a space fills a slot is the project's binding (feishu/ids.json).
+    Flows, nodes and forms are not here: they stay in the space and are read at run time.
+    """
+
+    KINDS = ("fields", "roles", "states")
+
+    def __init__(self, spec, path=None):
+        self.spec = spec
+        self.path = path or os.path.join(ORGSPEC_DIR, "contract.json")
+        self.data = _load(self.path)
+
+    @property
+    def version(self):
+        return self.data["contract_version"]
+
+    @property
+    def flow(self):
+        return self.data["flow"]
+
+    def types(self):
+        return list(self.data["types"])
+
+    def main_line(self):
+        return next(t for t, d in self.data["types"].items() if d.get("main_line"))
+
+    def slots(self, wid, kind):
+        """The field, role or state slots a type must fill."""
+        return list(self.data["types"][wid][kind])
+
+    def types_with(self, kind, slot):
+        return [t for t in self.types() if slot in self.data["types"][t][kind]]
+
+    def field(self, slot):
+        return self.data["fields"][slot]
+
+    def signatures(self):
+        """Field slots that hold the ID of the decision that signed a step."""
+        return [s for s, d in self.data["fields"].items() if d.get("signature")]
+
+    def role(self, slot):
+        return self.data["roles"][slot]
+
+    def name(self, kind, slot):
+        """The name a slot goes by in the reference template; binding tries it first."""
+        if kind == "types":
+            return self.spec.term("wi", slot)
+        if kind == "fields":
+            return self.spec.term("field", slot)
+        if kind == "states":
+            return self.spec.term("state", slot)
+        who = (self.data["roles"].get(slot) or {}).get("who")
+        return self.spec.term("seq" if who == "sequence" else "role", slot)
+
+    def option_names(self, slot):
+        """The option names scripts write or compare for a select slot; [] when they use none."""
+        opt = self.field(slot).get("options")
+        if not opt:
+            return []
+        group = self.spec.terms[opt["group"]]
+        return [group[i] for i in opt.get("ids", group)]
+
+    def validate(self):
+        problems = []
+        d, terms = self.data, self.spec.terms
+        if not isinstance(d.get("contract_version"), int) or d["contract_version"] < 1:
+            problems.append("contract_version 要是正整数")
+        mains = [t for t, x in d["types"].items() if x.get("main_line")]
+        if len(mains) != 1:
+            problems.append("约定里要正好有一个主线类型（main_line）")
+        for slot, f in d["fields"].items():
+            if slot not in terms["field"]:
+                problems.append("字段槽位 %s 缺中文名" % slot)
+            if f.get("type") not in FIELD_KINDS:
+                problems.append("字段槽位 %s 的类型 %s 不认识" % (slot, f.get("type")))
+            opt = f.get("options")
+            if opt and (opt.get("group") not in terms or any(i not in terms[opt["group"]] for i in opt.get("ids", []))):
+                problems.append("字段槽位 %s 的选项在术语表里找不到" % slot)
+            if not self.types_with("fields", slot):
+                problems.append("字段槽位 %s 没有类型用到" % slot)
+        for slot, r in d["roles"].items():
+            if r.get("who") not in ("sequence", "field", "researcher", "scribe"):
+                problems.append("角色槽位 %s 的 who 只能是 sequence、field、researcher 或 scribe" % slot)
+            if slot not in terms["seq" if r.get("who") == "sequence" else "role"]:
+                problems.append("角色槽位 %s 缺中文名" % slot)
+            if r.get("who") == "field":
+                for wid in self.types_with("roles", slot):
+                    if (r.get("field") or {}).get(wid) not in d["types"][wid]["fields"]:
+                        problems.append("角色槽位 %s 在 %s 上要指明一个该类型的字段槽位" % (slot, wid))
+        for wid, t in d["types"].items():
+            if wid not in terms["wi"]:
+                problems.append("类型槽位 %s 缺中文名" % wid)
+            for kind, known in (("fields", d["fields"]), ("roles", d["roles"]), ("states", terms.get("state", {}))):
+                for slot in t.get(kind, []):
+                    if slot not in known:
+                        problems.append("%s 的 %s 槽位 %s 没有定义" % (wid, kind, slot))
+        flow = d.get("flow") or {}
+        arch, gate, freeze = flow.get("archive_node") or {}, flow.get("sign_gate") or {}, flow.get("freeze") or {}
+        for wid, t in d["types"].items():
+            if arch.get("role") not in t.get("roles", []) or arch.get("state") not in t.get("states", []):
+                problems.append("%s 要有归档节点的角色槽位 %s 和状态槽位 %s" % (wid, arch.get("role"), arch.get("state")))
+        g = d["types"].get(gate.get("type")) or {}
+        if not g or any(gate.get(k) not in g.get("fields", []) for k in ("result", "task")) \
+                or any(s not in g.get("states", []) for s in gate.get("states", [])):
+            problems.append("签字关引用的类型、字段或状态槽位不在约定里")
+        elif gate.get("approved") not in terms.get((d["fields"][gate["result"]].get("options") or {}).get("group"), {}):
+            problems.append("签字关的批准选项在术语表里找不到")
+        main = d["types"][mains[0]] if len(mains) == 1 else None
+        if main and (freeze.get("sealed_by") not in self.signatures() or freeze.get("sealed_by") not in main["fields"]
+                     or freeze.get("checked_before") not in main["fields"]):
+            problems.append("冻结核对引用的字段槽位不在主线类型上，或者 sealed_by 不是签字字段")
+        for wid in flow.get("rollback_needs_decision", []):
+            if wid not in d["types"]:
+                problems.append("rollback_needs_decision 里的 %s 不是类型槽位" % wid)
+        return ["约定文件：" + x for x in problems]
+
+
 # ------------------------------------------------------------------ lint
 HEADER = re.compile(r"^- ([^：:]+)[：:]\s*(.*)$")
 HEADER_KEYS = ["包类型", "发出方", "接收方", "关联工作项", "需要接收方做的事", "回复期限", "上下文范围"]
@@ -493,7 +620,7 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     spec = OrgSpec()
     if not argv or argv[0] == "check":
-        problems = spec.validate()
+        problems = spec.validate() + Contract(spec).validate()
         for p in problems:
             print("问题：" + p)
         print("规则文件检查：%s" % ("%d 个问题" % len(problems) if problems else "没有问题"))

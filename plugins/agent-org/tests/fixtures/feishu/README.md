@@ -20,3 +20,12 @@
 | event-message.json | 按 `lark-cli event schema im.message.receive_v1` 造的一条私聊事件 |
 | workitem-query-user.json | ``meegle workitem query --mql 'SELECT `work_item_id`, `name`, `field_c9def8` FROM <空间>.决策 WHERE `work_item_id` = 7152108550'``：人员字段（决定人）是 `user_value`。单元格的形状照 2026-11-01 写入测试时的实测，外层结构同 workitem-query-queue.json；姓名和 user_key 是假的，邮箱也填了假的，用来确认不会打出来 |
 | meta-types.json | `meegle workitem meta-types --project-key <project_key>`（2026-11-02 录）：12 个类型，`is_disable` 为 1 的四个系统类型在空间里停用，查 `meta-fields` 会报找不到类型 |
+
+## v2：参考模板空间的结构
+
+2026-11-12 用 `space.py` 只读读取参考模板空间时录下的输出，放在 `v2/`。负责人的标识已换成假的，姓名和邮箱清空；工作项 ID、type_key、field_key、状态和选项 ID 保持原样。
+
+| 文件 | 内容 |
+| --- | --- |
+| v2/space-calls.json | `space.py` 读一个空间时发出的 30 条 `meegle` 命令和各自的输出：`project search`、`workitem meta-types`、每个类型的 `meta-fields`（研究任务翻两页）、`meta-roles`、`meta-create-fields`，每个流程一条 `workitem query` 和一条 `workflow get-node` |
+| v2/space.json | 上面这些输出读成的快照：5 个类型、6 个流程、27 个节点。`test_space.py` 核对重放结果和它一致，其他测试拿它当空间结构 |

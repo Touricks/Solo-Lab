@@ -2431,6 +2431,12 @@ class SpecAndRoutingTest(ProjectCase):
             space = json.load(f)
         keys = [space["project_key"], space["simple_name"]] + [t["type_key"] for t in space["types"].values()]
         keys += [x["field_key"] for fields in space["fields"].values() for x in fields.values()]
+        with open(os.path.join(ROOT, "tests", "fixtures", "feishu", "v2", "space.json"), encoding="utf-8") as f:
+            v2 = json.load(f)                            # the reference template space, read by space.py
+        keys += [v2["project_key"], v2["simple_name"]] + list(v2["types"])
+        for t in v2["types"].values():
+            keys += [x["field_key"] for x in t["fields"] if x["field_key"].startswith("field_")] + list(t["flows"])
+            keys += [s["id"] for s in t["states"] if s["id"] not in ("started", "closed")]
         words = ["Coze" + "Loop", "coze" + "loop", "eval_" + "resources", "Auto" + "Research", "MC" + "GS", "贝索" + "斯",
                  "Claude in " + "Chrome", "mcp__" + "ccd", "ccd_" + "session"]
         earlier = "(?<!当)" + "前" + "文"         # a pointer to earlier text; “当前文件” is not one

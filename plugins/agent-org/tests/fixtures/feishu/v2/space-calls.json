@@ -1,0 +1,4849 @@
+[
+ {
+  "argv": [
+   "project",
+   "search",
+   "--project-key",
+   "research_template"
+  ],
+  "out": {
+   "pagination": {
+    "has_more": false,
+    "page_num": 1,
+    "page_size": 50,
+    "total": 1
+   },
+   "projects": [
+    {
+     "name": "research_template",
+     "project_key": "6af529535111c30e59b3bc9b",
+     "simple_name": "23d4bx"
+    }
+   ]
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "meta-types",
+   "--project-key",
+   "6af529535111c30e59b3bc9b"
+  ],
+  "out": {
+   "list": [
+    {
+     "api_name": "story",
+     "enable_model_resource_lib": false,
+     "is_disable": 1,
+     "name": "需求",
+     "type_key": "story"
+    },
+    {
+     "api_name": "issue",
+     "enable_model_resource_lib": false,
+     "is_disable": 1,
+     "name": "缺陷",
+     "type_key": "issue"
+    },
+    {
+     "api_name": "version",
+     "enable_model_resource_lib": false,
+     "is_disable": 1,
+     "name": "版本",
+     "type_key": "version"
+    },
+    {
+     "api_name": "sprint",
+     "enable_model_resource_lib": false,
+     "is_disable": 1,
+     "name": "迭代",
+     "type_key": "sprint"
+    },
+    {
+     "api_name": "chart",
+     "enable_model_resource_lib": false,
+     "is_disable": 2,
+     "name": "图表",
+     "type_key": "chart"
+    },
+    {
+     "api_name": "sub_task",
+     "enable_model_resource_lib": false,
+     "is_disable": 2,
+     "name": "任务",
+     "type_key": "sub_task"
+    },
+    {
+     "api_name": "decision",
+     "enable_model_resource_lib": false,
+     "is_disable": 2,
+     "name": "决策",
+     "type_key": "6af529fcc905a887597ddf7a"
+    },
+    {
+     "api_name": "feedback",
+     "enable_model_resource_lib": false,
+     "is_disable": 2,
+     "name": "反馈",
+     "type_key": "6af52a831940098d54c23445"
+    },
+    {
+     "api_name": "same_seq",
+     "enable_model_resource_lib": false,
+     "is_disable": 2,
+     "name": "同序列需求",
+     "type_key": "6af52aa5f4eb45076715aa5c"
+    },
+    {
+     "api_name": "cross_request",
+     "enable_model_resource_lib": false,
+     "is_disable": 2,
+     "name": "跨序列需求",
+     "type_key": "6af52ac56f0ad3fdf779a4d9"
+    },
+    {
+     "api_name": "research_task",
+     "enable_model_resource_lib": false,
+     "is_disable": 2,
+     "name": "研究任务",
+     "type_key": "6af52adffa8782e34e4a97e7"
+    }
+   ]
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "meta-fields",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-type",
+   "6af529fcc905a887597ddf7a",
+   "--page-num",
+   "1"
+  ],
+  "out": {
+   "list": [
+    {
+     "field_key": "name",
+     "field_name": "名称",
+     "field_type": "_name"
+    },
+    {
+     "field_key": "template",
+     "field_name": "决策类型",
+     "field_type": "_work_item_template",
+     "option": [
+      {
+       "option_id": "11235169",
+       "option_name": "默认决策类型"
+      }
+     ]
+    },
+    {
+     "field_key": "priority",
+     "field_name": "优先级",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "option_2",
+       "option_name": "P1"
+      },
+      {
+       "option_id": "option_3",
+       "option_name": "P2"
+      },
+      {
+       "option_id": "option_1",
+       "option_name": "P0"
+      }
+     ]
+    },
+    {
+     "field_key": "start_time",
+     "field_name": "创建时间",
+     "field_type": "date"
+    },
+    {
+     "field_key": "owner",
+     "field_name": "创建者",
+     "field_type": "user"
+    },
+    {
+     "field_key": "watchers",
+     "field_name": "关注人",
+     "field_type": "multi-user"
+    },
+    {
+     "field_key": "description",
+     "field_name": "描述",
+     "field_type": "multi-text"
+    },
+    {
+     "field_key": "business",
+     "field_name": "业务线",
+     "field_type": "_business"
+    },
+    {
+     "field_key": "owned_project",
+     "field_name": "所属空间",
+     "field_type": "owned_project"
+    },
+    {
+     "field_key": "work_item_id",
+     "field_name": "工作项id",
+     "field_type": "number"
+    },
+    {
+     "field_key": "current_status_operator",
+     "field_name": "当前负责人",
+     "field_type": "multi-user"
+    },
+    {
+     "field_key": "work_item_type_key",
+     "field_name": "工作项类型",
+     "field_type": "select",
+     "option": [
+      {
+       "disabled": true,
+       "option_id": "story",
+       "option_name": "需求"
+      },
+      {
+       "disabled": true,
+       "option_id": "issue",
+       "option_name": "缺陷"
+      },
+      {
+       "disabled": true,
+       "option_id": "version",
+       "option_name": "版本"
+      },
+      {
+       "disabled": true,
+       "option_id": "sprint",
+       "option_name": "迭代"
+      },
+      {
+       "option_id": "sub_task",
+       "option_name": "任务"
+      },
+      {
+       "option_id": "6af529fcc905a887597ddf7a",
+       "option_name": "决策"
+      },
+      {
+       "option_id": "6af52a831940098d54c23445",
+       "option_name": "反馈"
+      },
+      {
+       "option_id": "6af52aa5f4eb45076715aa5c",
+       "option_name": "同序列需求"
+      },
+      {
+       "option_id": "6af52ac56f0ad3fdf779a4d9",
+       "option_name": "跨序列需求"
+      },
+      {
+       "option_id": "6af52adffa8782e34e4a97e7",
+       "option_name": "研究任务"
+      }
+     ]
+    },
+    {
+     "field_key": "updated_by",
+     "field_name": "更新人",
+     "field_type": "user"
+    },
+    {
+     "field_key": "updated_at",
+     "field_name": "更新时间",
+     "field_type": "date"
+    },
+    {
+     "field_key": "auto_number",
+     "field_name": "自增数字",
+     "field_type": "number"
+    },
+    {
+     "field_key": "is_frozen",
+     "field_name": "是否冻结",
+     "field_type": "bool"
+    },
+    {
+     "field_key": "template_version",
+     "field_name": "流程版本",
+     "field_type": "number"
+    },
+    {
+     "field_key": "finish_time",
+     "field_name": "完成日期",
+     "field_type": "date"
+    },
+    {
+     "field_key": "finish_status",
+     "field_name": "是否完成",
+     "field_type": "bool"
+    },
+    {
+     "field_key": "abort_reason",
+     "field_name": "终止原因",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "other",
+       "option_name": "其他"
+      },
+      {
+       "option_id": "repeat",
+       "option_name": "重复/合并，与其他在做工作项一同推进"
+      },
+      {
+       "option_id": "cancel",
+       "option_name": "取消，现在先不做了"
+      },
+      {
+       "option_id": "test",
+       "option_name": "测试一下"
+      }
+     ]
+    },
+    {
+     "field_key": "abort_detail",
+     "field_name": "补充终止原因",
+     "field_type": "text"
+    },
+    {
+     "field_key": "work_item_status",
+     "field_name": "状态",
+     "field_type": "_work_item_status",
+     "option": [
+      {
+       "option_id": "started",
+       "option_name": "开始"
+      },
+      {
+       "option_id": "closed",
+       "option_name": "已终止"
+      },
+      {
+       "option_id": "lnU7L_6Xi",
+       "option_name": "待决定"
+      },
+      {
+       "option_id": "9jisyYhgI",
+       "option_name": "已决定"
+      },
+      {
+       "option_id": "KRFM5-Uvr",
+       "option_name": "归档"
+      }
+     ]
+    },
+    {
+     "field_key": "field_fb8b6f",
+     "field_name": "序列",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "aosgf3o3m",
+       "option_name": "产品"
+      },
+      {
+       "option_id": "z5yyx1ydb",
+       "option_name": "算法"
+      },
+      {
+       "option_id": "6uby099bs",
+       "option_name": "工程"
+      },
+      {
+       "option_id": "vf6728xiv",
+       "option_name": "基础设施"
+      },
+      {
+       "option_id": "sss6ddbo_",
+       "option_name": "质量"
+      },
+      {
+       "option_id": "66yn66ovk",
+       "option_name": "项目管理"
+      },
+      {
+       "option_id": "uz407oszy",
+       "option_name": "外联"
+      }
+     ]
+    },
+    {
+     "field_key": "field_fca41d",
+     "field_name": "发出方",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_bdee59",
+     "field_name": "主文档",
+     "field_type": "link"
+    },
+    {
+     "field_key": "field_575300",
+     "field_name": "紧急程度",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "w593n02lh",
+       "option_name": "插队"
+      },
+      {
+       "option_id": "y2nou8gnf",
+       "option_name": "今天"
+      },
+      {
+       "option_id": "xtht4g5lh",
+       "option_name": "本周"
+      },
+      {
+       "option_id": "7fbufvyoz",
+       "option_name": "可延后"
+      }
+     ]
+    },
+    {
+     "field_key": "field_0fbfa6",
+     "field_name": "决定内容",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_18f971",
+     "field_name": "决定人",
+     "field_type": "user"
+    },
+    {
+     "field_key": "field_44688b",
+     "field_name": "签字结果",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "hdeef9pq8",
+       "option_name": "批准"
+      },
+      {
+       "option_id": "zoyaapsd9",
+       "option_name": "退回"
+      }
+     ]
+    },
+    {
+     "field_key": "field_71c1fe",
+     "field_name": "来源工作项",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_5aae97",
+     "field_name": "所属研究任务",
+     "field_type": "text"
+    }
+   ],
+   "pagination": {
+    "has_more": false,
+    "page_num": 1,
+    "page_size": 50,
+    "total": 31
+   }
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "meta-roles",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-type",
+   "6af529fcc905a887597ddf7a",
+   "--page-num",
+   "1"
+  ],
+  "out": {
+   "list": [
+    {
+     "role_id": "researcher",
+     "role_name": "研究员"
+    },
+    {
+     "role_id": "scribe",
+     "role_name": "书记员"
+    }
+   ],
+   "pagination": {
+    "has_more": false,
+    "page_num": 1,
+    "page_size": 50,
+    "total": 2
+   }
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "meta-create-fields",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-type",
+   "6af529fcc905a887597ddf7a"
+  ],
+  "out": {
+   "FieldConfList": [
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "urgency",
+     "field_key": "field_575300",
+     "field_name": "紧急程度",
+     "field_type_key": "select",
+     "is_required": 1
+    },
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "sender",
+     "field_key": "field_fca41d",
+     "field_name": "发出方",
+     "field_type_key": "text",
+     "is_required": 1
+    },
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "sequence",
+     "field_key": "field_fb8b6f",
+     "field_name": "序列",
+     "field_type_key": "select",
+     "is_required": 1
+    },
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "main_doc",
+     "field_key": "field_bdee59",
+     "field_name": "主文档",
+     "field_type_key": "link",
+     "is_required": 1
+    }
+   ]
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "query",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--mql",
+   "SELECT `work_item_id` FROM `6af529535111c30e59b3bc9b`.`6af529fcc905a887597ddf7a` WHERE `template` = '默认决策类型' LIMIT 1"
+  ],
+  "out": {
+   "data": {
+    "1": [
+     {
+      "moql_field_list": [
+       {
+        "key": "work_item_id",
+        "name": "工作项id",
+        "value": {
+         "long_value": 7166628110
+        },
+        "value_type": "long_value"
+       }
+      ]
+     }
+    ]
+   },
+   "extra_info": null,
+   "list": [
+    {
+     "count": 1,
+     "group_infos": [
+      {
+       "group_id": "1",
+       "group_name": "未知分组"
+      }
+     ]
+    }
+   ],
+   "search_status_info": null,
+   "session_id": "recorded"
+  }
+ },
+ {
+  "argv": [
+   "workflow",
+   "get-node",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-id",
+   "7166628110",
+   "--page-num",
+   "1"
+  ],
+  "out": {
+   "list": [
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "scribe": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "归档",
+      "next_node_keys": [],
+      "node_key": "archive",
+      "node_uuid": "node_archive_7166628110",
+      "pre_node_keys": [
+       "started"
+      ],
+      "status": "finished"
+     },
+     "form_items": [],
+     "schedule": {
+      "actual_begin_time": 1794454126770,
+      "actual_finish_time": 1794454128972,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "researcher": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "决定",
+      "next_node_keys": [
+       "archive"
+      ],
+      "node_key": "started",
+      "node_uuid": "node_started_7166628110",
+      "pre_node_keys": [],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_18f971",
+       "field_name": "决定人",
+       "field_type": "user",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "[{\"username\":\"7000000000000000001\",\"email\":\"\",\"nickname\":\"\",\"name_en\":\"\",\"employeeId\":\"\",\"avatar\":\"\",\"larkOpenId\":\"\"}]",
+       "value_label": ""
+      },
+      {
+       "field_key": "field_0fbfa6",
+       "field_name": "决定内容",
+       "field_type": "text",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "样例：批准",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794454119680,
+      "actual_finish_time": 1794454121984,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    }
+   ],
+   "pagination": {
+    "has_more": false,
+    "page_num": 1,
+    "page_size": 20,
+    "total": 2
+   },
+   "workflow_template": {
+    "template_id": 11235169,
+    "template_version": 2
+   }
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "meta-fields",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-type",
+   "6af52a831940098d54c23445",
+   "--page-num",
+   "1"
+  ],
+  "out": {
+   "list": [
+    {
+     "field_key": "name",
+     "field_name": "名称",
+     "field_type": "_name"
+    },
+    {
+     "field_key": "template",
+     "field_name": "反馈类型",
+     "field_type": "_work_item_template",
+     "option": [
+      {
+       "option_id": "11235181",
+       "option_name": "默认反馈类型"
+      }
+     ]
+    },
+    {
+     "field_key": "priority",
+     "field_name": "优先级",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "option_1",
+       "option_name": "P0"
+      },
+      {
+       "option_id": "option_3",
+       "option_name": "P2"
+      },
+      {
+       "option_id": "option_2",
+       "option_name": "P1"
+      }
+     ]
+    },
+    {
+     "field_key": "start_time",
+     "field_name": "创建时间",
+     "field_type": "date"
+    },
+    {
+     "field_key": "owner",
+     "field_name": "创建者",
+     "field_type": "user"
+    },
+    {
+     "field_key": "watchers",
+     "field_name": "关注人",
+     "field_type": "multi-user"
+    },
+    {
+     "field_key": "description",
+     "field_name": "描述",
+     "field_type": "multi-text"
+    },
+    {
+     "field_key": "business",
+     "field_name": "业务线",
+     "field_type": "_business"
+    },
+    {
+     "field_key": "owned_project",
+     "field_name": "所属空间",
+     "field_type": "owned_project"
+    },
+    {
+     "field_key": "work_item_id",
+     "field_name": "工作项id",
+     "field_type": "number"
+    },
+    {
+     "field_key": "current_status_operator",
+     "field_name": "当前负责人",
+     "field_type": "multi-user"
+    },
+    {
+     "field_key": "work_item_type_key",
+     "field_name": "工作项类型",
+     "field_type": "select",
+     "option": [
+      {
+       "disabled": true,
+       "option_id": "story",
+       "option_name": "需求"
+      },
+      {
+       "disabled": true,
+       "option_id": "issue",
+       "option_name": "缺陷"
+      },
+      {
+       "disabled": true,
+       "option_id": "version",
+       "option_name": "版本"
+      },
+      {
+       "disabled": true,
+       "option_id": "sprint",
+       "option_name": "迭代"
+      },
+      {
+       "option_id": "sub_task",
+       "option_name": "任务"
+      },
+      {
+       "option_id": "6af529fcc905a887597ddf7a",
+       "option_name": "决策"
+      },
+      {
+       "option_id": "6af52a831940098d54c23445",
+       "option_name": "反馈"
+      },
+      {
+       "option_id": "6af52aa5f4eb45076715aa5c",
+       "option_name": "同序列需求"
+      },
+      {
+       "option_id": "6af52ac56f0ad3fdf779a4d9",
+       "option_name": "跨序列需求"
+      },
+      {
+       "option_id": "6af52adffa8782e34e4a97e7",
+       "option_name": "研究任务"
+      }
+     ]
+    },
+    {
+     "field_key": "updated_by",
+     "field_name": "更新人",
+     "field_type": "user"
+    },
+    {
+     "field_key": "updated_at",
+     "field_name": "更新时间",
+     "field_type": "date"
+    },
+    {
+     "field_key": "auto_number",
+     "field_name": "自增数字",
+     "field_type": "number"
+    },
+    {
+     "field_key": "is_frozen",
+     "field_name": "是否冻结",
+     "field_type": "bool"
+    },
+    {
+     "field_key": "template_version",
+     "field_name": "流程版本",
+     "field_type": "number"
+    },
+    {
+     "field_key": "finish_time",
+     "field_name": "完成日期",
+     "field_type": "date"
+    },
+    {
+     "field_key": "finish_status",
+     "field_name": "是否完成",
+     "field_type": "bool"
+    },
+    {
+     "field_key": "abort_reason",
+     "field_name": "终止原因",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "repeat",
+       "option_name": "重复/合并，与其他在做工作项一同推进"
+      },
+      {
+       "option_id": "test",
+       "option_name": "测试一下"
+      },
+      {
+       "option_id": "other",
+       "option_name": "其他"
+      },
+      {
+       "option_id": "cancel",
+       "option_name": "取消，现在先不做了"
+      }
+     ]
+    },
+    {
+     "field_key": "abort_detail",
+     "field_name": "补充终止原因",
+     "field_type": "text"
+    },
+    {
+     "field_key": "work_item_status",
+     "field_name": "状态",
+     "field_type": "_work_item_status",
+     "option": [
+      {
+       "option_id": "started",
+       "option_name": "开始"
+      },
+      {
+       "option_id": "closed",
+       "option_name": "已终止"
+      },
+      {
+       "option_id": "vAOHO1Wjp",
+       "option_name": "待解析"
+      },
+      {
+       "option_id": "CXcTTugTG",
+       "option_name": "已处理"
+      },
+      {
+       "option_id": "TtC7xZnhU",
+       "option_name": "归档"
+      }
+     ]
+    },
+    {
+     "field_key": "field_fb8b6f",
+     "field_name": "序列",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "aosgf3o3m",
+       "option_name": "产品"
+      },
+      {
+       "option_id": "z5yyx1ydb",
+       "option_name": "算法"
+      },
+      {
+       "option_id": "6uby099bs",
+       "option_name": "工程"
+      },
+      {
+       "option_id": "vf6728xiv",
+       "option_name": "基础设施"
+      },
+      {
+       "option_id": "sss6ddbo_",
+       "option_name": "质量"
+      },
+      {
+       "option_id": "66yn66ovk",
+       "option_name": "项目管理"
+      },
+      {
+       "option_id": "uz407oszy",
+       "option_name": "外联"
+      }
+     ]
+    },
+    {
+     "field_key": "field_fca41d",
+     "field_name": "发出方",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_bdee59",
+     "field_name": "主文档",
+     "field_type": "link"
+    },
+    {
+     "field_key": "field_5aae97",
+     "field_name": "所属研究任务",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_afce85",
+     "field_name": "类别",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "thoh7hdyk",
+       "option_name": "决定"
+      },
+      {
+       "option_id": "blpairhpk",
+       "option_name": "要求"
+      },
+      {
+       "option_id": "8t4dxaifq",
+       "option_name": "疑问"
+      }
+     ]
+    },
+    {
+     "field_key": "field_0f11a6",
+     "field_name": "处理说明",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_b6d4a1",
+     "field_name": "转成的工作项",
+     "field_type": "text"
+    }
+   ],
+   "pagination": {
+    "has_more": false,
+    "page_num": 1,
+    "page_size": 50,
+    "total": 29
+   }
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "meta-roles",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-type",
+   "6af52a831940098d54c23445",
+   "--page-num",
+   "1"
+  ],
+  "out": {
+   "list": [
+    {
+     "role_id": "pmo",
+     "role_name": "项目管理"
+    },
+    {
+     "role_id": "scribe",
+     "role_name": "书记员"
+    }
+   ],
+   "pagination": {
+    "has_more": false,
+    "page_num": 1,
+    "page_size": 50,
+    "total": 2
+   }
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "meta-create-fields",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-type",
+   "6af52a831940098d54c23445"
+  ],
+  "out": {
+   "FieldConfList": [
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "main_doc",
+     "field_key": "field_bdee59",
+     "field_name": "主文档",
+     "field_type_key": "link",
+     "is_required": 1
+    }
+   ]
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "query",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--mql",
+   "SELECT `work_item_id` FROM `6af529535111c30e59b3bc9b`.`6af52a831940098d54c23445` WHERE `template` = '默认反馈类型' LIMIT 1"
+  ],
+  "out": {
+   "data": {
+    "1": [
+     {
+      "moql_field_list": [
+       {
+        "key": "work_item_id",
+        "name": "工作项id",
+        "value": {
+         "long_value": 7166857146
+        },
+        "value_type": "long_value"
+       }
+      ]
+     }
+    ]
+   },
+   "extra_info": null,
+   "list": [
+    {
+     "count": 1,
+     "group_infos": [
+      {
+       "group_id": "1",
+       "group_name": "未知分组"
+      }
+     ]
+    }
+   ],
+   "search_status_info": null,
+   "session_id": "recorded"
+  }
+ },
+ {
+  "argv": [
+   "workflow",
+   "get-node",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-id",
+   "7166857146",
+   "--page-num",
+   "1"
+  ],
+  "out": {
+   "list": [
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "pmo": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "解析",
+      "next_node_keys": [
+       "archive"
+      ],
+      "node_key": "started",
+      "node_uuid": "node_started_7166857146",
+      "pre_node_keys": [],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_0f11a6",
+       "field_name": "处理说明",
+       "field_type": "text",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "样例：这条反馈是一条要求，已拆成一条同序列需求。",
+       "value_label": ""
+      },
+      {
+       "field_key": "field_afce85",
+       "field_name": "类别",
+       "field_type": "select",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "blpairhpk",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794456476976,
+      "actual_finish_time": 1794456479505,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "scribe": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "归档",
+      "next_node_keys": [],
+      "node_key": "archive",
+      "node_uuid": "node_archive_7166857146",
+      "pre_node_keys": [
+       "started"
+      ],
+      "status": "finished"
+     },
+     "form_items": [],
+     "schedule": {
+      "actual_begin_time": 1794456482961,
+      "actual_finish_time": 1794456485632,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    }
+   ],
+   "pagination": {
+    "has_more": false,
+    "page_num": 1,
+    "page_size": 20,
+    "total": 2
+   },
+   "workflow_template": {
+    "template_id": 11235181,
+    "template_version": 2
+   }
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "meta-fields",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-type",
+   "6af52aa5f4eb45076715aa5c",
+   "--page-num",
+   "1"
+  ],
+  "out": {
+   "list": [
+    {
+     "field_key": "name",
+     "field_name": "名称",
+     "field_type": "_name"
+    },
+    {
+     "field_key": "template",
+     "field_name": "同序列需求类型",
+     "field_type": "_work_item_template",
+     "option": [
+      {
+       "option_id": "11235185",
+       "option_name": "默认同序列需求类型"
+      }
+     ]
+    },
+    {
+     "field_key": "priority",
+     "field_name": "优先级",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "option_1",
+       "option_name": "P0"
+      },
+      {
+       "option_id": "option_3",
+       "option_name": "P2"
+      },
+      {
+       "option_id": "option_2",
+       "option_name": "P1"
+      }
+     ]
+    },
+    {
+     "field_key": "start_time",
+     "field_name": "创建时间",
+     "field_type": "date"
+    },
+    {
+     "field_key": "owner",
+     "field_name": "创建者",
+     "field_type": "user"
+    },
+    {
+     "field_key": "watchers",
+     "field_name": "关注人",
+     "field_type": "multi-user"
+    },
+    {
+     "field_key": "description",
+     "field_name": "描述",
+     "field_type": "multi-text"
+    },
+    {
+     "field_key": "business",
+     "field_name": "业务线",
+     "field_type": "_business"
+    },
+    {
+     "field_key": "owned_project",
+     "field_name": "所属空间",
+     "field_type": "owned_project"
+    },
+    {
+     "field_key": "work_item_id",
+     "field_name": "工作项id",
+     "field_type": "number"
+    },
+    {
+     "field_key": "current_status_operator",
+     "field_name": "当前负责人",
+     "field_type": "multi-user"
+    },
+    {
+     "field_key": "work_item_type_key",
+     "field_name": "工作项类型",
+     "field_type": "select",
+     "option": [
+      {
+       "disabled": true,
+       "option_id": "story",
+       "option_name": "需求"
+      },
+      {
+       "disabled": true,
+       "option_id": "issue",
+       "option_name": "缺陷"
+      },
+      {
+       "disabled": true,
+       "option_id": "version",
+       "option_name": "版本"
+      },
+      {
+       "disabled": true,
+       "option_id": "sprint",
+       "option_name": "迭代"
+      },
+      {
+       "option_id": "sub_task",
+       "option_name": "任务"
+      },
+      {
+       "option_id": "6af529fcc905a887597ddf7a",
+       "option_name": "决策"
+      },
+      {
+       "option_id": "6af52a831940098d54c23445",
+       "option_name": "反馈"
+      },
+      {
+       "option_id": "6af52aa5f4eb45076715aa5c",
+       "option_name": "同序列需求"
+      },
+      {
+       "option_id": "6af52ac56f0ad3fdf779a4d9",
+       "option_name": "跨序列需求"
+      },
+      {
+       "option_id": "6af52adffa8782e34e4a97e7",
+       "option_name": "研究任务"
+      }
+     ]
+    },
+    {
+     "field_key": "updated_by",
+     "field_name": "更新人",
+     "field_type": "user"
+    },
+    {
+     "field_key": "updated_at",
+     "field_name": "更新时间",
+     "field_type": "date"
+    },
+    {
+     "field_key": "auto_number",
+     "field_name": "自增数字",
+     "field_type": "number"
+    },
+    {
+     "field_key": "is_frozen",
+     "field_name": "是否冻结",
+     "field_type": "bool"
+    },
+    {
+     "field_key": "template_version",
+     "field_name": "流程版本",
+     "field_type": "number"
+    },
+    {
+     "field_key": "finish_time",
+     "field_name": "完成日期",
+     "field_type": "date"
+    },
+    {
+     "field_key": "finish_status",
+     "field_name": "是否完成",
+     "field_type": "bool"
+    },
+    {
+     "field_key": "abort_reason",
+     "field_name": "终止原因",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "repeat",
+       "option_name": "重复/合并，与其他在做工作项一同推进"
+      },
+      {
+       "option_id": "test",
+       "option_name": "测试一下"
+      },
+      {
+       "option_id": "other",
+       "option_name": "其他"
+      },
+      {
+       "option_id": "cancel",
+       "option_name": "取消，现在先不做了"
+      }
+     ]
+    },
+    {
+     "field_key": "abort_detail",
+     "field_name": "补充终止原因",
+     "field_type": "text"
+    },
+    {
+     "field_key": "work_item_status",
+     "field_name": "状态",
+     "field_type": "_work_item_status",
+     "option": [
+      {
+       "option_id": "started",
+       "option_name": "开始"
+      },
+      {
+       "option_id": "closed",
+       "option_name": "已终止"
+      },
+      {
+       "option_id": "5-TGJSo1f",
+       "option_name": "待开工"
+      },
+      {
+       "option_id": "RV0FX1GEx",
+       "option_name": "执行中"
+      },
+      {
+       "option_id": "RY7tROwJh",
+       "option_name": "待验收"
+      },
+      {
+       "option_id": "e55AdMyyg",
+       "option_name": "已验收"
+      },
+      {
+       "option_id": "EfB_q1kjY",
+       "option_name": "归档"
+      }
+     ]
+    },
+    {
+     "field_key": "field_fb8b6f",
+     "field_name": "序列",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "aosgf3o3m",
+       "option_name": "产品"
+      },
+      {
+       "option_id": "z5yyx1ydb",
+       "option_name": "算法"
+      },
+      {
+       "option_id": "6uby099bs",
+       "option_name": "工程"
+      },
+      {
+       "option_id": "vf6728xiv",
+       "option_name": "基础设施"
+      },
+      {
+       "option_id": "sss6ddbo_",
+       "option_name": "质量"
+      },
+      {
+       "option_id": "66yn66ovk",
+       "option_name": "项目管理"
+      },
+      {
+       "option_id": "uz407oszy",
+       "option_name": "外联"
+      }
+     ]
+    },
+    {
+     "field_key": "field_fca41d",
+     "field_name": "发出方",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_bdee59",
+     "field_name": "主文档",
+     "field_type": "link"
+    },
+    {
+     "field_key": "field_71c1fe",
+     "field_name": "来源工作项",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_5aae97",
+     "field_name": "所属研究任务",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_d7bb7d",
+     "field_name": "负责会话",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_926586",
+     "field_name": "关系",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "m1fjja6aa",
+       "option_name": "下发"
+      },
+      {
+       "option_id": "9v5r8xnd6",
+       "option_name": "执行"
+      }
+     ]
+    },
+    {
+     "field_key": "field_a8ac02",
+     "field_name": "交付包",
+     "field_type": "link"
+    },
+    {
+     "field_key": "field_fd4746",
+     "field_name": "阻塞原因",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_f2c788",
+     "field_name": "阻塞开始日期",
+     "field_type": "date"
+    },
+    {
+     "field_key": "field_a8cea5",
+     "field_name": "截止时间",
+     "field_type": "date"
+    },
+    {
+     "field_key": "field_0e2291",
+     "field_name": "规格版本",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_23c3e3",
+     "field_name": "评测集版本",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_c83d0f",
+     "field_name": "运行 ID",
+     "field_type": "text"
+    }
+   ],
+   "pagination": {
+    "has_more": false,
+    "page_num": 1,
+    "page_size": 50,
+    "total": 36
+   }
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "meta-roles",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-type",
+   "6af52aa5f4eb45076715aa5c",
+   "--page-num",
+   "1"
+  ],
+  "out": {
+   "list": [
+    {
+     "role_id": "issuer",
+     "role_name": "发出方"
+    },
+    {
+     "role_id": "assignee",
+     "role_name": "承接方"
+    },
+    {
+     "role_id": "scribe",
+     "role_name": "书记员"
+    }
+   ],
+   "pagination": {
+    "has_more": false,
+    "page_num": 1,
+    "page_size": 50,
+    "total": 3
+   }
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "meta-create-fields",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-type",
+   "6af52aa5f4eb45076715aa5c"
+  ],
+  "out": {
+   "FieldConfList": [
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "sequence",
+     "field_key": "field_fb8b6f",
+     "field_name": "序列",
+     "field_type_key": "select",
+     "is_required": 1
+    },
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "relation",
+     "field_key": "field_926586",
+     "field_name": "关系",
+     "field_type_key": "select",
+     "is_required": 1
+    },
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "main_doc",
+     "field_key": "field_bdee59",
+     "field_name": "主文档",
+     "field_type_key": "link",
+     "is_required": 1
+    },
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "owner_session",
+     "field_key": "field_d7bb7d",
+     "field_name": "负责会话",
+     "field_type_key": "text",
+     "is_required": 1
+    },
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "sender",
+     "field_key": "field_fca41d",
+     "field_name": "发出方",
+     "field_type_key": "text",
+     "is_required": 1
+    },
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "task_ref",
+     "field_key": "field_5aae97",
+     "field_name": "所属研究任务",
+     "field_type_key": "text",
+     "is_required": 1
+    }
+   ]
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "query",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--mql",
+   "SELECT `work_item_id` FROM `6af529535111c30e59b3bc9b`.`6af52aa5f4eb45076715aa5c` WHERE `template` = '默认同序列需求类型' LIMIT 1"
+  ],
+  "out": {
+   "data": {
+    "1": [
+     {
+      "moql_field_list": [
+       {
+        "key": "work_item_id",
+        "name": "工作项id",
+        "value": {
+         "long_value": 7166854501
+        },
+        "value_type": "long_value"
+       }
+      ]
+     }
+    ]
+   },
+   "extra_info": null,
+   "list": [
+    {
+     "count": 1,
+     "group_infos": [
+      {
+       "group_id": "1",
+       "group_name": "未知分组"
+      }
+     ]
+    }
+   ],
+   "search_status_info": null,
+   "session_id": "recorded"
+  }
+ },
+ {
+  "argv": [
+   "workflow",
+   "get-node",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-id",
+   "7166854501",
+   "--page-num",
+   "1"
+  ],
+  "out": {
+   "list": [
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "issuer": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "验收",
+      "next_node_keys": [
+       "archive"
+      ],
+      "node_key": "accept",
+      "node_uuid": "node_accept_7166854501",
+      "pre_node_keys": [
+       "execute"
+      ],
+      "status": "finished"
+     },
+     "form_items": [],
+     "schedule": {
+      "actual_begin_time": 1794458054748,
+      "actual_finish_time": 1794458055838,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "scribe": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "归档",
+      "next_node_keys": [],
+      "node_key": "archive",
+      "node_uuid": "node_archive_7166854501",
+      "pre_node_keys": [
+       "accept"
+      ],
+      "status": "finished"
+     },
+     "form_items": [],
+     "schedule": {
+      "actual_begin_time": 1794458060795,
+      "actual_finish_time": 1794458063359,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "assignee": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "开工",
+      "next_node_keys": [
+       "execute"
+      ],
+      "node_key": "started",
+      "node_uuid": "node_started_7166854501",
+      "pre_node_keys": [],
+      "status": "finished"
+     },
+     "form_items": [],
+     "schedule": {
+      "actual_begin_time": 1794458033676,
+      "actual_finish_time": 1794458044250,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "assignee": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "执行",
+      "next_node_keys": [
+       "accept"
+      ],
+      "node_key": "execute",
+      "node_uuid": "node_execute_7166854501",
+      "pre_node_keys": [
+       "started"
+      ],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_a8ac02",
+       "field_name": "交付包",
+       "field_type": "link",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "https://project.feishu.cn/23d4bx",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794458052103,
+      "actual_finish_time": 1794458054747,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    }
+   ],
+   "pagination": {
+    "has_more": false,
+    "page_num": 1,
+    "page_size": 20,
+    "total": 4
+   },
+   "workflow_template": {
+    "template_id": 11235185,
+    "template_version": 3
+   }
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "meta-fields",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-type",
+   "6af52ac56f0ad3fdf779a4d9",
+   "--page-num",
+   "1"
+  ],
+  "out": {
+   "list": [
+    {
+     "field_key": "name",
+     "field_name": "名称",
+     "field_type": "_name"
+    },
+    {
+     "field_key": "template",
+     "field_name": "跨序列需求类型",
+     "field_type": "_work_item_template",
+     "option": [
+      {
+       "option_id": "11235187",
+       "option_name": "默认跨序列需求类型"
+      }
+     ]
+    },
+    {
+     "field_key": "priority",
+     "field_name": "优先级",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "option_3",
+       "option_name": "P2"
+      },
+      {
+       "option_id": "option_1",
+       "option_name": "P0"
+      },
+      {
+       "option_id": "option_2",
+       "option_name": "P1"
+      }
+     ]
+    },
+    {
+     "field_key": "start_time",
+     "field_name": "创建时间",
+     "field_type": "date"
+    },
+    {
+     "field_key": "owner",
+     "field_name": "创建者",
+     "field_type": "user"
+    },
+    {
+     "field_key": "watchers",
+     "field_name": "关注人",
+     "field_type": "multi-user"
+    },
+    {
+     "field_key": "description",
+     "field_name": "描述",
+     "field_type": "multi-text"
+    },
+    {
+     "field_key": "business",
+     "field_name": "业务线",
+     "field_type": "_business"
+    },
+    {
+     "field_key": "owned_project",
+     "field_name": "所属空间",
+     "field_type": "owned_project"
+    },
+    {
+     "field_key": "work_item_id",
+     "field_name": "工作项id",
+     "field_type": "number"
+    },
+    {
+     "field_key": "current_status_operator",
+     "field_name": "当前负责人",
+     "field_type": "multi-user"
+    },
+    {
+     "field_key": "work_item_type_key",
+     "field_name": "工作项类型",
+     "field_type": "select",
+     "option": [
+      {
+       "disabled": true,
+       "option_id": "story",
+       "option_name": "需求"
+      },
+      {
+       "disabled": true,
+       "option_id": "issue",
+       "option_name": "缺陷"
+      },
+      {
+       "disabled": true,
+       "option_id": "version",
+       "option_name": "版本"
+      },
+      {
+       "disabled": true,
+       "option_id": "sprint",
+       "option_name": "迭代"
+      },
+      {
+       "option_id": "sub_task",
+       "option_name": "任务"
+      },
+      {
+       "option_id": "6af529fcc905a887597ddf7a",
+       "option_name": "决策"
+      },
+      {
+       "option_id": "6af52a831940098d54c23445",
+       "option_name": "反馈"
+      },
+      {
+       "option_id": "6af52aa5f4eb45076715aa5c",
+       "option_name": "同序列需求"
+      },
+      {
+       "option_id": "6af52ac56f0ad3fdf779a4d9",
+       "option_name": "跨序列需求"
+      },
+      {
+       "option_id": "6af52adffa8782e34e4a97e7",
+       "option_name": "研究任务"
+      }
+     ]
+    },
+    {
+     "field_key": "updated_by",
+     "field_name": "更新人",
+     "field_type": "user"
+    },
+    {
+     "field_key": "updated_at",
+     "field_name": "更新时间",
+     "field_type": "date"
+    },
+    {
+     "field_key": "auto_number",
+     "field_name": "自增数字",
+     "field_type": "number"
+    },
+    {
+     "field_key": "is_frozen",
+     "field_name": "是否冻结",
+     "field_type": "bool"
+    },
+    {
+     "field_key": "template_version",
+     "field_name": "流程版本",
+     "field_type": "number"
+    },
+    {
+     "field_key": "finish_time",
+     "field_name": "完成日期",
+     "field_type": "date"
+    },
+    {
+     "field_key": "finish_status",
+     "field_name": "是否完成",
+     "field_type": "bool"
+    },
+    {
+     "field_key": "abort_reason",
+     "field_name": "终止原因",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "cancel",
+       "option_name": "取消，现在先不做了"
+      },
+      {
+       "option_id": "repeat",
+       "option_name": "重复/合并，与其他在做工作项一同推进"
+      },
+      {
+       "option_id": "other",
+       "option_name": "其他"
+      },
+      {
+       "option_id": "test",
+       "option_name": "测试一下"
+      }
+     ]
+    },
+    {
+     "field_key": "abort_detail",
+     "field_name": "补充终止原因",
+     "field_type": "text"
+    },
+    {
+     "field_key": "work_item_status",
+     "field_name": "状态",
+     "field_type": "_work_item_status",
+     "option": [
+      {
+       "option_id": "started",
+       "option_name": "开始"
+      },
+      {
+       "option_id": "closed",
+       "option_name": "已终止"
+      },
+      {
+       "option_id": "ukFp6XiSY",
+       "option_name": "已退回"
+      },
+      {
+       "option_id": "GZUZTTnCZ",
+       "option_name": "待接单"
+      },
+      {
+       "option_id": "WziCbt_mq",
+       "option_name": "执行中"
+      },
+      {
+       "option_id": "ihl2EAIsu",
+       "option_name": "待验收"
+      },
+      {
+       "option_id": "oRgTytnuA",
+       "option_name": "已验收"
+      },
+      {
+       "option_id": "k3dX-YqEY",
+       "option_name": "归档"
+      }
+     ]
+    },
+    {
+     "field_key": "field_fb8b6f",
+     "field_name": "序列",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "aosgf3o3m",
+       "option_name": "产品"
+      },
+      {
+       "option_id": "z5yyx1ydb",
+       "option_name": "算法"
+      },
+      {
+       "option_id": "6uby099bs",
+       "option_name": "工程"
+      },
+      {
+       "option_id": "vf6728xiv",
+       "option_name": "基础设施"
+      },
+      {
+       "option_id": "sss6ddbo_",
+       "option_name": "质量"
+      },
+      {
+       "option_id": "66yn66ovk",
+       "option_name": "项目管理"
+      },
+      {
+       "option_id": "uz407oszy",
+       "option_name": "外联"
+      }
+     ]
+    },
+    {
+     "field_key": "field_fca41d",
+     "field_name": "发出方",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_bdee59",
+     "field_name": "主文档",
+     "field_type": "link"
+    },
+    {
+     "field_key": "field_71c1fe",
+     "field_name": "来源工作项",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_5aae97",
+     "field_name": "所属研究任务",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_a8ac02",
+     "field_name": "交付包",
+     "field_type": "link"
+    },
+    {
+     "field_key": "field_fd4746",
+     "field_name": "阻塞原因",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_f2c788",
+     "field_name": "阻塞开始日期",
+     "field_type": "date"
+    },
+    {
+     "field_key": "field_a8cea5",
+     "field_name": "截止时间",
+     "field_type": "date"
+    },
+    {
+     "field_key": "field_0e2291",
+     "field_name": "规格版本",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_23c3e3",
+     "field_name": "评测集版本",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_c99f91",
+     "field_name": "发起序列",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "aosgf3o3m",
+       "option_name": "产品"
+      },
+      {
+       "option_id": "z5yyx1ydb",
+       "option_name": "算法"
+      },
+      {
+       "option_id": "6uby099bs",
+       "option_name": "工程"
+      },
+      {
+       "option_id": "vf6728xiv",
+       "option_name": "基础设施"
+      },
+      {
+       "option_id": "sss6ddbo_",
+       "option_name": "质量"
+      },
+      {
+       "option_id": "66yn66ovk",
+       "option_name": "项目管理"
+      },
+      {
+       "option_id": "uz407oszy",
+       "option_name": "外联"
+      }
+     ]
+    },
+    {
+     "field_key": "field_c63cf7",
+     "field_name": "承接序列",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "aosgf3o3m",
+       "option_name": "产品"
+      },
+      {
+       "option_id": "z5yyx1ydb",
+       "option_name": "算法"
+      },
+      {
+       "option_id": "6uby099bs",
+       "option_name": "工程"
+      },
+      {
+       "option_id": "vf6728xiv",
+       "option_name": "基础设施"
+      },
+      {
+       "option_id": "sss6ddbo_",
+       "option_name": "质量"
+      },
+      {
+       "option_id": "66yn66ovk",
+       "option_name": "项目管理"
+      },
+      {
+       "option_id": "uz407oszy",
+       "option_name": "外联"
+      }
+     ]
+    },
+    {
+     "field_key": "field_482b0d",
+     "field_name": "需求复述",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_5d9971",
+     "field_name": "承接范围",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_579068",
+     "field_name": "预计交付时间",
+     "field_type": "date"
+    }
+   ],
+   "pagination": {
+    "has_more": false,
+    "page_num": 1,
+    "page_size": 50,
+    "total": 38
+   }
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "meta-roles",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-type",
+   "6af52ac56f0ad3fdf779a4d9",
+   "--page-num",
+   "1"
+  ],
+  "out": {
+   "list": [
+    {
+     "role_id": "issuer",
+     "role_name": "发出方"
+    },
+    {
+     "role_id": "assignee",
+     "role_name": "承接方"
+    },
+    {
+     "role_id": "scribe",
+     "role_name": "书记员"
+    }
+   ],
+   "pagination": {
+    "has_more": false,
+    "page_num": 1,
+    "page_size": 50,
+    "total": 3
+   }
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "meta-create-fields",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-type",
+   "6af52ac56f0ad3fdf779a4d9"
+  ],
+  "out": {
+   "FieldConfList": [
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "main_doc",
+     "field_key": "field_bdee59",
+     "field_name": "主文档",
+     "field_type_key": "link",
+     "is_required": 1
+    },
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "from_sequence",
+     "field_key": "field_c99f91",
+     "field_name": "发起序列",
+     "field_type_key": "select",
+     "is_required": 1
+    },
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "to_sequence",
+     "field_key": "field_c63cf7",
+     "field_name": "承接序列",
+     "field_type_key": "select",
+     "is_required": 1
+    },
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "sender",
+     "field_key": "field_fca41d",
+     "field_name": "发出方",
+     "field_type_key": "text",
+     "is_required": 1
+    },
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "task_ref",
+     "field_key": "field_5aae97",
+     "field_name": "所属研究任务",
+     "field_type_key": "text",
+     "is_required": 1
+    }
+   ]
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "query",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--mql",
+   "SELECT `work_item_id` FROM `6af529535111c30e59b3bc9b`.`6af52ac56f0ad3fdf779a4d9` WHERE `template` = '默认跨序列需求类型' LIMIT 1"
+  ],
+  "out": {
+   "data": {
+    "1": [
+     {
+      "moql_field_list": [
+       {
+        "key": "work_item_id",
+        "name": "工作项id",
+        "value": {
+         "long_value": 7166547914
+        },
+        "value_type": "long_value"
+       }
+      ]
+     }
+    ]
+   },
+   "extra_info": null,
+   "list": [
+    {
+     "count": 1,
+     "group_infos": [
+      {
+       "group_id": "1",
+       "group_name": "未知分组"
+      }
+     ]
+    }
+   ],
+   "search_status_info": null,
+   "session_id": "recorded"
+  }
+ },
+ {
+  "argv": [
+   "workflow",
+   "get-node",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-id",
+   "7166547914",
+   "--page-num",
+   "1"
+  ],
+  "out": {
+   "list": [
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "assignee": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "执行",
+      "next_node_keys": [
+       "accept"
+      ],
+      "node_key": "execute",
+      "node_uuid": "node_execute_7166547914",
+      "pre_node_keys": [
+       "take_order"
+      ],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_a8ac02",
+       "field_name": "交付包",
+       "field_type": "link",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "https://project.feishu.cn/23d4bx",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794459560188,
+      "actual_finish_time": 1794459562876,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "issuer": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "验收",
+      "next_node_keys": [
+       "archive"
+      ],
+      "node_key": "accept",
+      "node_uuid": "node_accept_7166547914",
+      "pre_node_keys": [
+       "execute"
+      ],
+      "status": "finished"
+     },
+     "form_items": [],
+     "schedule": {
+      "actual_begin_time": 1794459562877,
+      "actual_finish_time": 1794459563853,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "scribe": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "归档",
+      "next_node_keys": [],
+      "node_key": "archive",
+      "node_uuid": "node_archive_7166547914",
+      "pre_node_keys": [
+       "accept"
+      ],
+      "status": "finished"
+     },
+     "form_items": [],
+     "schedule": {
+      "actual_begin_time": 1794459569127,
+      "actual_finish_time": 1794459571582,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "issuer": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "提出",
+      "next_node_keys": [
+       "take_order"
+      ],
+      "node_key": "started",
+      "node_uuid": "node_started_7166547914",
+      "pre_node_keys": [],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_bdee59",
+       "field_name": "主文档",
+       "field_type": "link",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "https://project.feishu.cn/23d4bx",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794459522850,
+      "actual_finish_time": 1794459525407,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "assignee": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "接单",
+      "next_node_keys": [
+       "execute"
+      ],
+      "node_key": "take_order",
+      "node_uuid": "node_take_order_7166547914",
+      "pre_node_keys": [
+       "started"
+      ],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_579068",
+       "field_name": "预计交付时间",
+       "field_type": "date",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "1795176000000",
+       "value_label": ""
+      },
+      {
+       "field_key": "field_5d9971",
+       "field_name": "承接范围",
+       "field_type": "text",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "样例：承接正式分；不承接错误分析，理由是不在本次请求内。",
+       "value_label": ""
+      },
+      {
+       "field_key": "field_482b0d",
+       "field_name": "需求复述",
+       "field_type": "text",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "样例：请质量序列在冻结的 Eval Set 上出一次正式分。",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794459525408,
+      "actual_finish_time": 1794459552828,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    }
+   ],
+   "pagination": {
+    "has_more": false,
+    "page_num": 1,
+    "page_size": 20,
+    "total": 5
+   },
+   "workflow_template": {
+    "template_id": 11235187,
+    "template_version": 4
+   }
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "meta-fields",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-type",
+   "6af52adffa8782e34e4a97e7",
+   "--page-num",
+   "1"
+  ],
+  "out": {
+   "list": [
+    {
+     "field_key": "name",
+     "field_name": "名称",
+     "field_type": "_name"
+    },
+    {
+     "field_key": "template",
+     "field_name": "研究任务类型",
+     "field_type": "_work_item_template",
+     "option": [
+      {
+       "option_id": "11235188",
+       "option_name": "验证"
+      },
+      {
+       "option_id": "11236325",
+       "option_name": "试探"
+      }
+     ]
+    },
+    {
+     "field_key": "priority",
+     "field_name": "优先级",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "option_1",
+       "option_name": "P0"
+      },
+      {
+       "option_id": "option_2",
+       "option_name": "P1"
+      },
+      {
+       "option_id": "option_3",
+       "option_name": "P2"
+      }
+     ]
+    },
+    {
+     "field_key": "start_time",
+     "field_name": "创建时间",
+     "field_type": "date"
+    },
+    {
+     "field_key": "owner",
+     "field_name": "创建者",
+     "field_type": "user"
+    },
+    {
+     "field_key": "watchers",
+     "field_name": "关注人",
+     "field_type": "multi-user"
+    },
+    {
+     "field_key": "description",
+     "field_name": "描述",
+     "field_type": "multi-text"
+    },
+    {
+     "field_key": "business",
+     "field_name": "业务线",
+     "field_type": "_business"
+    },
+    {
+     "field_key": "owned_project",
+     "field_name": "所属空间",
+     "field_type": "owned_project"
+    },
+    {
+     "field_key": "work_item_id",
+     "field_name": "工作项id",
+     "field_type": "number"
+    },
+    {
+     "field_key": "current_status_operator",
+     "field_name": "当前负责人",
+     "field_type": "multi-user"
+    },
+    {
+     "field_key": "work_item_type_key",
+     "field_name": "工作项类型",
+     "field_type": "select",
+     "option": [
+      {
+       "disabled": true,
+       "option_id": "story",
+       "option_name": "需求"
+      },
+      {
+       "disabled": true,
+       "option_id": "issue",
+       "option_name": "缺陷"
+      },
+      {
+       "disabled": true,
+       "option_id": "version",
+       "option_name": "版本"
+      },
+      {
+       "disabled": true,
+       "option_id": "sprint",
+       "option_name": "迭代"
+      },
+      {
+       "option_id": "sub_task",
+       "option_name": "任务"
+      },
+      {
+       "option_id": "6af529fcc905a887597ddf7a",
+       "option_name": "决策"
+      },
+      {
+       "option_id": "6af52a831940098d54c23445",
+       "option_name": "反馈"
+      },
+      {
+       "option_id": "6af52aa5f4eb45076715aa5c",
+       "option_name": "同序列需求"
+      },
+      {
+       "option_id": "6af52ac56f0ad3fdf779a4d9",
+       "option_name": "跨序列需求"
+      },
+      {
+       "option_id": "6af52adffa8782e34e4a97e7",
+       "option_name": "研究任务"
+      }
+     ]
+    },
+    {
+     "field_key": "updated_by",
+     "field_name": "更新人",
+     "field_type": "user"
+    },
+    {
+     "field_key": "updated_at",
+     "field_name": "更新时间",
+     "field_type": "date"
+    },
+    {
+     "field_key": "auto_number",
+     "field_name": "自增数字",
+     "field_type": "number"
+    },
+    {
+     "field_key": "is_frozen",
+     "field_name": "是否冻结",
+     "field_type": "bool"
+    },
+    {
+     "field_key": "template_version",
+     "field_name": "流程版本",
+     "field_type": "number"
+    },
+    {
+     "field_key": "finish_time",
+     "field_name": "完成日期",
+     "field_type": "date"
+    },
+    {
+     "field_key": "finish_status",
+     "field_name": "是否完成",
+     "field_type": "bool"
+    },
+    {
+     "field_key": "abort_reason",
+     "field_name": "终止原因",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "other",
+       "option_name": "其他"
+      },
+      {
+       "option_id": "cancel",
+       "option_name": "取消，现在先不做了"
+      },
+      {
+       "option_id": "test",
+       "option_name": "测试一下"
+      },
+      {
+       "option_id": "repeat",
+       "option_name": "重复/合并，与其他在做工作项一同推进"
+      }
+     ]
+    },
+    {
+     "field_key": "abort_detail",
+     "field_name": "补充终止原因",
+     "field_type": "text"
+    },
+    {
+     "field_key": "work_item_status",
+     "field_name": "状态",
+     "field_type": "_work_item_status",
+     "option": [
+      {
+       "option_id": "started",
+       "option_name": "开始"
+      },
+      {
+       "option_id": "closed",
+       "option_name": "已终止"
+      },
+      {
+       "option_id": "MesKha0O7",
+       "option_name": "定方向"
+      },
+      {
+       "option_id": "56CdFkp8b",
+       "option_name": "试探"
+      },
+      {
+       "option_id": "V5jV9qfKE",
+       "option_name": "提出假设"
+      },
+      {
+       "option_id": "7oJ3yZflk",
+       "option_name": "已结束"
+      },
+      {
+       "option_id": "C14XhzaWw",
+       "option_name": "归档"
+      },
+      {
+       "option_id": "ioWYbA8Ty",
+       "option_name": "确定目标"
+      },
+      {
+       "option_id": "GtQz3_bdd",
+       "option_name": "准备上下文"
+      },
+      {
+       "option_id": "pVn-xu0DM",
+       "option_name": "准备 PRD 和 Eval Set"
+      },
+      {
+       "option_id": "0fI30NjvV",
+       "option_name": "确定假设条件"
+      },
+      {
+       "option_id": "X1VMyagOQ",
+       "option_name": "设计实验方案"
+      },
+      {
+       "option_id": "kl6wIgBgY",
+       "option_name": "搭建实验平台"
+      },
+      {
+       "option_id": "h6mU-1_4z",
+       "option_name": "跑 Eval Set"
+      },
+      {
+       "option_id": "ySCnAl7N-",
+       "option_name": "得出结论"
+      },
+      {
+       "option_id": "kupdRuD6j",
+       "option_name": "下一步讨论"
+      }
+     ]
+    },
+    {
+     "field_key": "field_fb8b6f",
+     "field_name": "序列",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "aosgf3o3m",
+       "option_name": "产品"
+      },
+      {
+       "option_id": "z5yyx1ydb",
+       "option_name": "算法"
+      },
+      {
+       "option_id": "6uby099bs",
+       "option_name": "工程"
+      },
+      {
+       "option_id": "vf6728xiv",
+       "option_name": "基础设施"
+      },
+      {
+       "option_id": "sss6ddbo_",
+       "option_name": "质量"
+      },
+      {
+       "option_id": "66yn66ovk",
+       "option_name": "项目管理"
+      },
+      {
+       "option_id": "uz407oszy",
+       "option_name": "外联"
+      }
+     ]
+    },
+    {
+     "field_key": "field_fca41d",
+     "field_name": "发出方",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_bdee59",
+     "field_name": "主文档",
+     "field_type": "link"
+    },
+    {
+     "field_key": "field_71c1fe",
+     "field_name": "来源工作项",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_fd4746",
+     "field_name": "阻塞原因",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_f2c788",
+     "field_name": "阻塞开始日期",
+     "field_type": "date"
+    },
+    {
+     "field_key": "field_a8cea5",
+     "field_name": "截止时间",
+     "field_type": "date"
+    },
+    {
+     "field_key": "field_0e2291",
+     "field_name": "规格版本",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_23c3e3",
+     "field_name": "评测集版本",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_c83d0f",
+     "field_name": "运行 ID",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_ca29d8",
+     "field_name": "需求文档",
+     "field_type": "link"
+    },
+    {
+     "field_key": "field_d4e0a9",
+     "field_name": "规格",
+     "field_type": "link"
+    },
+    {
+     "field_key": "field_e0ec9b",
+     "field_name": "上下文文档",
+     "field_type": "link"
+    },
+    {
+     "field_key": "field_2c99dd",
+     "field_name": "实验方案",
+     "field_type": "link"
+    },
+    {
+     "field_key": "field_0af5f5",
+     "field_name": "结论文档",
+     "field_type": "link"
+    },
+    {
+     "field_key": "field_3b8c70",
+     "field_name": "试探记录",
+     "field_type": "link"
+    },
+    {
+     "field_key": "field_dca41f",
+     "field_name": "总预算",
+     "field_type": "number"
+    },
+    {
+     "field_key": "field_575b31",
+     "field_name": "已用预算",
+     "field_type": "number"
+    },
+    {
+     "field_key": "field_7f38fb",
+     "field_name": "实验轮次",
+     "field_type": "number"
+    },
+    {
+     "field_key": "field_698641",
+     "field_name": "试过的变体数",
+     "field_type": "number"
+    },
+    {
+     "field_key": "field_6e8276",
+     "field_name": "成功标准",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_eb77f2",
+     "field_name": "波动估计",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_a91c48",
+     "field_name": "试探问题",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_cdf631",
+     "field_name": "候选假设",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_9259c9",
+     "field_name": "假设签字",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_e6f117",
+     "field_name": "冒烟运行 ID",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_20d4e6",
+     "field_name": "下一步签字",
+     "field_type": "text"
+    },
+    {
+     "field_key": "field_0286b6",
+     "field_name": "结论",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "roih6lvsm",
+       "option_name": "成立"
+      },
+      {
+       "option_id": "t0yqbsex7",
+       "option_name": "不成立"
+      },
+      {
+       "option_id": "aw30qa8fz",
+       "option_name": "无法判定"
+      }
+     ]
+    }
+   ],
+   "pagination": {
+    "has_more": true,
+    "page_num": 1,
+    "page_size": 50,
+    "total": 51
+   }
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "meta-fields",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-type",
+   "6af52adffa8782e34e4a97e7",
+   "--page-num",
+   "2"
+  ],
+  "out": {
+   "list": [
+    {
+     "field_key": "field_bc2876",
+     "field_name": "去向",
+     "field_type": "select",
+     "option": [
+      {
+       "option_id": "l0b5wpvj1",
+       "option_name": "转验证"
+      },
+      {
+       "option_id": "gilb_h58a",
+       "option_name": "不再继续"
+      }
+     ]
+    }
+   ],
+   "pagination": {
+    "has_more": false,
+    "page_num": 2,
+    "page_size": 50,
+    "total": 51
+   }
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "meta-roles",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-type",
+   "6af52adffa8782e34e4a97e7",
+   "--page-num",
+   "1"
+  ],
+  "out": {
+   "list": [
+    {
+     "role_id": "product",
+     "role_name": "产品"
+    },
+    {
+     "role_id": "alg",
+     "role_name": "算法"
+    },
+    {
+     "role_id": "rnd",
+     "role_name": "工程"
+    },
+    {
+     "role_id": "infra",
+     "role_name": "基础设施"
+    },
+    {
+     "role_id": "pmo",
+     "role_name": "项目管理"
+    },
+    {
+     "role_id": "issuer",
+     "role_name": "发出方"
+    },
+    {
+     "role_id": "scribe",
+     "role_name": "书记员"
+    }
+   ],
+   "pagination": {
+    "has_more": false,
+    "page_num": 1,
+    "page_size": 50,
+    "total": 7
+   }
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "meta-create-fields",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-type",
+   "6af52adffa8782e34e4a97e7"
+  ],
+  "out": {
+   "FieldConfList": [
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "sequence",
+     "field_key": "field_fb8b6f",
+     "field_name": "序列",
+     "field_type_key": "select",
+     "is_required": 1
+    },
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "sender",
+     "field_key": "field_fca41d",
+     "field_name": "发出方",
+     "field_type_key": "text",
+     "is_required": 1
+    },
+    {
+     "default_value": {
+      "default_appear": 2,
+      "value": null
+     },
+     "field_alias": "main_doc",
+     "field_key": "field_bdee59",
+     "field_name": "主文档",
+     "field_type_key": "link",
+     "is_required": 1
+    }
+   ]
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "query",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--mql",
+   "SELECT `work_item_id` FROM `6af529535111c30e59b3bc9b`.`6af52adffa8782e34e4a97e7` WHERE `template` = '验证' LIMIT 1"
+  ],
+  "out": {
+   "data": {
+    "1": [
+     {
+      "moql_field_list": [
+       {
+        "key": "work_item_id",
+        "name": "工作项id",
+        "value": {
+         "long_value": 7166920436
+        },
+        "value_type": "long_value"
+       }
+      ]
+     }
+    ]
+   },
+   "extra_info": null,
+   "list": [
+    {
+     "count": 1,
+     "group_infos": [
+      {
+       "group_id": "1",
+       "group_name": "未知分组"
+      }
+     ]
+    }
+   ],
+   "search_status_info": null,
+   "session_id": "recorded"
+  }
+ },
+ {
+  "argv": [
+   "workflow",
+   "get-node",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-id",
+   "7166920436",
+   "--page-num",
+   "1"
+  ],
+  "out": {
+   "list": [
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "infra": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "搭建实验平台",
+      "next_node_keys": [
+       "run_eval"
+      ],
+      "node_key": "build_platform",
+      "node_uuid": "node_build_platform_7166920436",
+      "pre_node_keys": [
+       "design_experiment"
+      ],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_e6f117",
+       "field_name": "冒烟运行 ID",
+       "field_type": "text",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "smoke-0001",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794463969440,
+      "actual_finish_time": 1794463970572,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "alg": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "准备上下文",
+      "next_node_keys": [
+       "prep_prd_eval"
+      ],
+      "node_key": "prep_context",
+      "node_uuid": "node_prep_context_7166920436",
+      "pre_node_keys": [
+       "started"
+      ],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_e0ec9b",
+       "field_name": "上下文文档",
+       "field_type": "link",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "https://project.feishu.cn/23d4bx",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794463910533,
+      "actual_finish_time": 1794463912877,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "pmo": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "下一步讨论",
+      "next_node_keys": [
+       "archive"
+      ],
+      "node_key": "next_step",
+      "node_uuid": "node_next_step_7166920436",
+      "pre_node_keys": [
+       "conclude"
+      ],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_20d4e6",
+       "field_name": "下一步签字",
+       "field_type": "text",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "7166628110",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794463974812,
+      "actual_finish_time": 1794463980052,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "product": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "确定目标",
+      "next_node_keys": [
+       "prep_context"
+      ],
+      "node_key": "started",
+      "node_uuid": "node_started_7166920436",
+      "pre_node_keys": [],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_6e8276",
+       "field_name": "成功标准",
+       "field_type": "text",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "样例：在冻结的正式集上准确率不低于基线 2 个点，重复 3 次的标准差小于 0.5。",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794463879812,
+      "actual_finish_time": 1794463910532,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "rnd": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "跑 Eval Set",
+      "next_node_keys": [
+       "conclude"
+      ],
+      "node_key": "run_eval",
+      "node_uuid": "node_run_eval_7166920436",
+      "pre_node_keys": [
+       "build_platform"
+      ],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_c83d0f",
+       "field_name": "运行 ID",
+       "field_type": "text",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "run-0001,run-0002,run-0003",
+       "value_label": ""
+      },
+      {
+       "field_key": "field_698641",
+       "field_name": "试过的变体数",
+       "field_type": "number",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "3",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794463970573,
+      "actual_finish_time": 1794463971677,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "alg": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "得出结论",
+      "next_node_keys": [
+       "next_step"
+      ],
+      "node_key": "conclude",
+      "node_uuid": "node_conclude_7166920436",
+      "pre_node_keys": [
+       "run_eval"
+      ],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_0286b6",
+       "field_name": "结论",
+       "field_type": "select",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "roih6lvsm",
+       "value_label": ""
+      },
+      {
+       "field_key": "field_0af5f5",
+       "field_name": "结论文档",
+       "field_type": "link",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "https://project.feishu.cn/23d4bx",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794463971679,
+      "actual_finish_time": 1794463974810,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "alg": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "设计实验方案",
+      "next_node_keys": [
+       "build_platform"
+      ],
+      "node_key": "design_experiment",
+      "node_uuid": "node_design_experiment_7166920436",
+      "pre_node_keys": [
+       "set_hypothesis"
+      ],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_7f38fb",
+       "field_name": "实验轮次",
+       "field_type": "number",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "2",
+       "value_label": ""
+      },
+      {
+       "field_key": "field_2c99dd",
+       "field_name": "实验方案",
+       "field_type": "link",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "https://project.feishu.cn/23d4bx",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794463942774,
+      "actual_finish_time": 1794463969438,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "scribe": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "归档",
+      "next_node_keys": [],
+      "node_key": "archive",
+      "node_uuid": "node_archive_7166920436",
+      "pre_node_keys": [
+       "next_step"
+      ],
+      "status": "finished"
+     },
+     "form_items": [],
+     "schedule": {
+      "actual_begin_time": 1794463980053,
+      "actual_finish_time": 1794463983070,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "product": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "准备 PRD 和 Eval Set",
+      "next_node_keys": [
+       "set_hypothesis"
+      ],
+      "node_key": "prep_prd_eval",
+      "node_uuid": "node_prep_prd_eval_7166920436",
+      "pre_node_keys": [
+       "prep_context"
+      ],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_23c3e3",
+       "field_name": "评测集版本",
+       "field_type": "text",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "evalset-v1",
+       "value_label": ""
+      },
+      {
+       "field_key": "field_ca29d8",
+       "field_name": "需求文档",
+       "field_type": "link",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "https://project.feishu.cn/23d4bx",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794463912878,
+      "actual_finish_time": 1794463915280,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "alg": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "确定假设条件",
+      "next_node_keys": [
+       "design_experiment"
+      ],
+      "node_key": "set_hypothesis",
+      "node_uuid": "node_set_hypothesis_7166920436",
+      "pre_node_keys": [
+       "prep_prd_eval"
+      ],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_9259c9",
+       "field_name": "假设签字",
+       "field_type": "text",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "7166628110",
+       "value_label": ""
+      },
+      {
+       "field_key": "field_d4e0a9",
+       "field_name": "规格",
+       "field_type": "link",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "https://project.feishu.cn/23d4bx",
+       "value_label": ""
+      },
+      {
+       "field_key": "field_dca41f",
+       "field_name": "总预算",
+       "field_type": "number",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "200",
+       "value_label": ""
+      },
+      {
+       "field_key": "field_eb77f2",
+       "field_name": "波动估计",
+       "field_type": "text",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "样例：基线重复 3 次，标准差 0.4 个点。",
+       "value_label": ""
+      },
+      {
+       "field_key": "field_0e2291",
+       "field_name": "规格版本",
+       "field_type": "text",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "spec-v1",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794463915282,
+      "actual_finish_time": 1794463932385,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    }
+   ],
+   "pagination": {
+    "has_more": false,
+    "page_num": 1,
+    "page_size": 20,
+    "total": 10
+   },
+   "workflow_template": {
+    "template_id": 11235188,
+    "template_version": 11
+   }
+  }
+ },
+ {
+  "argv": [
+   "workitem",
+   "query",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--mql",
+   "SELECT `work_item_id` FROM `6af529535111c30e59b3bc9b`.`6af52adffa8782e34e4a97e7` WHERE `template` = '试探' LIMIT 1"
+  ],
+  "out": {
+   "data": {
+    "1": [
+     {
+      "moql_field_list": [
+       {
+        "key": "work_item_id",
+        "name": "工作项id",
+        "value": {
+         "long_value": 7166791061
+        },
+        "value_type": "long_value"
+       }
+      ]
+     }
+    ]
+   },
+   "extra_info": null,
+   "list": [
+    {
+     "count": 1,
+     "group_infos": [
+      {
+       "group_id": "1",
+       "group_name": "未知分组"
+      }
+     ]
+    }
+   ],
+   "search_status_info": null,
+   "session_id": "recorded"
+  }
+ },
+ {
+  "argv": [
+   "workflow",
+   "get-node",
+   "--project-key",
+   "6af529535111c30e59b3bc9b",
+   "--work-item-id",
+   "7166791061",
+   "--page-num",
+   "1"
+  ],
+  "out": {
+   "list": [
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "issuer": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "定方向",
+      "next_node_keys": [
+       "probe"
+      ],
+      "node_key": "started",
+      "node_uuid": "node_started_7166791061",
+      "pre_node_keys": [],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_dca41f",
+       "field_name": "总预算",
+       "field_type": "number",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "20",
+       "value_label": ""
+      },
+      {
+       "field_key": "field_a91c48",
+       "field_name": "试探问题",
+       "field_type": "text",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "样例：在小规模数据上，错误主要集中在哪一类样本？",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794461632080,
+      "actual_finish_time": 1794461666041,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "issuer": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "试探",
+      "next_node_keys": [
+       "propose_hypothesis"
+      ],
+      "node_key": "probe",
+      "node_uuid": "node_probe_7166791061",
+      "pre_node_keys": [
+       "started"
+      ],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_3b8c70",
+       "field_name": "试探记录",
+       "field_type": "link",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "https://project.feishu.cn/23d4bx",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794461666042,
+      "actual_finish_time": 1794461670174,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "issuer": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "提出假设",
+      "next_node_keys": [
+       "archive"
+      ],
+      "node_key": "propose_hypothesis",
+      "node_uuid": "node_propose_hypothesis_7166791061",
+      "pre_node_keys": [
+       "probe"
+      ],
+      "status": "finished"
+     },
+     "form_items": [
+      {
+       "field_key": "field_bc2876",
+       "field_name": "去向",
+       "field_type": "select",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "l0b5wpvj1",
+       "value_label": ""
+      },
+      {
+       "field_key": "field_cdf631",
+       "field_name": "候选假设",
+       "field_type": "text",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "样例：错误集中在长尾类别，值得验证“重采样能把长尾类别的准确率提高 3 个点”。",
+       "value_label": ""
+      }
+     ],
+     "schedule": {
+      "actual_begin_time": 1794461687263,
+      "actual_finish_time": 1794461689940,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    },
+    {
+     "assignee_schedule_list": [
+      {
+       "assignee": {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       },
+       "schedule_info": {
+        "actual_work_time": null,
+        "estimate_finish_time": null,
+        "estimate_start_time": null,
+        "points": null
+       }
+      }
+     ],
+     "assignees": {
+      "node_owner_mode": 3,
+      "owners": [
+       {
+        "email": "",
+        "name": "",
+        "user_key": "7000000000000000001"
+       }
+      ],
+      "participants": [],
+      "role_assignees": {
+       "scribe": [
+        {
+         "email": "",
+         "name": "",
+         "user_key": "7000000000000000001"
+        }
+       ]
+      }
+     },
+     "basic": {
+      "name": "归档",
+      "next_node_keys": [],
+      "node_key": "archive",
+      "node_uuid": "node_archive_7166791061",
+      "pre_node_keys": [
+       "propose_hypothesis"
+      ],
+      "status": "finished"
+     },
+     "form_items": [],
+     "schedule": {
+      "actual_begin_time": 1794461689941,
+      "actual_finish_time": 1794461690930,
+      "actual_work_time": null,
+      "estimate_finish_time": null,
+      "estimate_start_time": null,
+      "is_delayed": false,
+      "points": null
+     },
+     "sub_tasks": null,
+     "sub_workitems": []
+    }
+   ],
+   "pagination": {
+    "has_more": false,
+    "page_num": 1,
+    "page_size": 20,
+    "total": 4
+   },
+   "workflow_template": {
+    "template_id": 11236325,
+    "template_version": 3
+   }
+  }
+ }
+]
