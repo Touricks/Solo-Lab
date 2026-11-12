@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import shlex
 
-VERSION = "0.5.1-codex.4"
+VERSION = "0.6.0-codex.1"
 PRIORITY_ROLES = ("pmo-p2", "pmo-router", "product-p2", "alg-p2", "rnd-p2",
              "infra-p2", "quality-p2", "liaison-p2")
 EVENTS = ("SessionStart", "UserPromptSubmit", "PreToolUse", "Stop", "Interrupt", "SessionEnd")
