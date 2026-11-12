@@ -5,6 +5,7 @@ python3 -I -B tests/test_binding.py
 The space is replayed from tests/fixtures/feishu/v2/space-calls.json; nothing calls Feishu.
 """
 import contextlib
+import datetime
 import io
 import json
 import os
@@ -34,6 +35,7 @@ class BindingCase(unittest.TestCase):
             os.makedirs(os.path.join(self.tmp, d))
         self.put("spec/task.json", {"name": "t", "feishu": {"meegle_space": "research_template"}})
         self.projects, self.rows = [HERE, OLD], {"data": {}, "list": None}
+        self.spaces, self.made = [], []                 # knowledge spaces the account sees, and the ones made here
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -57,6 +59,13 @@ class BindingCase(unittest.TestCase):
             return 0, json.dumps({"identity": "user", "onBehalfOf": {"openId": "ou_researcher"}}), ""
         if cmd[:3] == ["meegle", "workitem", "query"]:
             return 0, json.dumps(self.rows), ""
+        if cmd[:3] == ["lark-cli", "wiki", "+space-list"]:
+            return 0, json.dumps({"data": {"items": self.spaces, "has_more": False}}), ""
+        if cmd[:3] == ["lark-cli", "wiki", "+space-create"]:
+            new = {"name": cmd[cmd.index("--name") + 1], "space_id": "sp_%d" % (len(self.spaces) + 1)}
+            self.spaces.append(new)
+            self.made.append(new["name"])
+            return 0, json.dumps({"data": {"space": new}}), ""
         return 1, "", "tests do not call %s" % " ".join(cmd[:3])
 
     def feishu(self, *args, edit=None, **kw):
@@ -151,6 +160,39 @@ class FeishuTest(BindingCase):
             self.assertIn("Bash(python3 -I .claude/agent-org/bin/space.py %s *)" % cmd, setup.READ_ALLOW)
         self.assertEqual([a for a in setup.READ_ALLOW if "export" in a], [])        # writes a file wherever it is told to
 
+    def test_a_space_that_is_not_there_is_made_from_the_template(self):
+        self.projects = [OLD]
+        with self.assertRaises(setup.SetupError) as e:
+            self.feishu([], True, True)
+        self.assertIn("没有叫“research_template”的飞书项目空间", str(e.exception))
+        self.assertIn(orgspec.Contract(orgspec.OrgSpec()).template["url"], str(e.exception))
+        self.assertEqual(os.listdir(os.path.join(self.tmp, "feishu")), [])
+        self.put("spec/task.json", {"name": "t", "feishu": {"meegle_space": "research_template",
+                                                           "template_url": "https://example.com/templates/detail/abc"}})
+        with self.assertRaises(setup.SetupError) as e:
+            self.feishu([], True, False)
+        self.assertIn("打开模板 https://example.com/templates/detail/abc", str(e.exception))   # the task file's own template
+
+    def test_the_knowledge_space_is_looked_for_on_every_page_then_made(self):
+        _, text = self.feishu([], True, False)
+        self.assertIn("没有叫“t”的；加 --apply 时新建一个", text)                 # named after the project
+        self.assertEqual(self.made, [])                                         # a preview makes nothing
+        _, text = self.feishu([], True, True)
+        self.assertEqual(self.made, ["t"])
+        self.assertEqual(json.loads(self.read("feishu/ids.json"))["wiki"]["space_id"], "sp_1")
+        self.feishu([], True, True)
+        self.assertEqual(self.made, ["t"])                                      # the next run has it
+
+    def test_a_knowledge_space_that_exists_is_used_and_two_of_a_name_are_not_chosen(self):
+        self.spaces = [{"name": "别的", "space_id": "sp_x"}, {"name": "t", "space_id": "sp_t"}]
+        self.feishu([], True, True)
+        self.assertEqual((self.made, json.loads(self.read("feishu/ids.json"))["wiki"]["space_id"]), ([], "sp_t"))
+        self.put("spec/task.json", {"name": "t", "feishu": {"meegle_space": "research_template", "wiki_space": "同名"}})
+        self.spaces += [{"name": "同名", "space_id": "sp_a"}, {"name": "同名", "space_id": "sp_b"}]
+        _, text = self.feishu([], True, True)
+        self.assertIn("有 2 个知识空间叫“同名”（space_id：sp_a、sp_b）", text)
+        self.assertEqual(self.made, [])
+
     def test_a_space_without_the_types_is_recorded_but_not_bound(self):
         def blank(argv, out):
             if argv[:2] == ["workitem", "meta-types"]:
@@ -244,6 +286,163 @@ class TemplateTest(BindingCase):
     def test_the_space_has_to_be_named(self):
         with self.assertRaises(setup.SetupError):
             self.template(None)
+
+
+class LoginTest(unittest.TestCase):
+    """setup.py login with both tools answered here: what they print is as recorded on 2026-11-12."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="agent-org-login-")
+        self.logged = {"lark-cli": False, "meegle": False}
+        self.scanned, self.brand, self.calls = False, "feishu", []
+        self.patches = [mock.patch.object(setup, "run", self.tools),
+                        mock.patch.object(setup, "login_state", lambda: (self.tmp, os.path.join(self.tmp, "pending.json")))]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def tools(self, cmd, timeout=30):
+        self.calls.append(cmd)
+        if cmd[:3] == ["lark-cli", "auth", "status"]:
+            on = self.logged["lark-cli"]
+            user = {"available": on, "status": "ready" if on else "missing", "tokenStatus": "ready" if on else "expired",
+                    "refreshExpiresAt": "2020-01-01T00:00:00+00:00"}
+            return 0, json.dumps({"brand": self.brand, "identities": {"user": user}}), ""
+        if cmd[:3] == ["meegle", "auth", "status"]:
+            return (0 if self.logged["meegle"] else 1), "{}", ""
+        if cmd[:3] == ["lark-cli", "auth", "login"]:
+            if "--no-wait" in cmd:
+                return 0, json.dumps({"device_code": "DEV-LARK-SECRET", "expires_in": 600, "hint": "…",
+                                      "verification_url": "https://accounts.example/verify?user_code=ABCD"}), ""
+            self.logged["lark-cli"] = self.scanned
+            return 0, "", ""
+        if cmd[:3] == ["meegle", "auth", "login"]:
+            if "init" in cmd:
+                return 0, json.dumps({"client_id": "CID-SECRET", "device_code": "DEV-MEEGLE-SECRET", "expires_in": 1800, "interval": 5,
+                                      "user_code": "WXYZ", "verification_uri": "https://project.example/b",
+                                      "verification_uri_complete": "https://project.example/b?user_code=WXYZ"}), ""
+            self.logged["meegle"] = self.scanned
+            return 0, "", ""
+        if cmd[:3] == ["lark-cli", "auth", "qrcode"]:
+            open(cmd[cmd.index("-o") + 1], "w").close()
+            return 0, "", ""
+        return 1, "", "tests do not call %s" % " ".join(cmd[:3])
+
+    def login(self, **kw):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = setup.login(**kw)
+        return code, out.getvalue()
+
+    def test_a_code_to_scan_and_a_link_but_never_the_device_code(self):
+        code, text = self.login()
+        self.assertEqual(code, 0)
+        for cli, link in (("lark-cli", "https://accounts.example/verify?user_code=ABCD"),
+                          ("meegle", "https://project.example/b?user_code=WXYZ")):
+            self.assertIn("二维码图片：%s" % os.path.join(self.tmp, cli + ".png"), text)
+            self.assertIn("链接：" + link, text)
+        for secret in ("DEV-LARK-SECRET", "DEV-MEEGLE-SECRET", "CID-SECRET"):
+            self.assertNotIn(secret, text)
+        pending = os.path.join(self.tmp, "pending.json")
+        self.assertEqual(os.stat(pending).st_mode & 0o777, 0o600)
+        self.assertIn("project.feishu.cn", next(c for c in self.calls if c[:3] == ["meegle", "auth", "login"]))
+
+    def test_wait_reads_the_login_back_and_clears_the_codes(self):
+        self.login()
+        code, text = self.login(wait=True, timeout=5)
+        self.assertEqual(code, 1)                                     # nobody scanned yet
+        self.assertIn("lark-cli：还没授权", text)
+        self.assertTrue(os.path.isfile(os.path.join(self.tmp, "pending.json")))
+        self.scanned = True
+        code, text = self.login(wait=True, timeout=5)
+        self.assertEqual(code, 0)
+        self.assertIn("lark-cli：已登录。", text)
+        self.assertIn("meegle：已登录。", text)
+        self.assertEqual(os.listdir(self.tmp), [])                    # codes and pictures are gone
+        poll = next(c for c in self.calls if c[:3] == ["meegle", "auth", "login"] and "poll" in c)
+        self.assertEqual(poll[poll.index("--device-code-value") + 1], "DEV-MEEGLE-SECRET")
+
+    def test_only_what_is_logged_out_is_logged_in(self):
+        self.logged["meegle"], self.brand = True, "lark"
+        code, text = self.login()
+        self.assertNotIn("meegle：", text)
+        self.logged["lark-cli"] = True
+        code, text = self.login()
+        self.assertIn("都已登录", text)
+        self.assertEqual(self.login(wait=True)[0], 2)                 # nothing is waiting any more
+
+    def test_a_token_that_can_still_be_renewed_counts_as_logged_in(self):
+        later = (datetime.datetime.now().astimezone() + datetime.timedelta(days=3)).isoformat()
+        ready = lambda user: setup.lark_user_ready({"identities": {"user": user}})[0]
+        self.assertTrue(ready({"available": True}))
+        self.assertTrue(ready({"available": False, "status": "needs_refresh", "tokenStatus": "expired", "refreshExpiresAt": later}))
+        self.assertFalse(ready({"available": False, "status": "missing", "tokenStatus": "expired", "refreshExpiresAt": later}))
+        self.assertFalse(ready({"available": False, "status": "needs_refresh", "refreshExpiresAt": "2020-01-01T00:00:00+00:00"}))
+        self.assertFalse(setup.lark_user_ready({})[0])
+
+
+class EnvTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="agent-org-env-")
+        os.makedirs(os.path.join(self.tmp, "feishu"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def ids(self, **wiki):
+        with open(os.path.join(self.tmp, "feishu", "ids.json"), "w", encoding="utf-8") as f:
+            json.dump({"meegle": {"project_key": "pk", "simple_name": "codeopt"}, "wiki": wiki}, f)
+
+    def env(self, apply=False):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = setup.env_cmd(self.tmp, apply)
+        return code, out.getvalue()
+
+    def read(self):
+        with open(os.path.join(self.tmp, ".env"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_the_links_wait_for_the_tenant_domain(self):
+        self.ids(space_id="sp_1")
+        code, text = self.env(True)
+        self.assertEqual(code, 1)
+        self.assertIn("租户域名", text)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, ".env")))
+        self.assertTrue(setup.env_gaps(self.tmp))
+
+    def test_a_new_file_holds_the_two_links(self):
+        self.ids(space_id="sp_1", tenant_domain="example.feishu.cn")
+        code, text = self.env()
+        self.assertIn("这是预览", text)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, ".env")))
+        self.assertEqual(self.env(True)[0], 0)
+        self.assertEqual(self.read(), "# agent-org：由 feishu/ids.json 生成\nFEISHU_PROJECT_URL=https://project.feishu.cn/codeopt\n"
+                                      "FEISHU_WIKI_URL=https://example.feishu.cn/wiki/space/sp_1\n")
+        self.assertEqual(os.stat(os.path.join(self.tmp, ".env")).st_mode & 0o777, 0o600)
+        self.assertEqual(setup.env_gaps(self.tmp), [])
+        self.assertIn("没有改", self.env(True)[1])
+
+    def test_other_lines_stay_and_are_never_shown(self):
+        self.ids(space_id="sp_1", tenant_domain="example.feishu.cn")
+        mine = "# 我自己的\nSOME_PASSWORD=hunter2\nFEISHU_WIKI_URL=https://old.example/wiki/space/x\n\nOTHER=1\n"
+        with open(os.path.join(self.tmp, ".env"), "w", encoding="utf-8") as f:
+            f.write(mine)
+        code, text = self.env(True)
+        self.assertEqual(code, 0)
+        for word in ("SOME_PASSWORD", "hunter2", "OTHER", "old.example"):
+            self.assertNotIn(word, text)
+        self.assertTrue(self.read().startswith("# 我自己的\nSOME_PASSWORD=hunter2\n\nOTHER=1\n\n# agent-org：由 feishu/ids.json 生成\n"))
+        self.assertEqual(self.read().count("FEISHU_WIKI_URL="), 1)
+        self.ids(space_id="sp_2", tenant_domain="example.feishu.cn")
+        self.assertTrue(setup.env_gaps(self.tmp))                     # the binding moved on
+        self.env(True)
+        self.assertIn("/wiki/space/sp_2\n", self.read())
+        self.assertIn("SOME_PASSWORD=hunter2\n", self.read())
 
 
 if __name__ == "__main__":

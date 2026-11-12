@@ -354,6 +354,11 @@ class Contract:
     def flow(self):
         return self.data["flow"]
 
+    @property
+    def template(self):
+        """The reference template a project space is made from: {name, version, url}."""
+        return self.data.get("template") or {}
+
     def types(self):
         return list(self.data["types"])
 

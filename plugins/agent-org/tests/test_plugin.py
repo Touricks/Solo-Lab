@@ -607,7 +607,7 @@ class FifthRoundLedgerTest(ProjectCase):
             plan = setup.build_plan(self.tmp, os.path.join(self.tmp, "spec", "task.json"), None)
             setup.apply_plan(self.tmp, plan, setup.actions_for(self.tmp, plan))
         code, out = self.run_quiet(setup.check, self.tmp)
-        self.assertEqual(code, 0, out)
+        self.assertIn("本地配置：就绪", out)                      # the other layers wait for the pool and the first task
 
     def test_python_clusters_and_heredocs_hiding_feishu_calls(self):
         with open(os.path.join(self.tmp, "w.py"), "w", encoding="utf-8") as f:
@@ -1373,6 +1373,66 @@ class PoolSetupTest(PoolProjectCase):
         pmo = plan["top"][[t["role"] for t in plan["top"]].index("pmo-p2")]
         self.assertEqual([c["name"] for c in pmo["children"]], ["PMO-p1-01", "PMO-p0-01"])
         self.assertIn("开出路由和书记员", pmo["opening"])
+        self.assertEqual((plan["version"], plan["batch"]), (2, 4))
+        self.assertEqual(plan["order"][:3], ["PMO-p0-01", "PMO-p2-01", "PMO-p1-01"])      # the scribe first
+        self.assertEqual(sorted(plan["order"]), sorted(names))
+        ranks = [int(n.split("-p")[1][0]) for n in plan["order"][3:]]
+        self.assertEqual(ranks, sorted(ranks, reverse=True))                              # then +2, +1, +0
+        for t in plan["top"]:
+            for e in [t] + t["children"]:
+                self.assertEqual(e["title"], "[%s] %s" % (plan["label"], e["name"]))
+                self.assertLess(len(e["title"]), 60)
+                self.assertIn("route.py expect %s --role %s" % (e["name"], e["role"]), e["expect"])
+            self.assertIn("不开子会话", t["brief"])
+        self.assertIn("ensure-node all --apply", plan["scribe_first"])
+        self.assertIn("register %s --apply" % setup.FIRST_TASK, plan["scribe_first"])
+
+    def test_the_label_names_the_titles_and_the_section(self):
+        with open(self.task_path, encoding="utf-8") as f:
+            task = json.load(f)
+        self.assertEqual(json.loads(self.read(".claude/agent-org/pool-plan.json"))["label"], task["feishu"]["meegle_space"])
+        task["pool"]["label"] = "CodeOpt"
+        with open(self.task_path, "w", encoding="utf-8") as f:
+            json.dump(task, f, ensure_ascii=False)
+        doc = json.loads(setup.build_plan(self.tmp, self.task_path, None).files[".claude/agent-org/pool-plan.json"][0])
+        self.assertEqual((doc["label"], doc["top"][0]["title"]), ("CodeOpt", "[CodeOpt] PMO-p2-01"))
+        for bad in ("[x]", "长" * 41, 3):
+            task["pool"]["label"] = bad
+            with open(self.task_path, "w", encoding="utf-8") as f:
+                json.dump(task, f, ensure_ascii=False)
+            with self.assertRaises(setup.SetupError):
+                setup.build_plan(self.tmp, self.task_path, None)
+
+    def test_liaison_opens_with_its_p2_unless_the_task_says_otherwise(self):
+        self.assertEqual(setup.load_pool_settings(None)["later"], ["liaison"])
+        with open(self.task_path, encoding="utf-8") as f:
+            task = json.load(f)
+        del task["pool"]["later"]
+        with open(self.task_path, "w", encoding="utf-8") as f:
+            json.dump(task, f, ensure_ascii=False)
+        doc = json.loads(setup.build_plan(self.tmp, self.task_path, None).files[".claude/agent-org/pool-plan.json"][0])
+        self.assertEqual(doc["total"], 19)
+        self.assertEqual(next(t for t in doc["top"] if t["role"] == "liaison-p2")["children"], [])
+        few = setup.build_plan(self.tmp, self.task_path, "pmo,quality,alg")   # the default says nothing of a sequence that is off
+        self.assertEqual(json.loads(few.files[".claude/agent-org/pool-plan.json"][0])["total"], 9)
+
+    def test_init_refuses_the_home_directory(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = setup.main(["init", "--target", os.path.expanduser("~"), "--task", self.task_path])
+        self.assertEqual(code, 2)
+        self.assertIn("不在家目录或根目录里初始化", out.getvalue())
+
+    def test_the_first_task_sheet_is_written_once(self):
+        path = os.path.join(self.tmp, setup.FIRST_TASK)
+        self.assertEqual(ledger.sheet_kind(path), "research_task")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("研究员补了一句。\n")
+        with contextlib.redirect_stdout(io.StringIO()):
+            plan = setup.build_plan(self.tmp, self.task_path, None)
+            setup.apply_plan(self.tmp, plan, setup.actions_for(self.tmp, plan))
+        self.assertIn("研究员补了一句。", self.read(setup.FIRST_TASK))                    # a draft is the researcher's
+        self.assertFalse(os.path.exists(path + ".new"))
 
     def test_later_sequences_start_with_their_p2(self):
         with open(self.task_path, encoding="utf-8") as f:
@@ -1431,8 +1491,8 @@ class PoolSetupTest(PoolProjectCase):
             json.dump(dict(base, mode="pool"), f, ensure_ascii=False)
         self.assertNotIn("mode", setup.load_task(path))
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(dict(base, pool=dict(self.POOL, later=["liaison"])), f, ensure_ascii=False)
-        with self.assertRaises(setup.SetupError):
+            json.dump(dict(base, pool=dict(self.POOL, later=["infra"])), f, ensure_ascii=False)
+        with self.assertRaises(setup.SetupError):                     # a sequence that is not enabled
             setup.build_plan(self.tmp, path, "pmo,quality,alg")
 
     def test_dispatch_targets_are_the_assign_edges(self):
@@ -1449,8 +1509,168 @@ class PoolSetupTest(PoolProjectCase):
         with contextlib.redirect_stdout(out):
             self.assertEqual(setup.main(["pool", "--target", self.tmp]), 0)
         text = out.getvalue()
-        self.assertIn("认领 pmo-p2（会话名 PMO-p2-01）", text)
+        self.assertIn("1. PMO-p0-01（未认领）", text)
+        self.assertIn("ledger.py ensure-node all --apply", text)                  # the scribe's first writes are still to do
         self.assertIn("当前：0/21 条认领", text)
+        self.assertNotIn("--watch", text)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(setup.main(["pool", "--target", self.tmp, "--manual"]), 0)
+        self.assertIn("认领 pmo-p2（会话名 PMO-p2-01）", out.getvalue())
+        self.assertIn("pool.later", out.getvalue())
+
+
+class CheckLayersTest(PoolProjectCase):
+    """setup.py check: the project's own files, the Feishu side, the sessions, the first research task."""
+
+    def setUp(self):
+        super().setUp()
+        with contextlib.redirect_stdout(io.StringIO()):       # take in the IDs written after the first init
+            plan = setup.build_plan(self.tmp, self.task_path, None)
+            setup.apply_plan(self.tmp, plan, setup.actions_for(self.tmp, plan))
+        self.plan = json.loads(self.read(".claude/agent-org/pool-plan.json"))
+        self.fake = fake_space.FakeSpace()
+
+    def check(self, *args):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = setup.main(["check", "--target", self.tmp] + list(args))
+        return code, out.getvalue()
+
+    def claim_all(self):
+        policy = json.loads(self.read(".claude/hooks/policy.json"))
+        with pool_lib.locked(self.tmp) as table:
+            for t in self.plan["top"]:
+                for e in [t] + t["children"]:
+                    permit = {"role": e["role"], "name": e["name"], "via": "test", "by": "researcher"}
+                    claim, note = pool_lib.promote(table, policy, permit, "s-" + e["name"], "local_" + e["name"])
+                    self.assertIsNotNone(claim, note)
+
+    def listing(self, edit=None):
+        rows = {name: {"sessionId": "local_" + name, "title": "[%s] %s" % (self.plan["label"], name), "cwd": self.tmp,
+                       "isArchived": False, "group": {"id": "g1", "name": self.plan["label"]}, "pinned": False}
+                for name in self.plan["order"]}
+        if edit:
+            edit(rows)
+        path = os.path.join(self.tmp, "sessions.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(list(rows.values()), f, ensure_ascii=False)
+        return path
+
+    def ready(self):
+        """Everything the opening leaves behind: the claims, the first task, the links in .env."""
+        self.claim_all()
+        lg = fake_space.SimLedger(self.tmp, "apply", self.fake, ())
+        with contextlib.redirect_stdout(io.StringIO()):
+            task = ledger.register(lg, os.path.join(self.tmp, setup.FIRST_TASK))
+            setup.env_cmd(self.tmp, True)
+        return task
+
+    def test_a_fresh_project_says_what_each_layer_lacks(self):
+        code, text = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("本地配置：就绪", text)
+        self.assertIn("飞书：1 个问题", text)
+        self.assertIn("setup.py env --target <项目目录> --apply", text)
+        self.assertIn("会话：1 个问题", text)
+        self.assertIn("会话池还没开齐", text)
+        self.assertIn("首条研究任务：1 个问题", text)
+        self.assertIn("还没有登记过研究任务", text)
+        self.assertIn("检查：还有 3 个问题（飞书 1、会话 1、首条研究任务 1）", text)
+
+    def test_every_layer_ready(self):
+        self.ready()
+        code, text = self.check()
+        self.assertEqual(code, 0, text)
+        self.assertIn("检查：四层都就绪", text)
+        self.assertIn("加 --live 回读飞书", text)
+        code, text = self.check("--sessions", self.listing())
+        self.assertEqual(code, 0, text)
+
+    def test_the_first_task_needs_its_document_and_its_id_in_the_draft(self):
+        task = self.ready()
+        receipt = os.path.join(self.tmp, "packages", "sent", "%s.json" % task)
+        with open(receipt, encoding="utf-8") as f:
+            rec = json.load(f)
+        with open(receipt, "w", encoding="utf-8") as f:
+            json.dump(dict(rec, doc=""), f)
+        self.assertIn("回执里没有主文档的地址", self.check()[1])
+        with open(receipt, "w", encoding="utf-8") as f:
+            json.dump(rec, f)
+        path = os.path.join(self.tmp, setup.FIRST_TASK)
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text.replace("#%s" % task, "待建"))
+        code, out = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("“关联工作项”一行不是 #%s" % task, out)
+
+    def test_sessions_are_held_against_the_clients_own_list(self):
+        self.ready()
+
+        def edit(rows):
+            rows["Alg-p2-01"]["isArchived"] = True
+            rows["Alg-p1-01"]["group"] = None
+            rows["Alg-p0-01"]["cwd"] = "/tmp"
+            rows["RnD-p2-01"]["pinned"] = True
+            rows["RnD-p1-01"]["title"] = "随手起的名字"
+            del rows["Infra-p2-01"]
+            del rows["Infra-p1-01"]["group"]
+        code, text = self.check("--sessions", self.listing(edit))
+        self.assertEqual(code, 1)
+        for line in ("客户端的会话列表里没有这些认领的会话：Infra-p2-01", "已经归档的会话还占着认领：Alg-p2-01",
+                     "工作目录不是项目目录的会话：Alg-p0-01", "”里的会话：Alg-p1-01", "还没报告这些会话的分区，没核对：Infra-p1-01",
+                     "置顶了的会话：RnD-p2-01", "<会话名>”的会话：RnD-p1-01", "会话：4 个问题"):
+            self.assertIn(line, text)
+        with open(os.path.join(self.tmp, "bad.json"), "w", encoding="utf-8") as f:
+            f.write("{}")
+        self.assertIn("不是会话列表", self.check("--sessions", os.path.join(self.tmp, "bad.json"))[1])
+
+    def test_a_session_working_elsewhere_and_a_leftover_pre_registration(self):
+        self.ready()
+        self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-Alg-p2-01", "source": "startup", "cwd": "/tmp"})
+        self.route("expect", "Alg-p1-02", "--role", "alg-p1", "--desk", "local_extra", sid="s-researcher")
+        code, text = self.check()
+        self.assertEqual(code, 1)
+        self.assertIn("工作目录不是项目目录的会话：Alg-p2-01", text)
+        self.assertIn("有 1 条预登记还没转正：Alg-p1-02", text)
+
+    def test_live_reads_the_space_the_nodes_and_the_first_task_back(self):
+        task = self.ready()
+        ids = json.loads(self.read("feishu/ids.json"))
+        snap = json.loads(self.read("feishu/space.json"))
+        tokens = {n["node_token"] for n in ids["wiki"]["nodes"].values()}
+        lost = set()
+
+        def tools(cmd, timeout=30):
+            if cmd[:3] == ["lark-cli", "wiki", "+node-get"]:
+                token = cmd[cmd.index("--node-token") + 1]
+                if token in tokens - lost:
+                    return 0, json.dumps({"data": {"node": {"node_token": token, "space_id": "space_fake"}}}), ""
+                return 1, "", "node not found"
+            return 1, "", "tests do not call %s" % " ".join(cmd[:3])
+
+        def live():
+            binding = setup.space.binding_of(ids)
+            with mock.patch.object(setup, "run", tools), \
+                    mock.patch.object(setup, "read_space", lambda *a, **k: (snap, binding, [], [])), \
+                    mock.patch.object(setup.ledger, "Ledger", lambda root, mode: fake_space.SimLedger(root, mode, self.fake, ())):
+                return self.check("--live")
+        code, text = live()
+        self.assertEqual(code, 0, text)
+        self.assertIn("检查：四层都就绪", text)
+        self.assertNotIn("加 --live", text)
+        lost.add("node_archive_alg")
+        code, text = live()
+        self.assertEqual(code, 1)
+        self.assertIn("知识库节点读不到，或者不在这个知识空间里（1 个）：archive/alg", text)
+        lost.clear()
+        key = fake_space.SimLedger(self.tmp, "preview", self.fake, ()).field("research_task", "main_doc")["field_key"]
+        self.fake.item(task)["fields"][key] = "https://example.feishu.cn/wiki/elsewhere"
+        code, text = live()
+        self.assertEqual(code, 1)
+        self.assertIn("研究任务 #%s 的主文档字段是 https://example.feishu.cn/wiki/elsewhere" % task, text)
 
 
 class PoolClaimTest(PoolProjectCase):
@@ -1566,6 +1786,76 @@ class PoolClaimTest(PoolProjectCase):
         pl = self.pool()
         self.assertEqual((pl["claims"]["Quality-p2-01"]["session_id"], pl["claims"]["Quality-p1-01"]["session_id"]),
                          ("s-q2", "s-q1"))
+
+
+class PoolOpenedByTheResearcherTest(PoolProjectCase):
+    """The default opening: the researcher's own session opens every session and pre-registers it."""
+
+    OPENED = (("PMO-p0-01", "pmo-scribe", "s-scribe"), ("PMO-p2-01", "pmo-p2", "s-entry"),
+              ("Alg-p2-01", "alg-p2", "s-alg2"), ("Alg-p0-01", "alg-p0", "s-alg0"))
+
+    def open_all(self):
+        outs = {}
+        for name, role, sid in self.OPENED:
+            code, out = self.route("expect", name, "--role", role, "--desk", "d-" + sid, sid="s-researcher")
+            self.assertEqual(code, 0, out)
+            code, outs[name] = self.claim(role, name, sid, desk="d-" + sid)
+            self.assertEqual(code, 0, outs[name])
+        return outs
+
+    def test_every_role_is_claimed_through_a_pre_registration(self):
+        self.open_all()
+        self.assertEqual(sorted(self.pool()["claims"]), sorted(n for n, _, _ in self.OPENED))
+        self.assertEqual(self.pool()["permits"], [])
+
+    def test_pre_registering_twice_is_fine(self):
+        self.open_all()
+        code, out = self.route("expect", "Alg-p2-01", "--role", "alg-p2", "--desk", "d-s-alg2", sid="s-researcher")
+        self.assertEqual(code, 0, out)                       # the opening run again after an interruption
+        self.assertIn("不用再预登记", out)
+        code, out = self.route("expect", "Alg-p2-01", "--role", "alg-p2", "--desk", "d-other", sid="s-researcher")
+        self.assertEqual(code, 1, out)
+        self.assertIn("已经被认领", out)
+
+    def test_a_p2_may_claim_through_its_opening_line_before_or_after(self):
+        plan = json.loads(self.read(".claude/agent-org/pool-plan.json"))
+        briefs = {t["name"]: t["brief"] for t in plan["top"]}
+        self.prompt("s-alg2", briefs["Alg-p2-01"], desk="d-s-alg2")           # the hook reads the opening line
+        self.assertIn("Alg-p2-01", self.pool()["claims"])
+        code, out = self.route("expect", "Alg-p2-01", "--role", "alg-p2", "--desk", "d-s-alg2", sid="s-researcher")
+        self.assertEqual(code, 0, out)
+        self.assertIn("不用再预登记", out)
+        code, out = self.route("expect", "RnD-p2-01", "--role", "rnd-p2", "--desk", "d-s-rnd2", sid="s-researcher")
+        self.assertEqual(code, 0, out)                                         # the other order: pre-registered first
+        self.prompt("s-rnd2", briefs["RnD-p2-01"], desk="d-s-rnd2")
+        self.assertIn("RnD-p2-01", self.pool()["claims"])
+        self.assertEqual(self.pool()["permits"], [])                           # nothing is left waiting
+
+    def test_a_p2_is_told_its_title_and_section(self):
+        self.open_all()
+        label = json.loads(self.read(".claude/agent-org/pool-plan.json"))["label"]
+        code, out = self.route("claim", "alg-p2", "--as", "Alg-p2-01", "--wait", "0", sid="s-alg2", desk="d-s-alg2")
+        self.assertEqual(code, 0, out)
+        self.assertIn("title=“[%s] Alg-p1-01”" % label, out)
+        self.assertIn("归入侧栏分区“%s”" % label, out)
+        self.assertNotIn("置顶", out)
+
+    def test_a_session_records_where_it_works(self):
+        self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-entry", "source": "startup"}, desk="d-s-entry")
+        self.assertEqual(self.session("s-entry")["cwd"], self.tmp)
+
+    def test_only_the_researcher_starts_a_login(self):
+        self.open_all()
+        cmd = "python3 -I /opt/plugins/agent-org/scripts/setup.py login"
+        _, out = self.bash("s-alg2", cmd)
+        self.assertEqual(out.get("permissionDecision"), "deny")
+        self.assertIn("登录由研究员的会话发起", out.get("permissionDecisionReason", ""))
+        _, out = self.bash("s-researcher", cmd)
+        self.assertNotEqual(out.get("permissionDecision"), "deny")
+        _, out = self.bash("s-researcher", cmd, agent_id="a1")
+        self.assertEqual(out.get("permissionDecision"), "deny")           # a subagent of the researcher's session
+        _, out = self.bash("s-alg2", "python3 -I /opt/plugins/agent-org/scripts/setup.py check --target .")
+        self.assertNotEqual(out.get("permissionDecision"), "deny")
 
 
 class PoolGuardTest(PoolProjectCase):
@@ -2293,7 +2583,7 @@ class ReviewTextTest(PoolProjectCase):
         self.route("release", "Alg-p2-01", sid="s-researcher")
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            setup.main(["pool", "--target", self.tmp])
+            setup.main(["pool", "--target", self.tmp, "--manual"])
         self.assertIn("重建句", out.getvalue())
 
 

@@ -449,8 +449,10 @@ def promote(pool, policy, permit, sid, desk, at=None):
              "desk": desk or permit.get("desk"), "claimed_at": stamp(at), "via": permit.get("via"),
              "by": permit.get("by")}
     pool["claims"][name] = claim
-    if permit in pool["permits"]:
-        pool["permits"].remove(permit)
+    # the permit that was used, and any other one for this same session: a +2 opened by the researcher's
+    # session is pre-registered by its desktop ID and may claim through its opening line first
+    pool["permits"] = [p for p in pool["permits"] if p is not permit
+                       and not (sid and p.get("session_id") == sid) and not (claim["desk"] and p.get("desk") == claim["desk"])]
     pool["pending"] = [p for p in pool["pending"] if p.get("session_id") != sid]
     pool["tombstones"] = [t for t in pool["tombstones"]
                           if not ((sid and t.get("session_id") == sid) or (claim["desk"] and t.get("desk") == claim["desk"]))]
@@ -858,7 +860,7 @@ def session_view(root, policy, pool, sessions=None, at=None):
                 focus_left = int((FOCUS_IDLE - (at - parse_time(st["status_at"]))).total_seconds() // 60)
         rows.append({"name": name, "short": claim.get("short"), "role": claim.get("role"), "status": status,
                      "work_items": sorted(owners.get(name, [])), "last": stamp(last) if last else None,
-                     "desk": claim.get("desk"), "permission_mode": st.get("permission_mode"),
+                     "desk": claim.get("desk"), "permission_mode": st.get("permission_mode"), "cwd": st.get("cwd"),
                      "version": st.get("version"), "plugin_version": st.get("plugin_version"),
                      "denied": st.get("denied", 0), "focus": focus, "focus_left_min": focus_left,
                      "quota": st.get("quota"), "quota_at": st.get("quota_at"),

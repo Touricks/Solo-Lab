@@ -58,7 +58,7 @@ def pool_start(data, policy, root, sid, desk):
 
     def change(st):
         st.setdefault("started_at", stamp)
-        st.update({"source": source, "version": claude_version(),
+        st.update({"source": source, "version": claude_version(), "cwd": data.get("cwd"),
                    "desktop_app": os.environ.get("CLAUDE_CODE_DESKTOP_APP_VERSION")})
         if source != "compact":                    # an automatic compaction can happen in the middle of a turn
             st.update({"status": "idle", "status_at": stamp})

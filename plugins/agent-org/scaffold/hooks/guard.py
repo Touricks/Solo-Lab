@@ -977,6 +977,27 @@ def check_pool_command(data, who, policy, root, command):
     return Verdict("deny", "只有研究员能释放认领（route.py release）。")
 
 
+def runs_setup_login(argv):
+    """python3 … setup.py login: the one way a session starts a device-code login of meegle or lark-cli."""
+    if not argv or not PYTHON.search(os.path.basename(argv[0])):
+        return False
+    kind, target, rest = fc.python_target(argv[1:])
+    return (kind == "script" and os.path.basename(target or "").lstrip("\\") == "setup.py"
+            and next((x for x in rest if not x.startswith("-")), "") == "login")
+
+
+def check_login(data, who, root, command):
+    """setup.py login is for the researcher's own session: a role session reports an expired login."""
+    if "setup.py" not in command or not re.search(r"\blogin\b", command):
+        return None
+    runs = command_runs(command, data.get("cwd") or root, root)
+    if not any(runs_setup_login(argv) if argv else "setup.py" in text for argv, text in runs):
+        return None
+    if data.get("agent_id") or not who.researcher:
+        return Verdict("deny", "登录由研究员的会话发起（setup.py login），研究员扫码完成：把“登录过期”报给研究员。")
+    return None
+
+
 def check_identity_vars(data, who, command):
     """A command that unsets, clears or sets the session's identity variables would speak
     for another session to route.py and ledger.py."""
@@ -1083,7 +1104,7 @@ def check_bash(data, who, policy, risk, soft, command=None):
     root = project_root(data)
     verdict = Verdict()
     for found in (check_identity_vars(data, who, command), check_pool_command(data, who, policy, root, command),
-                  check_git(data, who, command, root)):
+                  check_login(data, who, root, command), check_git(data, who, command, root)):
         if found:
             verdict.merge(found)
     if verdict.decision == "deny":

@@ -197,6 +197,32 @@ class RegisterTest(LedgerCase):
                                          self.value(item_id, "research_task", "sequence"))["label"], "项目管理")
         self.assertIn("负责方：产品 +2", self.quiet(ledger.next_step, self.lg("preview"), item_id))
 
+    def test_a_revised_sheet_becomes_the_main_document_of_its_task(self):
+        task = self.task()
+        old = self.value(task, "research_task", "main_doc")
+        revised = self.write((SHEET % ("验证", "产品 +2（Product-p2-01）")).replace("复现并测量基线", "复现基线并测波动"), "v2.md")
+        lg = self.lg()
+        _, text = self.out(ledger.register, lg, revised, existing=task)
+        self.assertEqual(lg.wrote("workitem", "create"), [])                             # the work item stays
+        self.assertNotEqual(self.value(task, "research_task", "main_doc"), old)
+        self.assertIn("原来那份留在原处", text)
+        with open(revised, encoding="utf-8") as f:
+            self.assertIn("- 关联工作项：#%s" % task, f.read())
+        self.assertIn("不要重复登记", self.fails(ledger.register, self.lg(), revised, existing=task))
+        probe = self.write(SHEET % ("试探", "产品 +2（Product-p2-01）"), "v3.md")
+        self.assertIn("流程在新建时选定", self.fails(ledger.register, self.lg(), probe, existing=task))
+        self.assertIn("只给研究任务换主文档", self.fails(ledger.register, self.lg(), self.write(FEEDBACK, "f.md"), existing=task))
+        self.quiet(ledger.confirm, self.lg(), task, *STEPS[0])
+        late = self.write(SHEET % ("验证", "产品 +2（Product-p2-01）"), "v4.md")
+        self.assertIn("已经过了第一步", self.fails(ledger.register, self.lg(), late, existing=task))
+
+    def test_the_sheet_init_writes_registers_as_it_is(self):
+        import setup
+        path = self.write(setup.first_task_sheet({"name": "约束优化器", "description": "面向代码的约束优化器"}), "first.md")
+        task = self.quiet(ledger.register, self.lg(), path)
+        self.assertEqual(self.state(task), "确定目标")
+        self.assertEqual(self.fake.item(task)["name"], "约束优化器")
+
     def test_feedback_sheet(self):
         task = self.task()
         item_id = self.quiet(ledger.register, self.lg(), self.write(FEEDBACK, "fb.md"))

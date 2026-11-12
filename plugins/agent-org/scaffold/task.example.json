@@ -1,11 +1,11 @@
 {
-  "_说明": "每个角色是研究员看得见的一个桌面会话（会话池）。pool 一节：p1、p0 是每个序列开池时开几个 +1、+0 会话，later 里的序列开池时只开 +2，max_sessions 是会话总数的上限。",
+  "_说明": "每个角色是研究员看得见的一个桌面会话（会话池）。pool 一节：p1、p0 是每个序列开池时开几个 +1、+0 会话，later 里的序列开池时只开 +2，不写就是外联（liaison）：它第一次要出材料时，研究员在外联 +2 的会话里说一句“补位”；max_sessions 是会话总数的上限；还可以写 label，它是会话标题的前缀和侧栏分区的名字，不写就用飞书项目空间的名字。feishu 一节只有 meegle_space 必填，wiki_space 不写就用项目名，template_url 不写就用插件约定里的参考模板。",
   "name": "示例项目",
   "description": "面向代码的约束优化器",
   "pool": {
     "p1": 1,
     "p0": 1,
-    "later": [],
+    "later": ["liaison"],
     "max_sessions": 30
   },
   "editable_paths": [
@@ -17,7 +17,6 @@
   ],
   "feishu": {
     "meegle_space": "<你的飞书项目空间名>",
-    "template_space": "std_template",
     "wiki_space": "<你的知识空间名>"
   },
   "models": {

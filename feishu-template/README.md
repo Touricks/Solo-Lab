@@ -6,7 +6,7 @@ agent-org 插件把飞书项目空间当台账用。空间里有哪些工作项�
 | --- | --- |
 | 模板版本 | 2.0.0 |
 | 符合的约定 | `contract_version` 1，见 `plugins/agent-org/orgspec/contract.json` |
-| 模板中心链接 | 尚未发布；发布后填在这里和约定文件的 `template.url` |
+| 模板中心链接 | <https://project.feishu.cn/templates/detail/7f032046eb974cab877ce8df79389895>，模板名 research_template；同一个链接记在约定文件的 `template.url` |
 | 结构 | [结构.md](结构.md) |
 | 自己搭 | [搭建手册.md](搭建手册.md) |
 | 更新记录 | [更新记录.md](更新记录.md) |

@@ -389,7 +389,7 @@ def children_text(root, policy, claim):
                 rows.append((child_row(tpl, name), False))
     lines = ["开局句要你开子会话时，照下表开还没认领的会话（开局句写着“不开子会话”的，不开，用 route.py pool 找回已有的会话）；"
              "研究员说“补位”时，开表里“补位用”的那一行。每个都用会话管理工具 start_session：initiation 写 user_asked，context 写 fresh，"
-             "不开 worktree，权限模式不填（继承本会话）；name、title、model、prompt、background 照下表。开好马上用返回的桌面会话 ID 运行表里的 expect。"]
+             "use_worktree 写 false，权限模式不填（继承本会话）；name、title、model、prompt、background 照下表。开好马上用返回的桌面会话 ID 运行表里的 expect。"]
     if not top.get("children"):
         lines.append("本序列开池时只开 +2（任务文件的 pool.later），下表只有补位用的行。")
     if full:
@@ -398,8 +398,10 @@ def children_text(root, policy, claim):
         mark = "（已认领，不用再开）" if done else ("" if ch in top.get("children", []) else "（补位用）")
         lines.append("- %s：name=%s，title=“%s”，model=%s%s\n  prompt：%s\n  background：%s\n  然后：%s" % (
             ch["name"], ch["short"], ch["title"], ch["model"], mark, ch["brief"], ch["background"], ch["expect"]))
-    lines.append("开完以后：用 set_session_title 把本会话的标题改成“%s”，再把本会话置顶；回研究员一句“已认领 %s，已开 …”。"
-                 "model 填不进去就不填，开好以后再改模型。" % (top["title"], claim["name"]))
+    label = plan_of(root).get("label") or ""
+    lines.append("开局句要你开子会话的，开完以后：用 set_session_title 把本会话的标题改成“%s”，再用 move_sessions 把本会话和"
+                 "开出的子会话归入侧栏分区“%s”（没有这个分区就先用 create_section 建）；回研究员一句“已认领 %s，已开 …”。"
+                 "model 填不进去就不填，开好以后再改模型。" % (top["title"], label, claim["name"]))
     return "\n".join(lines)
 
 
@@ -500,6 +502,9 @@ def expect_cmd(spec, root, name, role, desk=None, session=None):
     cap = (policy.get("pool") or {}).get("max_sessions")
     with pool.locked(root) as pl:
         other = pool.claim_by_desk(pl, desk) or pool.claim_by_session(pl, session)
+        if other and other["name"] == full and other.get("role") == role:
+            print("%s（%s）已经由这个会话认领，不用再预登记。" % (full, role))        # the opening run again after an interruption
+            return 0
         if other:
             print("出错：这个会话已经认领了 %s。" % other["name"])
             return 1
