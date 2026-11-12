@@ -2432,8 +2432,9 @@ class SpecAndRoutingTest(ProjectCase):
         keys = [space["project_key"], space["simple_name"]] + [t["type_key"] for t in space["types"].values()]
         keys += [x["field_key"] for fields in space["fields"].values() for x in fields.values()]
         words = ["Coze" + "Loop", "coze" + "loop", "eval_" + "resources", "Auto" + "Research", "MC" + "GS", "贝索" + "斯",
-                 "Claude in " + "Chrome", "前" + "文", "mcp__" + "ccd", "ccd_" + "session"]
-        pattern = re.compile("|".join(re.escape(w) for w in words + sorted(set(keys))))
+                 "Claude in " + "Chrome", "mcp__" + "ccd", "ccd_" + "session"]
+        earlier = "(?<!当)" + "前" + "文"         # a pointer to earlier text; “当前文件” is not one
+        pattern = re.compile("|".join([earlier] + [re.escape(w) for w in words + sorted(set(keys))]))
         hits = []
         for base, dirs, files in os.walk(REPO):
             dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "tests")]
