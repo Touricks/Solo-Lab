@@ -1363,7 +1363,9 @@ class PoolSetupTest(PoolProjectCase):
         lead = self.read(".claude/agents/alg-p2.md")
         self.assertIn("先接单：把需求复述、承接范围、预计交付时间", lead)
         self.assertIn("交付包发给入口 `PMO-p2-01`", lead)
-        self.assertIn("承接方交回的交付包文档就是这份产出", lead)             # where a link field gets its document
+        self.assertIn("登记请求里把字段写成 `<字段>=@<本地文件>`，书记员上传到研究任务单下面并填上链接", lead)   # what the +2 writes itself
+        self.assertIn("验收通过以后用承接方那份交付包文档的链接", lead)       # what it hands down
+        self.assertIn("链接字段给的是 `@文件` 时不读内容", self.read(".claude/agents/pmo-scribe.md"))
         scribe = self.read(".claude/agents/pmo-scribe.md")
         self.assertIn("你也接任何会话的登记请求", scribe)
         self.assertIn("【通知 #<任务 ID>】PMO-p0-01 → <那个 +2 的会话名>：研究任务走到“<节点>”", scribe)

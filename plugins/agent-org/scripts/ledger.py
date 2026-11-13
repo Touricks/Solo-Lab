@@ -33,6 +33,8 @@ orgspec/contract.json; feishu/ids.json binds each slot to this project's space a
 feishu/space.json is the space's structure as `space.py snapshot` read it.
 
 A field is named by its slot (main_doc), its name in the space (成功标准) or its field_key.
+A link field may be given a local file, --set 规格=@spec/spec.md: confirm and update upload it
+as a document under the work item's main document and write its link.
 Values go to meegle as strings: dates as UTC noon in milliseconds, numbers as digits.
 Three checks are the scripts' own. A step whose form requires a signature field takes a
 decision that is decided, approved and made for this task. Before the step that requires
@@ -52,6 +54,7 @@ import argparse
 import contextlib
 import datetime
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -1229,6 +1232,8 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
         except (LedgerError, KeyError, orgspec.OrgSpecError) as e:
             print("提醒：跳过字段 %s（之后可以用 update 补）：%s" % (ref, e))
     sets = parse_sets(lg, wid, pairs)                 # on --resume, all values are written again with the main document
+    if any("upload" in v for _, v in sets):
+        raise LedgerError("登记时还没有主文档，产出文档没处挂：先登记，再用 ledger.py update <工作项 ID> --set <字段>=@<文件> 上传")
     if not rec:
         fields += [v for _, v in sets]
     doc_key = lg.field(wid, "main_doc")["field_key"]
@@ -1412,17 +1417,29 @@ def set_value(lg, raw):
     if not raw.startswith("@") or len(raw) == 1:
         return raw
     name = raw[1:]
-    for base in dict.fromkeys((os.getcwd(), lg.root)):
-        full = name if os.path.isabs(name) else os.path.join(base, name)
-        if os.path.isfile(full):
-            try:
-                with open(full, encoding="utf-8") as f:
-                    return f.read().strip()
-            except UnicodeDecodeError:
-                raise LedgerError("文件 %s 不是 UTF-8 文本；转成 UTF-8 再传" % name)
+    full = find_file(lg, name)
+    if full:
+        return read_text_file(lg, full).strip()
     if not re.search(r"\s", name) or re.search(r"/|<|>|\.[A-Za-z0-9]{1,5}$", name):
         raise LedgerError("找不到文件 %s（--set 的 @文件 先按当前目录、再按项目目录找）；要写以 @ 开头的文字，用 @@" % name)
     return raw
+
+
+def find_file(lg, name):
+    """The file an @name of --set points at: looked for under the current directory, then the project."""
+    for base in dict.fromkeys((os.getcwd(), lg.root)):
+        full = name if os.path.isabs(name) else os.path.join(base, name)
+        if os.path.isfile(full):
+            return full
+    return None
+
+
+def read_text_file(lg, full):
+    try:
+        with open(full, encoding="utf-8") as f:
+            return f.read()
+    except UnicodeDecodeError:
+        raise LedgerError("文件 %s 不是 UTF-8 文本；转成 UTF-8 再传" % os.path.relpath(full, lg.root))
 
 
 def parse_sets(lg, wid, pairs):
@@ -1432,10 +1449,78 @@ def parse_sets(lg, wid, pairs):
             raise LedgerError("--set 要写成 字段=值：%s" % pair)
         ref, raw = pair.split("=", 1)
         try:
+            f = lg.field(wid, ref)
+            if f.get("field_type") == "link" and raw.startswith("@") and not raw.startswith("@@") and len(raw) > 1:
+                # a link field given a local file: the file becomes a document when the values are written
+                full = find_file(lg, raw[1:])
+                if not full:
+                    raise LedgerError("找不到文件 %s（--set 的 @文件 先按当前目录、再按项目目录找）" % raw[1:])
+                out.append((ref, {"field_key": f["field_key"], "field_value": "@" + os.path.relpath(full, lg.root), "upload": full}))
+                continue
             out.append((ref, lg.entry(wid, ref, set_value(lg, raw))))
         except (orgspec.OrgSpecError, KeyError) as e:
             raise LedgerError("--set %s：%s（%s有哪些字段见 feishu/space.md）" % (ref, e, lg.spec.term("wi", wid)))
     return out
+
+
+def attach(lg, item_id, it, wid, key, path):
+    """Upload a local file as a document under the work item's main document; return its link.
+
+    This is how a document written by the session that owns a step gets into Feishu without a
+    request of its own: the step is the work item behind it. One receipt per file and content
+    (packages/sent/attach-<ID>-<field>-<file>-<hash>.json): a rerun with the same content uses
+    the document it made, a changed file becomes a new document with a new link, so a field
+    frozen by a signature cannot change unnoticed.
+    """
+    text = read_text_file(lg, path)
+    rel, label = os.path.relpath(path, lg.root), lg.label(wid, key)
+    if not text.strip():
+        raise LedgerError("文件 %s 是空的" % rel)
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+    rpath = receipt_file(lg, ["attach-%s-%s-%s-%s" % (item_id, safe_name(label), safe_name(path), digest)], path)
+    rec = (load_json(rpath, {}) or {}) if lg.mode != "offline" else {}
+    rec = rec if isinstance(rec, dict) else {}
+    receipt = os.path.relpath(rpath, lg.root)
+    if rec.get("status") == "registered" and rec.get("doc"):
+        print("%s 没有改过，沿用上次上传的文档：%s" % (rel, rec["doc"]))
+        return rec["doc"]
+    if rec.get("doc_unknown") and not (rec.get("doc") or rec.get("docx")):
+        raise LedgerError("上次上传 %s 没有拿到确定的结果（回执 %s）。先在网页上看 #%s 的主文档下有没有这份文档：有的话把它的链接直接写进 "
+                          "--set %s=<文档链接>；确认没有，删掉这份回执再重跑" % (rel, receipt, item_id, label))
+    node = lg.node_of(lg.doc_url(item_id, it))
+    if not node:
+        raise LedgerError("#%s 的主文档不是知识库文档，“%s”没处挂" % (item_id, label))
+    lines = text.splitlines()
+    head = next((i for i, l in enumerate(lines) if l.startswith("# ")), None)
+    title = "%s：%s" % (label, title_of(text) or (it or {}).get("name") or "#%s" % item_id)
+    body = "\n".join(l for i, l in enumerate(lines) if i != head).strip() + "\n"
+
+    def remember(**kw):
+        rec.update({k: v for k, v in kw.items() if v is not None})
+        if lg.mode == "apply":
+            rec.update(draft=rel, parent=str(item_id), field=label, updated_at=now())
+            rec.setdefault("status", "created")
+            os.makedirs(sent_dir(lg), exist_ok=True)
+            save_json(rpath, rec)
+
+    def create():
+        return lg.create_doc(node, title, body, created=lambda x: remember(docx=x, doc_unknown=False))
+
+    try:
+        link = main_document(lg, dict(rec), None, "#%s 的主文档下" % item_id, create, remember)
+    except WriteMaybeDone as e:
+        raise LedgerError("%s\n上传 %s 没有拿到确定的结果（回执 %s）。先在网页上看 #%s 的主文档下有没有这份文档：有的话把它的链接直接写进 "
+                          "--set %s=<文档链接>；确认没有，删掉这份回执再重跑" % (e, rel, receipt, item_id, label))
+    remember(status="registered")
+    if lg.mode == "apply":
+        print("已上传“%s”：%s" % (title, link))
+    return link
+
+
+def attach_documents(lg, item_id, it, wid, sets):
+    """--set pairs with every local file given for a link field uploaded and replaced by its link."""
+    return [(ref, {"field_key": v["field_key"], "field_value": attach(lg, item_id, it, wid, v["field_key"], v["upload"])}
+             if "upload" in v else v) for ref, v in sets]
 
 
 # ------------------------------------------------------------ node flows
@@ -1692,6 +1777,7 @@ def confirm(lg, item_id, by=None, pairs=None, node=None, decision=None, wid_hint
     nodes = lg.flow_nodes(item_id)
     if nodes is None:                                   # offline: nothing can be read, show the commands
         if sets:
+            sets = attach_documents(lg, item_id, it, wid, sets)
             lg.meegle("workitem", "update", "--work-item-id", str(item_id), "--fields",
                       json.dumps([v for _, v in sets], ensure_ascii=False), write=True)
         lg.meegle("workflow", "transition", "--work-item-id", str(item_id), "--node-id", node or "<当前节点>",
@@ -1727,6 +1813,7 @@ def confirm(lg, item_id, by=None, pairs=None, node=None, decision=None, wid_hint
             check_sign(lg, item_id, decision, "认可冻结字段的改动", cur.get("started_at"))
             print("提醒：冻结的字段在签字后改过（%d 处），研究员已用决策 #%s 认可。" % (len(changed), item_id_of(decision)))
     if sets:
+        sets = attach_documents(lg, item_id, it, wid, sets)     # every check has passed: local files become documents now
         lg.meegle("workitem", "update", "--work-item-id", str(item_id), "--fields",
                   json.dumps([v for _, v in sets], ensure_ascii=False), write=True)
     lg.meegle("workflow", "transition", "--work-item-id", str(item_id), "--node-id", cur["key"], "--action", "confirm", write=True)
@@ -1819,6 +1906,7 @@ def update(lg, item_id, pairs, wid_hint=None):
             sets.append(("blocked_since", {"field_key": since, "field_value": ""}))
         else:
             sets += parse_sets(lg, wid, ["blocked_since=%s" % datetime.date.today().isoformat()])   # local date
+    sets = attach_documents(lg, item_id, it, wid, sets)
     lg.meegle("workitem", "update", "--work-item-id", str(item_id), "--fields",
               json.dumps([v for _, v in sets], ensure_ascii=False), write=True)
 

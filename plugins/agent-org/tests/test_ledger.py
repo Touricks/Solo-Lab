@@ -975,6 +975,90 @@ class DocumentsTest(LedgerCase):
         self.assertEqual(sorted(self.ids()["wiki"]["nodes"]), sorted(keys))
 
 
+class AttachTest(LedgerCase):
+    """A link field given a local file: the scribe uploads it under the item's main document."""
+
+    def local(self, text="# 上下文整理\n\n基线的公开数字和三篇相关工作。\n", name="context.md"):
+        os.makedirs(os.path.join(self.tmp, "spec"), exist_ok=True)
+        with open(os.path.join(self.tmp, "spec", name), "w", encoding="utf-8") as f:
+            f.write(text)
+        return "@spec/" + name
+
+    def receipts(self, task):
+        sent = os.path.join(self.tmp, "packages", "sent")
+        return sorted(n for n in os.listdir(sent) if n.startswith("attach-%s-" % task))
+
+    def test_a_step_is_confirmed_with_the_document_of_a_local_file(self):
+        task = self.task()
+        self.quiet(ledger.confirm, self.lg(), task, "Product-p2-01", STEPS[0][1])
+        before = len(self.fake.docs)
+        lg = self.lg()
+        _, text = self.out(ledger.confirm, lg, task, "Alg-p2-01", ["上下文文档=" + self.local()])
+        self.assertIn("已上传“上下文文档：上下文整理”：", text)
+        self.assertIn("“准备上下文”完成", text)
+        self.assertEqual(len(self.fake.docs), before + 1)
+        argv, _, stdin = next(c for c in lg.calls if c[1] and "+create" in c[0])
+        self.assertIn("上下文文档：上下文整理", argv)
+        self.assertEqual(stdin, "基线的公开数字和三篇相关工作。\n")                # the heading became the title
+        link = self.value(task, "research_task", "上下文文档")
+        self.assertRegex(str(link), r"^https://[^/]+/wiki/\w+")
+        writes = [a[1:3] for a, w, _ in lg.calls if w]
+        self.assertEqual(writes, [["docs", "+create"], ["workitem", "update"], ["workflow", "transition"]])
+        self.assertEqual(len(self.receipts(task)), 1)
+
+    def test_nothing_is_uploaded_before_the_checks_pass(self):
+        task = self.task()
+        self.walk(task, 4)
+        before = len(self.fake.docs)
+        text = self.fails(ledger.confirm, self.lg(), task, "Alg-p2-01", ["规格=" + self.local(name="spec.md")])
+        self.assertIn("假设签字", text)                                          # the step lacks other things
+        self.assertNotIn("规格、", text.replace("规格版本", ""))                    # the file counts as given
+        self.assertEqual((len(self.fake.docs), self.receipts(task)), (before, []))
+        self.assertIn("将执行：lark-cli docs +create", self.out(ledger.update, self.lg("preview"), task, ["规格=@spec/spec.md"])[1])
+        self.assertEqual((len(self.fake.docs), self.receipts(task)), (before, []))  # a preview writes nothing either
+
+    def test_the_same_content_is_uploaded_once_and_a_changed_file_again(self):
+        task = self.task()
+        ref = self.local(name="spec.md")
+        self.quiet(ledger.update, self.lg(), task, ["规格=" + ref])
+        first = self.value(task, "research_task", "规格")
+        lg = self.lg()
+        _, text = self.out(ledger.update, lg, task, ["规格=" + ref])
+        self.assertIn("spec/spec.md 没有改过，沿用上次上传的文档", text)
+        self.assertEqual((lg.wrote("docs", "+create"), self.value(task, "research_task", "规格")), ([], first))
+        self.local("# 规格 v2\n\n阈值改成 0.3。\n", "spec.md")
+        lg = self.lg()
+        self.quiet(ledger.update, lg, task, ["规格=" + ref])
+        self.assertEqual(len(lg.wrote("docs", "+create")), 1)                    # a new document: the link changes with the content
+        self.assertNotEqual(self.value(task, "research_task", "规格"), first)
+        self.assertEqual(len(self.receipts(task)), 2)
+
+    def test_a_document_that_exists_is_not_made_twice_after_a_failure(self):
+        task = self.task()
+        ref = self.local(name="spec.md")
+        before = len(self.fake.docs)
+        self.fails(ledger.update, self.lg(replies=[(("workitem", "update"), ledger.LedgerError("down"))]), task, ["规格=" + ref])
+        self.assertEqual(len(self.fake.docs), before + 1)                        # uploaded, the field not written
+        lg = self.lg()
+        self.quiet(ledger.update, lg, task, ["规格=" + ref])
+        self.assertEqual((lg.wrote("docs", "+create"), len(self.fake.docs)), ([], before + 1))
+        self.assertTrue(self.value(task, "research_task", "规格"))
+        text = self.fails(ledger.update, self.lg(replies=[(("docs", "+create"), ledger.WriteMaybeDone("timeout"))]), task,
+                          ["需求文档=" + self.local(name="prd.md")])
+        self.assertIn("没有拿到确定的结果", text)
+        self.assertIn("--set 需求文档=<文档链接>", self.fails(ledger.update, self.lg(), task, ["需求文档=@spec/prd.md"]))
+
+    def test_what_is_refused(self):
+        task = self.task()
+        self.assertIn("找不到文件 spec/none.md", self.fails(ledger.update, self.lg(), task, ["规格=@spec/none.md"]))
+        self.local("", "empty.md")
+        self.assertIn("是空的", self.fails(ledger.update, self.lg(), task, ["规格=@spec/empty.md"]))
+        self.quiet(ledger.update, self.lg(), task, ["成功标准=" + self.local("十个节点都确认到归档\n", "goal.txt")])
+        self.assertEqual(self.value(task, "research_task", "成功标准"), "十个节点都确认到归档")   # a text field still takes the text
+        path = self.write(SHEET % ("验证", "产品 +2（Product-p2-01）"), "second.md")
+        self.assertIn("登记时还没有主文档", self.fails(ledger.register, self.lg(), path, pairs=["规格=" + self.local(name="spec.md")]))
+
+
 class ValuesAndReadsTest(LedgerCase):
     def test_set_values_from_files(self):
         lg = ledger.Ledger(self.tmp, "offline")
