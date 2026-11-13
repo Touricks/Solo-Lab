@@ -1736,8 +1736,11 @@ def confirm(lg, item_id, by=None, pairs=None, node=None, decision=None, wid_hint
         if done["status"] != "finished":
             raise LedgerError("确认后回读，“%s”还是%s" % (cur["name"], NODE_STATUS.get(done["status"], done["status"])))
         state = (lg.item(item_id) or {}).get("state")
+        doing = [n for n in after if n["status"] == "doing"]
         print("确认：#%s “%s”完成，现在到“%s”，状态“%s”。" % (
-            item_id, cur["name"], "、".join(n["name"] for n in after if n["status"] == "doing") or "流程末尾", state))
+            item_id, cur["name"], "、".join(n["name"] for n in doing) or "流程末尾", state))
+        for n in doing:                                    # the scribe tells whoever the next step belongs to
+            print("“%s”这一步的负责方：%s。" % (n["name"], responsible(lg, wid, it, n)[0]))
     else:
         print("预览：会确认 #%s 的“%s”（%s）。" % (item_id, cur["name"], cur["key"]))
 

@@ -455,6 +455,7 @@ class StepTest(LedgerCase):
         lg = self.lg()
         _, text = self.out(ledger.confirm, lg, task, "Product-p2-01", STEPS[0][1])
         self.assertIn("确认：#%s “确定目标”完成，现在到“准备上下文”，状态“准备上下文”。" % task, text)
+        self.assertIn("“准备上下文”这一步的负责方：算法 +2。", text)           # whom the scribe tells that the task is theirs now
         writes = [argv[1:3] for argv, write, _ in lg.calls if write]
         self.assertEqual(writes, [["workitem", "update"], ["workflow", "transition"]])
         self.assertTrue(self.value(task, "research_task", "成功标准"))

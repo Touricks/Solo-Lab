@@ -1354,6 +1354,20 @@ class PoolSetupTest(PoolProjectCase):
             self.assertNotIn("用 Agent 工具派 `", text, name)
         self.assertIn("【登记请求】", self.read(".claude/agents/alg-p1.md"))
         self.assertIn("【登记回执", self.read(".claude/agents/pmo-scribe.md"))
+        # every step of a request has someone who asks the scribe for it
+        for name in ("alg-p0", "alg-p1"):
+            self.assertIn("动作“上传答复”，再写一行“确认节点：#<需求 ID>，由 <你的会话名> 提出”", self.read(".claude/agents/%s.md" % name))
+        for name in ("alg-p1", "alg-p2"):
+            self.assertIn("- 验收：", self.read(".claude/agents/%s.md" % name))
+        self.assertNotIn("- 验收：", self.read(".claude/agents/alg-p0.md"))
+        lead = self.read(".claude/agents/alg-p2.md")
+        self.assertIn("先接单：把需求复述、承接范围、预计交付时间", lead)
+        self.assertIn("交付包发给入口 `PMO-p2-01`", lead)
+        self.assertIn("承接方交回的交付包文档就是这份产出", lead)             # where a link field gets its document
+        scribe = self.read(".claude/agents/pmo-scribe.md")
+        self.assertIn("你也接任何会话的登记请求", scribe)
+        self.assertIn("【通知 #<任务 ID>】PMO-p0-01 → <那个 +2 的会话名>：研究任务走到“<节点>”", scribe)
+        self.assertIn("接着请它归档这条研究任务", self.read(".claude/agents/pmo-p2.md"))
         self.assertIn("### 派发图", self.read("org/org.md"))
         self.assertIn("初始池", self.read("org/grants.md"))
 

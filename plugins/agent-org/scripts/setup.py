@@ -603,8 +603,14 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
         "- 会话名：%s会话标签是 `%s`。" % (session, pol["tag"]),
         "- 开工或接手：先读交给你的包；再用 `python3 -I .claude/agent-org/bin/ledger.py get <工作项 ID>` 读工作项，读主文档的“状态包”接上进度。不靠对话记状态。",
         "- 写包用技能 `agent-org:packages`（模板副本在 `.claude/agent-org/templates/`）。草稿写到 `packages/drafts/%s/`，文件名照 `%s`；写完跑 `python3 -I .claude/agent-org/bin/orgspec.py lint <路径>`。" % (seq, n["draft"]),
-        "- 交回：给派活方发消息，首行写 `%s：<包名> <包路径>`，下面是三行以内的摘要。发完把回执（delivered 或 queued，以及 message_id）写进本轮的最后一句。" % msg_head(spec, "report", receiver="<派活方会话名>"),
     ]
+    if rank == 2:           # a +2 answers requests of other sequences; they travel through the entry
+        lines.append("- 交回：你答复的是别的序列发来的跨序列需求。交付包发给入口 `%s`，首行写 `%s：<包名> <包路径>`，下面是三行以内的摘要；入口请书记员登记，再通知发起方。"
+                     "发完把回执（delivered 或 queued，以及 message_id）写进本轮的最后一句。" % (entry, msg_head(spec, "report", receiver=entry)))
+    else:
+        lines.append("- 交回：写好交付包，先给 `%s` 发【%s】：写草稿路径，动作“上传答复”，再写一行“确认节点：#<需求 ID>，由 <你的会话名> 提出”，它上传交付包并确认“执行”这一步。"
+                     "拿到【%s】后给派活方发消息，首行写 `%s：<包名> <包路径>`，下面是三行以内的摘要。发完把回执（delivered 或 queued，以及 message_id）写进本轮的最后一句。" % (
+                         scribe, reg, receipt, msg_head(spec, "report", receiver="<派活方会话名>")))
     dispatch = ("再跑 `python3 -I .claude/agent-org/bin/route.py pool --role %s` 找空闲的会话。有空闲的：登记请求写“开工：是”，拿到【%s #ID】后发 "
                 "`%s：<包名> <包路径>`%s。没有空闲的：登记请求写“开工：否”，活留在“待开工”排队；等有会话空出来，先请书记员确认“开工”这一步（`ledger.py confirm <工作项 ID> --by <承接方的会话名>`），再派。")
     if rank == 2:
@@ -617,6 +623,11 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
     else:
         lines.append("- 你不再往下派。")
     if rank in (1, 2):
+        lines.append("- 验收：收到【%s】后，对照需求包的验收标准看交付包，`ledger.py get <需求 ID>` 的“交付包”字段是它的链接。通过：给 `%s` 发【%s】，动作“确认节点”和“归档”，"
+                     "写“确认节点：#<需求 ID>，由 <你的会话名> 提出”。不通过：动作“回滚节点”，写“回滚节点：#<需求 ID> 退回到 执行，原因：<一句话>”，"
+                     "拿到【%s】后给承接方发【%s】说明要改什么。%s" % (
+                         spec.term("msg", "report"), scribe, reg, receipt, spec.term("msg", "resume"),
+                         "你发起的跨序列需求，入口用【%s】告诉你交付到了，验收的做法一样。" % spec.term("msg", "notice") if rank == 2 else ""))
         opens = ("你开本序列的 +1；+0 由它上面的 +1 开，要补 +0 请研究员到那个 +1 的会话里说（本序列没有 +1 时才由你开）" if rank == 2
                  else "你开自己下面的 +0")
         lines.append("- 上限和补位：每个角色 +1 最多 3 个会话、+0 最多 5 个。没有空闲会话就排队。会话一层开一层，侧栏里新会话嵌在开它的会话下面：%s。"
@@ -626,7 +637,13 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
     if rank == 2:
         lines.append("- 跨序列的需求包、决策包写成草稿发给入口 `%s`（【%s】【%s】），由入口转交；你不直接给别的序列派活。" % (
             entry, spec.term("msg", "report"), spec.term("msg", "decide")))
-        lines.append("- 研究任务走到你们序列负责的那一步时，这一步归你推进：先用 `python3 -I .claude/agent-org/bin/ledger.py next <研究任务 ID>` 看这一步必填什么，序列内的活派 +1，要别的序列配合就发跨序列的需求包；产出齐了，给 `%s` 发【%s】请它确认节点，写明各必填字段的值。正式分数只认质量序列在冻结的 Eval Set 上跑出的。" % (scribe, reg))
+        lines.append("- 别的序列发来的跨序列需求，由入口用【%s】转给你。先接单：把需求复述、承接范围、预计交付时间写在【%s】里发给入口，不写交付包，入口请书记员确认“接单”这一步；"
+                     "不接就写明原因交回入口，由它请书记员退回“提出”。接了以后序列内照常派活，做完的交付包照上面“交回”一条交给入口。" % (
+                         spec.term("msg", "assign"), spec.term("msg", "report")))
+        lines.append("- 研究任务走到你们序列负责的那一步时，这一步归你推进；书记员确认上一步以后会用【%s】告诉你。先用 `python3 -I .claude/agent-org/bin/ledger.py next <研究任务 ID>` 看这一步必填什么，"
+                     "序列内的活派 +1，要别的序列配合就发跨序列的需求包。要填链接的产出（上下文文档、需求文档、规格、实验方案、结论文档、试探记录）由本序列的一条同序列需求来做："
+                     "承接方交回的交付包文档就是这份产出，链接在那条需求的“交付包”字段里。产出齐了，给 `%s` 发【%s】请它确认节点，写明各必填字段的值。"
+                     "正式分数只认质量序列在冻结的 Eval Set 上跑出的。" % (spec.term("msg", "notice"), scribe, reg))
     else:
         if seq != "quality":
             lines.append("- 交付包里写明材料来源、每个变体的结果和运行 ID，失败的也列。你自己跑出的分数是开发分，只用来调试，不当结论写。")
