@@ -1576,6 +1576,71 @@ class PoolSetupTest(PoolProjectCase):
         self.assertNotIn(setup.BY_HAND, "".join(e["brief"] for e in setup.plan_entries(plan)))   # only a +2 opened by hand files itself
 
 
+class AnnounceTest(PoolProjectCase):
+    """setup.py announce: what an initialisation is about to create, said before anything is made."""
+
+    def announce(self, *args):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = setup.main(["announce"] + list(args))
+        return code, out.getvalue()
+
+    def test_a_fresh_directory_is_named_after_itself_and_gets_the_defaults(self):
+        fresh = os.path.join(self.tmp, "新项目")
+        os.mkdir(fresh)
+        code, text = self.announce("--target", fresh)
+        self.assertEqual(code, 0, text)
+        self.assertIn("- 飞书项目空间 1 个：新项目，用模板创建\n- 飞书知识空间 1 个：新项目\n", text)
+        self.assertIn("- 知识库节点 %d 个\n" % len(self.spec.node_keys()), text)
+        self.assertIn("- 桌面会话 19 个（外联只开 +2），侧栏分区 1 个：新项目\n", text)
+        self.assertIn("会话分 2 轮开，第 1 轮开完回一句“%s”" % setup.RESUME_WORDS, text)
+        self.assertIn("新建以外的动作", text)
+        self.assertEqual(os.listdir(fresh), [])                                    # it only says, it writes nothing
+        code, text = self.announce("--target", fresh, "--name", "另一个名字")
+        self.assertIn("- 飞书项目空间 1 个：另一个名字，", text)
+
+    def test_the_counts_follow_the_task_file_and_the_enabled_sequences(self):
+        fresh = os.path.join(self.tmp, "demo")
+        os.mkdir(fresh)
+        code, text = self.announce("--target", fresh, "--sequences", "pmo,quality,alg")
+        self.assertEqual(code, 0, text)
+        self.assertIn("- 知识库节点 %d 个\n" % len(self.spec.node_keys(["pmo", "quality", "alg"])), text)
+        self.assertIn("- 桌面会话 9 个，侧栏分区 1 个：demo\n", text)
+        self.assertNotIn("轮开", text)                                              # one round: nothing to answer in between
+        code, text = self.announce("--target", fresh, "--task", self.task_path)   # every sequence with its +1 and +0
+        plan = json.loads(self.read(".claude/agent-org/pool-plan.json"))
+        self.assertIn("- 桌面会话 %d 个，侧栏分区 1 个：%s\n" % (plan["total"], plan["label"]), text)
+        self.assertEqual(plan["total"], 21)
+
+    def test_an_initialised_directory_is_read_from_its_own_task_file(self):
+        code, text = self.announce("--target", self.tmp, "--name", "别的名字")
+        self.assertEqual(code, 0, text)
+        self.assertIn("- 桌面会话 21 个，侧栏分区", text)
+        self.assertNotIn("别的名字", text)
+        self.assertIn("这个目录已经初始化过", text)
+        manifest = json.loads(self.read(".claude/agent-org/manifest.json"))
+        tops = {p.split("/")[0] + ("/" if "/" in p else "") for p in manifest["files"]}
+        self.assertEqual(tops, set(setup.LOCAL_TOPS))                              # the directories it names are the ones init writes
+
+    def test_it_refuses_what_init_refuses(self):
+        code, text = self.announce("--target", os.path.expanduser("~"))
+        self.assertEqual(code, 2)
+        self.assertIn("不在家目录或根目录里初始化", text)
+        other = os.path.join(self.tmp, "codex")
+        os.makedirs(os.path.join(other, ".agent-org"))
+        with open(os.path.join(other, ".agent-org", "manifest.json"), "w", encoding="utf-8") as f:
+            f.write("{}")
+        code, text = self.announce("--target", other)
+        self.assertEqual(code, 2)
+        self.assertIn("另一运行平台", text)
+
+    def test_the_skill_runs_it_instead_of_writing_the_list_itself(self):
+        with open(os.path.join(ROOT, "skills", "setup", "SKILL.md"), encoding="utf-8") as f:
+            skill = f.read()
+        self.assertIn('setup.py" announce --target <项目目录>', skill)
+        self.assertNotIn("将要新建（", skill)                                       # the list is the script's, not the skill's
+
+
 class CheckLayersTest(PoolProjectCase):
     """setup.py check: the project's own files, the Feishu side, the sessions, the first research task."""
 

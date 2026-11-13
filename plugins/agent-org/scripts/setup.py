@@ -2,6 +2,7 @@
 """Initialise a project directory for the agent organisation (the plugin's init step).
 
     python3 -I scripts/setup.py precheck
+    python3 -I scripts/setup.py announce --target DIR [--name NAME | --task task.json] [--sequences ...]
     python3 -I scripts/setup.py init --target DIR --task task.json [--sequences product,alg,...] [--apply]
     python3 -I scripts/setup.py feishu --target DIR [--map ID=NAME ...] [--live] [--apply]
     python3 -I scripts/setup.py template [--space NAME] [--target DIR]
@@ -9,6 +10,10 @@
     python3 -I scripts/setup.py pool --target DIR [--manual]
     python3 -I scripts/setup.py login [--wait]
     python3 -I scripts/setup.py env --target DIR [--apply]
+
+announce says what an initialisation is about to create: the project space and the knowledge
+space by name, the knowledge-base nodes, the first research task, the sessions and the files in
+the project directory. It reads local files only and writes nothing.
 
 init renders agents, project settings (permissions and hooks), CLAUDE.md, org/,
 packages/, inbox/, spec/ and a copy of the plugin's scripts and rules into
@@ -223,6 +228,11 @@ def load_task_and_seeds(path, runtime=None):
         raise SetupError("读不到研究任务 %s：%s" % (path, e))
     if not isinstance(raw, dict):
         raise SetupError("研究任务 %s 要写成一个 JSON 对象" % path)
+    return parse_task(raw, runtime)
+
+
+def parse_task(raw, runtime=None):
+    """What a task file says, checked and filled in with the defaults: (task, seeds, legacy keys)."""
     for key in ("name", "description"):
         if not isinstance(raw.get(key), str) or not raw[key].strip():
             raise SetupError("研究任务的 %s 要写成非空的文字" % key)
@@ -338,6 +348,29 @@ def pick_sequences(spec, wanted):
         if s not in chosen:
             raise SetupError("序列 %s 必须启用：项目管理是入口，质量负责验收" % s)
     return [s for s in all_ids if s in chosen]
+
+
+def settle_later(task, seqs):
+    """pool.later against the enabled sequences: the default only speaks of those that are enabled."""
+    if task["pool"]["later"] == POOL_DEFAULTS["later"]:
+        task["pool"]["later"] = [x for x in task["pool"]["later"] if x in seqs]
+    unknown = [x for x in task["pool"]["later"] if x not in seqs]
+    if unknown:
+        raise SetupError("pool.later 里的序列没有启用：%s" % "、".join(unknown))
+
+
+def project_dir(path):
+    """The directory to initialise, as an absolute path: not the home directory, not the root."""
+    target = os.path.abspath(path)
+    if os.path.realpath(target) in (os.path.realpath(os.path.expanduser("~")), os.path.realpath(os.sep)):
+        raise SetupError("不在家目录或根目录里初始化：换一个只放这个项目的目录")
+    return target
+
+
+def refuse_other_runtime(target, task):
+    other = ".claude/agent-org" if task["runtime"] == "codex" else ".agent-org"
+    if os.path.isfile(os.path.join(target, other, "manifest.json")):
+        raise SetupError("目标目录已有另一运行平台的组织。请使用独立目录，先保留原绑定、任务包与回执，再迁移")
 
 
 def load_ids(target):
@@ -1138,9 +1171,7 @@ def build_plan(target, task_path, seq_arg, runtime=None):
     if problems:
         raise SetupError("规则文件有问题，先修好：\n" + "\n".join(problems))
     task, seeds, legacy = load_task_and_seeds(task_path, runtime)
-    other = ".claude/agent-org" if task["runtime"] == "codex" else ".agent-org"
-    if os.path.isfile(os.path.join(target, other, "manifest.json")):
-        raise SetupError("目标目录已有另一运行平台的组织。请使用独立目录，先保留原绑定、任务包与回执，再迁移")
+    refuse_other_runtime(target, task)
     seqs = pick_sequences(spec, seq_arg)
     ids = load_ids(target)
     risk, note = resolve_risk(target)
@@ -1154,11 +1185,7 @@ def build_plan(target, task_path, seq_arg, runtime=None):
     def put(rel, content, executable=False, keep=False):
         f[rel] = (content, executable, keep)
 
-    if task["pool"]["later"] == POOL_DEFAULTS["later"]:      # the default only speaks of sequences that are enabled
-        task["pool"]["later"] = [x for x in task["pool"]["later"] if x in seqs]
-    unknown = [x for x in (task.get("pool") or {}).get("later", []) if x not in seqs]
-    if unknown:
-        raise SetupError("pool.later 里的序列没有启用：%s" % "、".join(unknown))
+    settle_later(task, seqs)
     put("CLAUDE.md", claude_md(spec, task, ids, policy))
     put(".claude/settings.json", dump_json(build_settings(task, risk, policy)))
     put(".claude/hooks/policy.json", dump_json(policy))
@@ -1232,6 +1259,54 @@ def build_plan(target, task_path, seq_arg, runtime=None):
         import codex_setup
         return codex_setup.adapt(sys.modules[__name__], plan, target, spec, task, policy, seqs)
     return plan
+
+
+# what init writes into the project directory, by top-level name
+LOCAL_TOPS = ("CLAUDE.md", ".claude/", "feishu/", "inbox/", "org/", "packages/", "runs/", "spec/")
+
+
+def announce(target, name=None, task_path=None, seq_arg=None):
+    """`setup.py announce`: what the researcher's opening sentence lets this initialisation create,
+    said once before anything is made. The counts come from the rules and the pool plan, the names
+    from the task file when there is one, else from the project's name. Reads local files only."""
+    spec = orgspec.OrgSpec()
+    known = os.path.join(target, "spec", "task.json")
+    again = not task_path and os.path.isfile(known)
+    if task_path:
+        task = load_task(task_path)
+    elif again:                                    # initialised before: the settings it was initialised with
+        task = load_task(known)
+        seq_arg = seq_arg or ",".join(enabled_sequences(target) or [])
+    else:
+        name = (name or os.path.basename(target)).strip()
+        task = parse_task({"name": name, "description": "待立项访谈补充", "feishu": {"meegle_space": name}})[0]
+    refuse_other_runtime(target, task)
+    seqs = pick_sequences(spec, seq_arg)
+    policy = build_policy(spec, task, seqs)
+    settle_later(task, seqs)
+    ids = load_ids(target)
+    plan = pool_plan(spec, task, policy, seqs, ids)
+    later = "、".join(spec.term("seq", s) for s in task["pool"]["later"])
+    rounds = len(plan["rounds"])
+    asks = []
+    if rounds == 2:
+        asks.append("会话分 2 轮开，第 1 轮开完回一句“%s”" % RESUME_WORDS)
+    elif rounds > 2:
+        asks.append("会话分 %d 轮开，每两轮之间回一句“%s”，共 %d 次" % (rounds, RESUME_WORDS, rounds - 1))
+    asks += ["飞书命令行的登录失效时扫码", "应用弹出确认框时点一下"]
+    print("\n".join([
+        "将要新建（已经有的直接沿用，不重复建）：",
+        "- 飞书项目空间 1 个：%s，用模板创建" % ((ids.get("meegle") or {}).get("space_name") or task["feishu"]["meegle_space"]),
+        "- 飞书知识空间 1 个：%s" % (task["feishu"].get("wiki_space") or task["name"]),
+        "- 知识库节点 %d 个" % len(spec.node_keys(seqs)),
+        "- 研究任务 1 条和它的主文档",
+        "- 桌面会话 %d 个%s，侧栏分区 1 个：%s" % (plan["total"], "（%s只开 +2）" % later if later else "", plan["label"]),
+        "- 项目目录 %s 里的 %s，以及 .env 里的两行链接" % (target, "、".join(LOCAL_TOPS)),
+        "中途要你做的：%s。" % "；".join(asks),
+        "新建以外的动作（删除、覆盖、改已有的对象、改分享权限）会先停下问你。"]))
+    if again:
+        print("这个目录已经初始化过：名字和会话数照它的 spec/task.json。")
+    return 0
 
 
 def previous_hashes(target):
@@ -2615,6 +2690,11 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="初始化智能体组织的项目目录")
     sub = ap.add_subparsers(dest="cmd")
     sub.add_parser("precheck")
+    p = sub.add_parser("announce")
+    p.add_argument("--target", required=True)
+    p.add_argument("--name", help="项目名；不写就用目录名")
+    p.add_argument("--task", help="已经写好的任务文件：名字和会话数照它算")
+    p.add_argument("--sequences")
     p = sub.add_parser("init")
     p.add_argument("--target", required=True)
     p.add_argument("--task", required=True)
@@ -2651,10 +2731,10 @@ def main(argv=None):
     try:
         if args.cmd == "precheck":
             return precheck()
+        if args.cmd == "announce":
+            return announce(project_dir(args.target), args.name, args.task, args.sequences)
         if args.cmd == "init":
-            target = os.path.abspath(args.target)
-            if os.path.realpath(target) in (os.path.realpath(os.path.expanduser("~")), os.path.realpath(os.sep)):
-                raise SetupError("不在家目录或根目录里初始化：换一个只放这个项目的目录")
+            target = project_dir(args.target)
             plan = build_plan(target, args.task, args.sequences, args.runtime)
             acts = actions_for(target, plan)
             if plan.manifest.get("runtime") == "codex":
