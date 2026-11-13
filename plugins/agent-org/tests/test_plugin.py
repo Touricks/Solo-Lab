@@ -1361,7 +1361,10 @@ class PoolSetupTest(PoolProjectCase):
         plan = json.loads(self.read(".claude/agent-org/pool-plan.json"))
         entries = list(setup.plan_entries(plan))
         names = [e["name"] for e in entries]
-        self.assertEqual((plan["version"], plan["total"], len(plan["top"]), len(set(names))), (3, 21, 7, 21))
+        self.assertEqual((plan["version"], plan["total"], len(plan["top"]), len(set(names))), (4, 21, 7, 21))
+        # the +2s are opened in batches: what a batch opens below itself stays within what the app runs at once
+        self.assertEqual(plan["batches"], [["PMO-p2-01", "Product-p2-01"], ["Alg-p2-01", "RnD-p2-01"],
+                                           ["Infra-p2-01", "Quality-p2-01"], ["Liaison-p2-01"]])
         self.assertEqual(plan["order"], [t["name"] for t in plan["top"]])
         self.assertEqual(plan["order"][0], "PMO-p2-01")                     # the scribe is two levels below the entry
         for t in plan["top"]:                                                # a +2 opens its +1, a +1 its +0
@@ -1456,6 +1459,9 @@ class PoolSetupTest(PoolProjectCase):
         alg = next(t for t in doc["top"] if t["role"] == "alg-p2")
         self.assertEqual([c["name"] for c in alg["children"]], ["Alg-p1-01"])
         self.assertEqual([c["name"] for c in alg["children"][0]["children"]], ["Alg-p0-01", "Alg-p0-02"])
+        # three sessions below a +2 leave no room for a second sequence; one that opens nothing joins the last batch
+        self.assertEqual(doc["batches"], [["PMO-p2-01"], ["Product-p2-01"], ["Alg-p2-01"], ["RnD-p2-01"], ["Infra-p2-01"],
+                                          ["Quality-p2-01", "Liaison-p2-01"]])
         task["pool"].update(p1=0)                                           # no +1: the +0s hang under the +2
         with open(self.task_path, "w", encoding="utf-8") as f:
             json.dump(task, f, ensure_ascii=False)
@@ -1526,7 +1532,12 @@ class PoolSetupTest(PoolProjectCase):
             self.assertEqual(setup.main(["pool", "--target", self.tmp]), 0)
         text = out.getvalue()
         self.assertIn("1. PMO-p2-01（未认领）", text)
-        self.assertIn("只开下面这 7 个 +2", text)
+        self.assertIn("只开下面这 7 个 +2，分 4 批开", text)
+        self.assertIn("\n第 1 批\n1. PMO-p2-01", text)
+        self.assertIn("\n第 4 批\n7. Liaison-p2-01", text)
+        self.assertIn("--wait 180 --batch", text)
+        self.assertLess(text.index("各调一次 detach_session"), text.index("逐个运行它们的 expect"))   # top level first, then the permit
+        self.assertNotIn("注意：", text)
         self.assertIn("   └ PMO-p1-01（", text)                                    # the levels below, opened by the level above
         self.assertIn("     └ PMO-p0-01（", text)
         self.assertNotIn("PMO-p1-01（未认领）\n   name：", text)
@@ -1610,6 +1621,43 @@ class CheckLayersTest(PoolProjectCase):
         self.assertIn("还有 1 个没认领", text)
         self.assertIn("- Alg-p0-01：由 Alg-p1-01 开出，Alg-p1-01 已认领", text)
         self.assertIn("请研究员点开上一级的会话，说一句“照认领输出开出下一级”", text)
+
+    def wait_batch(self, n):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = setup.main(["pool", "--target", self.tmp, "--wait", "0", "--batch", str(n)])
+        return code, out.getvalue()
+
+    def test_wait_for_a_batch_ends_when_its_first_turns_are_over(self):
+        code, text = self.wait_batch(1)
+        self.assertEqual(code, 1)
+        self.assertIn("第 1 批的 6 个会话还没开齐", text)
+        self.assertIn("- Product-p0-01：由 Product-p1-01 开出，Product-p1-01 还没认领", text)
+        self.assertNotIn("Alg-p2-01：", text)                                    # another batch
+        self.assertIn("不用再等这一批。接着开第 2 批：Alg-p2-01、RnD-p2-01。", text)
+        self.claim_all()
+        code, text = self.wait_batch(1)                                         # claimed, the hooks have not seen a turn end yet
+        self.assertEqual(code, 1)
+        self.assertIn("首轮还没结束的：PMO-p2-01、PMO-p1-01、Product-p2-01、Product-p1-01、Product-p0-01。", text)
+        for name in ("PMO-p2-01", "PMO-p1-01", "Product-p2-01", "Product-p1-01"):
+            self.hook("instances.py", {"hook_event_name": "Stop", "session_id": "s-" + name})
+        self.assertIn("首轮还没结束的：Product-p0-01。", self.wait_batch(1)[1])
+        self.hook("instances.py", {"hook_event_name": "PermissionRequest", "session_id": "s-Product-p0-01", "tool_name": "Bash"})
+        self.assertIn("停在确认框上、等研究员批准的：Product-p0-01。", self.wait_batch(1)[1])
+        self.hook("instances.py", {"hook_event_name": "Stop", "session_id": "s-Product-p0-01"})
+        code, text = self.wait_batch(1)                                         # the scribe may still be writing
+        self.assertEqual(code, 0, text)
+        self.assertIn("第 1 批开齐：6 个会话都已认领，首轮都结束了。接着开第 2 批：Alg-p2-01、RnD-p2-01。", text)
+        for name in ("Liaison-p2-01", "Liaison-p1-01", "Liaison-p0-01"):
+            self.hook("instances.py", {"hook_event_name": "Stop", "session_id": "s-" + name})
+        code, text = self.wait_batch(4)
+        self.assertEqual(code, 0, text)
+        self.assertIn("这是最后一批。接着把 +2 和本会话归入分区", text)
+        self.assertEqual(self.wait_batch(5)[0], 2)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(setup.main(["pool", "--target", self.tmp, "--batch", "1"]), 2)
+        self.assertIn("--batch 要和 --wait 一起用", out.getvalue())
 
     def test_wait_ends_when_the_scribe_has_done_its_first_writes(self):
         scribe = "s-PMO-p0-01"
@@ -2122,6 +2170,25 @@ class PoolModelTest(PoolProjectCase):
         self.assertIn("注意：Alg-p0-01 的模型 opus 高于开它的 Alg-p1-01（sonnet）", text)
         self.assertEqual(text.count("注意："), 1)                   # opus under opus, sonnet under opus: nothing to say
         self.assertEqual([setup.model_tier(m) for m in ("claude-haiku-5-5", "sonnet", "Opus", "inherit", None)], [0, 1, 2, -1, -1])
+
+
+class PoolBatchTest(PoolProjectCase):
+    """A sequence that opens more below its +2 than a batch has room for."""
+
+    POOL = {"p1": 1, "p0": 4, "later": ["liaison"], "max_sessions": 40}
+
+    def test_the_checklist_says_which_sequences_overflow(self):
+        plan = json.loads(self.read(".claude/agent-org/pool-plan.json"))
+        self.assertEqual(plan["batches"], [["PMO-p2-01"], ["Product-p2-01"], ["Alg-p2-01"], ["RnD-p2-01"], ["Infra-p2-01"],
+                                           ["Quality-p2-01", "Liaison-p2-01"]])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(setup.main(["pool", "--target", self.tmp]), 0)
+        text = out.getvalue()
+        self.assertIn("分 6 批开", text)
+        self.assertIn("注意：Product-p2-01 下面要开 5 个会话，一批最多容得下 4 个", text)
+        self.assertEqual(text.count("注意："), 5)                               # not the entry: a router and a scribe
+        self.assertNotIn("注意：PMO-p2-01", text)
 
 
 class PoolWithoutP1Test(PoolProjectCase):

@@ -34,8 +34,10 @@ Every role runs as a desktop session the researcher can see (the session pool): 
 the pool hooks, .claude/agent-org/pool-plan.json and the draft of a first research-task
 sheet. `setup.py pool` prints, for the session that initialises, the +2 sessions it opens
 with their titles, models and opening lines, the tree below each, and the claims so far
-(read only); the levels below open one another, and --wait SECONDS waits until they have all
-claimed and the scribe has done its first writes. --manual prints how the researcher opens
+(read only). The desktop app runs at most five sessions at once that sessions started on
+their own, so the +2s are opened in batches: --wait SECONDS --batch N waits until batch N has
+claimed and its first turns are over, --wait SECONDS alone until every session has claimed
+and the scribe has done its first writes. --manual prints how the researcher opens
 the top sessions by hand when that session cannot open any. A task file may say
 "mode": "pool"; any other mode is refused.
 
@@ -880,6 +882,13 @@ def pool_label(task, ids=None):
 
 
 BRIEF_END = "，回一句“已认领 %s”就结束本轮，等派活消息。"      # how an opening line ends when nothing else is asked
+# The desktop app runs at most this many sessions at once that sessions started on their own: a +1
+# opened by a +2, a +0 opened by a +1. It counts them across everything one initialising session set
+# off, also after a +2 is moved to top level. One is kept for the scribe, whose first turn is long.
+AUTO_RUNNING = 5
+OPEN_BUDGET = AUTO_RUNNING - 1
+PLAN_VERSION = 4
+TURN_RUNNING = ("busy", "unknown", "uncertain")       # a session whose turn is not over, as far as the hooks know
 # what the researcher pastes into a +2 opened by hand ends with this: that +2 titles and files itself
 BY_HAND = "本会话由研究员手工开出。"
 # ...and when the session opens the next level in its first turn
@@ -969,8 +978,16 @@ def pool_plan(spec, task, policy, seqs, ids=None):
         top["rebuild"] = "认领 %s（会话名 %s），不开下一级；用 route.py pool 找回本序列已有的会话，按桌面会话 ID 给它们发消息。%s" % (
             role2, top["name"], BY_HAND)
         tops.append(top)
-    plan = {"version": 3, "project": task["name"], "label": label, "max_sessions": cfg["max_sessions"],
-            "order": [t["name"] for t in tops], "scribe_first": SCRIBE_FIRST, "opens": OPENS, "top": tops}
+    batches, load = [[]], 0                                # +2s opened together: what they open below stays within the budget
+    for top in tops:
+        below = sum(1 for _ in plan_entries({"top": top["children"]}))
+        if below and batches[-1] and load + below > OPEN_BUDGET:      # a +2 that opens nothing below fits anywhere
+            batches.append([])
+            load = 0
+        batches[-1].append(top["name"])
+        load += below
+    plan = {"version": PLAN_VERSION, "project": task["name"], "label": label, "max_sessions": cfg["max_sessions"],
+            "order": [t["name"] for t in tops], "batches": batches, "scribe_first": SCRIBE_FIRST, "opens": OPENS, "top": tops}
     plan["total"] = sum(1 for _ in plan_entries(plan))
     if plan["total"] > cfg["max_sessions"]:
         raise SetupError("开池要开 %d 个会话，超过任务文件的 pool.max_sessions=%d：调小 pool.p1、pool.p0，把不急的序列写进 pool.later，"
@@ -1697,7 +1714,7 @@ def pool_checklist(target, manual=False):
     if not policy.get("agents") or not plan:
         print("这个项目还没有开池清单：先跑 init --apply。")
         return 2
-    if plan.get("version") != 3:
+    if plan.get("version") != PLAN_VERSION:
         print("开池清单是旧版插件生成的：重跑 init --apply。")
         return 2
     pl, ok = pool.load(target)
@@ -1734,27 +1751,42 @@ def pool_checklist(target, manual=False):
         if bool(feishu_gaps(target, enabled_sequences(target))) or not registered_tasks(target):
             print("书记员由路由开出，开局句里带着初始化的两件写入。它没做的话，把这段话发给它：%s" % plan["scribe_first"].lstrip("。"))
     else:
-        print("研究员的会话（做初始化的这个会话）只开下面这 %d 个 +2，可以一批开完：" % len(tops))
-        print("- 每个用会话管理工具 start_session（它还没加载时，先用 ToolSearch 查 start_session 加载进来）：initiation 写 user_asked，context 写 fresh，use_worktree 写 false，"
-              "权限模式不填（继承本会话）；name、title、model、prompt、background 照下表。")
-        print("- 每开一个，马上用返回的桌面会话 ID 运行它的 expect。入口 %s 第 1 个开：书记员在它下面第三层，越早开越早建节点、登记首条研究任务。" % tops[0]["name"])
-        print("- 每个 +2 在首轮里开出自己的 +1，+1 开出自己的 +0，不用本会话管。开完这 %d 个就运行 setup.py pool --target <项目目录> --wait 240："
-              "它等到 %d 个会话都认领、书记员的首轮结束才返回，没等到就列出还差谁。" % (len(tops), plan["total"]))
-        print("- 全部认领以后：对这 %d 个 +2 调 detach_session 移到顶层，它们下面的会话跟着走；侧栏里没有叫“%s”的分区就用 create_section 建一个；"
-              "用 move_sessions 把这 %d 个 +2 连同本会话归进去。本会话的标题是应用自动起的，就用 set_session_title 改成“[%s] Initialization”：它是做初始化的会话，不是入口。" % (
-                  len(tops), label, len(tops), label))
-        print("- 过了两三分钟某个 +2 下面还有没认领的：它首轮没把下一级开出来。给它发消息多半没用，被消息叫起来的那一轮它不开会话；"
+        batches = plan["batches"]
+        print("研究员的会话（做初始化的这个会话）只开下面这 %d 个 +2，分 %d 批开：" % (len(tops), len(batches)))
+        print("- 为什么分批：会话自己开出的会话（+2 开的 +1、+1 开的 +0），应用同时最多让 %d 个在跑，所有序列合在一起算，到了上限下一级就开不出来。"
+              "所以一批只开一两个序列，等这一批的会话都认领、首轮都结束，再开下一批。" % AUTO_RUNNING)
+        print("- 每一批做三件事，顺序不能换：1. 用会话管理工具 start_session 把这一批的 +2 都开出来；2. 马上对它们各调一次 detach_session，"
+              "把它们移到顶层，和本会话同级；3. 用返回的桌面会话 ID 逐个运行它们的 expect。+2 要等预登记才能认领，认领以后才往下开，"
+              "所以先移到顶层、后预登记。")
+        print("- start_session 的参数：initiation 写 user_asked，context 写 fresh，use_worktree 写 false，权限模式不填（继承本会话）；"
+              "name、title、model、prompt、background 照下表。它还没加载时，先用 ToolSearch 查 start_session 加载进来。")
+        print("- 这一批的 expect 跑完，运行 setup.py pool --target <项目目录> --wait 180 --batch <第几批>：它等到这一批的会话都认领、首轮都结束才返回，"
+              "并写明下一步。超时的时候照它说的办：有首轮还没结束的，重跑一次再等；只是没认领的，接着开下一批，最后一并处理。")
+        print("- 最后一批等完：侧栏里没有叫“%s”的分区就用 create_section 建一个；用 move_sessions 把这 %d 个 +2 连同本会话归进去，它们下面的会话跟着走。"
+              "再运行 setup.py pool --target <项目目录> --wait 240：它等到 %d 个会话都认领、书记员的首轮结束才返回，没等到就列出还差谁。"
+              "本会话的标题是应用自动起的，就用 set_session_title 改成“[%s] Initialization”：它是做初始化的会话，不是入口。" % (
+                  label, len(tops), plan["total"], label))
+        print("- 某个会话下面还有没认领的：它首轮没把下一级开出来。给它发消息没有用，被消息叫起来的那一轮开不了会话；"
               "请研究员点开那个会话，说一句“照认领输出开出下一级”。")
         print("- model 填不进去就不填，开好以后再改；模型高于本会话的不生效（会话的模型不能高于开它的会话），记进交接。")
-        print("")
-        for i, top in enumerate(tops, 1):
-            print("%d. %s（%s）" % (i, top["name"], "已认领，不用再开" if top["name"] in claimed else "未认领"))
-            print("   name：%s　title：%s　model：%s" % (top["short"], top["title"], top["model"]))
-            print("   prompt：%s" % top["brief"])
-            print("   background：%s" % top["background"])
-            print("   expect：%s" % top["expect"])
-            for line in tree(top):
-                print(line)
+        for top in tops:
+            below = sum(1 for _ in plan_entries({"top": top["children"]}))
+            if below > OPEN_BUDGET:
+                print("注意：%s 下面要开 %d 个会话，一批最多容得下 %d 个：多出来的会被应用拒绝，pool --wait 会列出来，"
+                      "到时请研究员在上一级的会话里说一句“照认领输出开出下一级”。" % (top["name"], below, OPEN_BUDGET))
+        number = 0
+        for b, names in enumerate(batches, 1):
+            print("")
+            print("第 %d 批" % b)
+            for top in (t for t in tops if t["name"] in names):
+                number += 1
+                print("%d. %s（%s）" % (number, top["name"], "已认领，不用再开" if top["name"] in claimed else "未认领"))
+                print("   name：%s　title：%s　model：%s" % (top["short"], top["title"], top["model"]))
+                print("   prompt：%s" % top["brief"])
+                print("   background：%s" % top["background"])
+                print("   expect：%s" % top["expect"])
+                for line in tree(top):
+                    print(line)
         print("")
         print("这个会话开不了会话时（比如这一轮不是研究员亲口开始的，是被别的会话的消息叫起来的）：setup.py pool --target <项目目录> --manual 打印手工开池的做法。")
     print("")
@@ -1777,46 +1809,78 @@ def pool_checklist(target, manual=False):
     return 0
 
 
-def pool_wait(target, seconds, every=5):
+def pool_wait(target, seconds, batch=None, every=5):
     """Wait for what the researcher's session does not do itself: the levels below the +2s open
     one another, and the scribe, two levels down, builds the nodes and registers the first
-    research task. 0 when every planned session has claimed and the scribe's first turn is
-    over with the nodes in place; 1 with what is still missing."""
+    research task. With a batch: until every session of that batch has claimed and its first
+    turn is over (the scribe may still be writing), so that the next batch finds room. Without:
+    until every planned session has claimed and the scribe's first turn is over with the nodes
+    in place. 0 when that is so; 1 with what is still missing."""
     import pool
     policy = load_json_file(os.path.join(target, ".claude", "hooks", "policy.json")) or {}
     plan = load_json_file(os.path.join(target, ".claude", "agent-org", "pool-plan.json")) or {}
-    if not policy or plan.get("version") != 3:
+    if not policy or plan.get("version") != PLAN_VERSION:
         print("这个项目没有开池清单，或者清单是旧版插件生成的：重跑 init --apply。")
         return 2
-    entries = list(plan_entries(plan))
-    opened_by = {c["name"]: e["name"] for e in entries for c in e["children"]}
+    batches = plan["batches"]
+    if batch is not None and not 1 <= batch <= len(batches):
+        print("没有第 %d 批：开池清单一共 %d 批。" % (batch, len(batches)))
+        return 2
+    opened_by = {c["name"]: e["name"] for e in plan_entries(plan) for c in e["children"]}
+    tops = plan["top"] if batch is None else [t for t in plan["top"] if t["name"] in batches[batch - 1]]
+    entries = list(plan_entries({"top": tops}))
+    scribe_role = policy.get("scribe_role")
     deadline = time.time() + max(0, seconds)
     while True:
         pl, ok = pool.load(target)
         claims = pl["claims"] if ok else {}
         missing = [e["name"] for e in entries if e["name"] not in claims]
-        scribe = next((r for r in (pool.session_view(target, policy, pl) if ok else [])
-                       if r["role"] == policy.get("scribe_role")), None)
-        writing = scribe is None or scribe["status"] in ("busy", "unknown", "uncertain")   # its first turn is not over
-        if (ok and not missing and not writing) or time.time() >= deadline:
+        rows = {r["name"]: r for r in (pool.session_view(target, policy, pl) if ok else [])}
+        scribe = next((r for r in rows.values() if r["role"] == scribe_role), None)
+        if batch is None:
+            running = [] if scribe and scribe["status"] not in TURN_RUNNING else [(scribe or {}).get("name") or "书记员"]
+        else:
+            running = [e["name"] for e in entries if e["name"] in rows and e["role"] != scribe_role
+                       and rows[e["name"]]["status"] in TURN_RUNNING + ("waiting_researcher",)]
+        if (ok and not missing and not running) or time.time() >= deadline:
             break
         time.sleep(every)
     if not ok:
         print("读不出 .claude/state/pool.json。")
         return 1
-    if missing:
+    if batch is not None:
+        if batch < len(batches):
+            then = "接着开第 %d 批：%s。" % (batch + 1, "、".join(batches[batch]))
+        else:
+            then = "这是最后一批。接着把 +2 和本会话归入分区，再运行 setup.py pool --target <项目目录> --wait 240。"
+        if not missing and not running:
+            print("第 %d 批开齐：%d 个会话都已认领，首轮都结束了。%s" % (batch, len(entries), then))
+            return 0
+        print("等了 %d 秒，第 %d 批的 %d 个会话还没开齐。" % (seconds, batch, len(entries)))
+    elif missing:
         print("等了 %d 秒，%d 个会话里还有 %d 个没认领：" % (seconds, len(entries), len(missing)))
-        for name in missing:
-            above = opened_by.get(name)
-            print("- %s：%s" % (name, "+2，由做初始化的会话开出" if not above else
-                                 "由 %s 开出，%s %s" % (above, above, "已认领" if above in claims else "还没认领")))
-        if any(opened_by.get(n) in claims for n in missing):
-            print("上一级已认领、下一级没出来的：它首轮没把下一级开出来。请研究员点开上一级的会话，说一句“照认领输出开出下一级”；"
-                  "给它发消息没有用，被消息叫起来的那一轮开不了会话。")
+    for name in missing:
+        above = opened_by.get(name)
+        print("- %s：%s" % (name, "+2，由做初始化的会话开出" if not above else
+                             "由 %s 开出，%s %s" % (above, above, "已认领" if above in claims else "还没认领")))
+    if any(opened_by.get(n) in claims for n in missing):
+        print("上一级已认领、下一级没出来的：它首轮没把下一级开出来。请研究员点开上一级的会话，说一句“照认领输出开出下一级”；"
+              "给它发消息没有用，被消息叫起来的那一轮开不了会话。")
+    if batch is not None:
+        asking = [n for n in running if rows[n]["status"] == "waiting_researcher"]
+        if asking:
+            print("停在确认框上、等研究员批准的：%s。请研究员到侧栏点开处理。" % "、".join(asking))
+        if running:
+            print("首轮还没结束的：%s。它们在跑的时候占着应用同时运行的名额：重跑这条命令再等一次；还是这样，就往下做。%s" % (
+                "、".join(running), then))
+        else:
+            print("不用再等这一批。%s" % then)
+        return 1
+    if missing:
         return 1
     line = "会话池已开齐：%d/%d 条认领。" % (len(entries), len(entries))
     read = "用会话管理工具 list_events 读书记员（桌面会话 %s）的最后几条" % ((scribe or {}).get("desk") or "ID 没记下")
-    if writing:
+    if running:
         print(line + "书记员的首轮还没结束（状态：%s），两件初始化写入还在做：重跑这条命令接着等。" % (scribe or {}).get("status", "unknown"))
         return 1
     if scribe["status"] == "waiting_researcher":
@@ -2534,6 +2598,7 @@ def main(argv=None):
     p.add_argument("--target", required=True)
     p.add_argument("--manual", action="store_true", help="研究员的会话开不了会话时：打印手工开池的做法")
     p.add_argument("--wait", type=int, metavar="SECONDS", help="等到清单里的会话都认领、书记员的首轮结束，最多等这么多秒")
+    p.add_argument("--batch", type=int, metavar="N", help="和 --wait 一起用：只等第 N 批的会话认领、首轮结束")
     args = ap.parse_args(argv)
     try:
         if args.cmd == "precheck":
@@ -2569,8 +2634,10 @@ def main(argv=None):
                 import codex_runtime
                 print(dump_json(codex_runtime.Pool(args.target).plan()))
                 return 0
+            if args.batch is not None and args.wait is None:
+                raise SetupError("--batch 要和 --wait 一起用：setup.py pool --target <项目目录> --wait 180 --batch <第几批>")
             if args.wait is not None:
-                return pool_wait(os.path.abspath(args.target), args.wait)
+                return pool_wait(os.path.abspath(args.target), args.wait, args.batch)
             return pool_checklist(os.path.abspath(args.target), args.manual)
     except (SetupError, ValueError, OSError) as e:
         print("出错：%s" % e)
