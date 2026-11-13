@@ -2283,11 +2283,6 @@
           "field_type": "number"
         },
         {
-          "field_key": "field_698641",
-          "name": "试过的变体数",
-          "field_type": "number"
-        },
-        {
           "field_key": "field_6e8276",
           "name": "成功标准",
           "field_type": "text"
@@ -2647,11 +2642,6 @@
                   "field_key": "field_c83d0f",
                   "name": "运行 ID",
                   "field_type": "text"
-                },
-                {
-                  "field_key": "field_698641",
-                  "name": "试过的变体数",
-                  "field_type": "number"
                 }
               ],
               "optional": []

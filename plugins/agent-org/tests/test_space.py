@@ -92,10 +92,23 @@ class SnapshotTest(SpaceCase):
         self.assertEqual(sorted(t["api_name"] for t in self.snap["disabled_types"]), ["issue", "sprint", "story", "version"])
         self.assertEqual(sorted(t["api_name"] for t in self.snap["other_types"]), ["chart", "sub_task"])
 
-    def test_fields_past_the_first_page_are_read(self):
+    def test_the_fields_and_states_of_the_main_line_are_read(self):
         task = self.type("research_task")
-        self.assertEqual(len(task["fields"]), 51)                          # meta-fields holds 50 a page
+        self.assertEqual(len(task["fields"]), 50)
         self.assertEqual([s["name"] for s in task["states"]][-2:], ["得出结论", "下一步讨论"])
+
+    def test_a_paged_read_goes_on_while_the_space_reports_more(self):
+        pages = {"1": {"list": ["a", "b"], "pagination": {"has_more": True}},
+                 "2": {"list": ["c"], "pagination": {"has_more": False}}}
+        asked = []
+
+        def call(argv, timeout=60):                                        # meta-fields holds 50 a page
+            asked.append(argv[-1])
+            return pages[argv[-1]]
+        with mock.patch.object(space, "call", call):
+            items, last = space.paged(["workitem", "meta-fields"])
+        self.assertEqual((items, asked), (["a", "b", "c"], ["1", "2"]))
+        self.assertIs(last, pages["2"])
 
     def test_flows_are_in_order_with_roles_and_required_items(self):
         verify = self.flow("research_task", "验证")
@@ -106,7 +119,7 @@ class SnapshotTest(SpaceCase):
                          [["product"], ["alg"], ["product"], ["alg"], ["alg"], ["infra"], ["rnd"], ["alg"], ["pmo"], ["scribe"]])
         sign = verify["nodes"][3]
         self.assertEqual(sorted(r["name"] for r in sign["required"]), ["假设签字", "总预算", "波动估计", "规格", "规格版本"])
-        self.assertEqual(sum(len(n["required"]) for n in verify["nodes"]), 17)
+        self.assertEqual(sum(len(n["required"]) for n in verify["nodes"]), 16)
         probe = self.flow("research_task", "试探")
         self.assertEqual([n["name"] for n in probe["nodes"]], ["定方向", "试探", "提出假设", "归档"])
         self.assertEqual([len(f["nodes"]) for t in self.snap["types"].values() for f in t["flows"].values()], [2, 2, 4, 5, 10, 4])

@@ -51,7 +51,7 @@ STEPS = [   # the 验证 flow: who asks for each step, and what its form require
     ("Alg-p2-01", ["规格=" + LINK, "规格版本=spec-v1", "总预算=200", "波动估计=基线重复 3 次，标准差 0.2"]),
     ("Alg-p2-01", ["实验方案=" + LINK, "实验轮次=1"]),
     ("Infra-p2-01", ["冒烟运行 ID=smoke-0001"]),
-    ("RnD-p2-01", ["运行 ID=run-0001,run-0002", "试过的变体数=2"]),
+    ("RnD-p2-01", ["运行 ID=run-0001,run-0002"]),
     ("Alg-p2-01", ["结论=成立", "结论文档=" + LINK]),
     ("PMO-p2-01", []),
 ]

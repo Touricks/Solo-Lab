@@ -3453,11 +3453,6 @@
      "field_type": "number"
     },
     {
-     "field_key": "field_698641",
-     "field_name": "试过的变体数",
-     "field_type": "number"
-    },
-    {
      "field_key": "field_6e8276",
      "field_name": "成功标准",
      "field_type": "text"
@@ -3510,29 +3505,7 @@
        "option_name": "无法判定"
       }
      ]
-    }
-   ],
-   "pagination": {
-    "has_more": true,
-    "page_num": 1,
-    "page_size": 50,
-    "total": 51
-   }
-  }
- },
- {
-  "argv": [
-   "workitem",
-   "meta-fields",
-   "--project-key",
-   "6af529535111c30e59b3bc9b",
-   "--work-item-type",
-   "6af52adffa8782e34e4a97e7",
-   "--page-num",
-   "2"
-  ],
-  "out": {
-   "list": [
+    },
     {
      "field_key": "field_bc2876",
      "field_name": "去向",
@@ -3551,9 +3524,9 @@
    ],
    "pagination": {
     "has_more": false,
-    "page_num": 2,
+    "page_num": 1,
     "page_size": 50,
-    "total": 51
+    "total": 50
    }
   }
  },
@@ -4047,15 +4020,6 @@
        "form_item_type": "field",
        "is_required": true,
        "value": "run-0001,run-0002,run-0003",
-       "value_label": ""
-      },
-      {
-       "field_key": "field_698641",
-       "field_name": "试过的变体数",
-       "field_type": "number",
-       "form_item_type": "field",
-       "is_required": true,
-       "value": "3",
        "value_label": ""
       }
      ],
