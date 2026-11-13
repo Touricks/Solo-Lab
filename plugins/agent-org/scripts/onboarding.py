@@ -7,7 +7,7 @@ both write it. What a stage counts as is fixed here, so no session decides it:
     feishu   the agent's own Feishu operations; their sum is the figure held against 300 seconds
     claude   opening sessions, checking claims, moving them, prompts of the client
     local    checks and files on this machine
-    human    waiting for the researcher (scanning a login code)
+    human    waiting for the researcher (scanning a login code, saying the word between two rounds of the pool)
 
 300 seconds is a figure to report, not a gate: `finish` says whether it was met and names the
 slowest stages, and nothing else depends on it. A first run and every later run that fills in
@@ -34,7 +34,7 @@ STAGES = {
     "sessions": ("claude", "开会话"), "claims": ("claude", "认领核对"), "detach": ("claude", "移到顶层"),
     "section": ("claude", "归入分区"), "prompts": ("claude", "目录信任和客户端确认"),
     "precheck": ("local", "前置检查"), "init": ("local", "生成项目文件"), "env": ("local", "写 .env"),
-    "login": ("human", "等人扫码登录"),
+    "login": ("human", "等人扫码登录"), "resume": ("human", "等研究员回话接着开池"),
 }
 
 

@@ -133,6 +133,7 @@ class StageClockTest(unittest.TestCase):
             self.assertEqual((result["kind"], result["elapsed_seconds"], result["feishu_seconds"]), ("first", 725.0, 250.0))
             self.assertTrue(result["timing_pass"])                    # waiting for a scan and opening sessions are not Feishu time
             self.assertEqual(result["categories"]["human"], {"seconds": 190.0, "count": 1})
+            self.assertEqual(onboarding.STAGES["resume"][0], "human")       # waiting for the word between two rounds of the pool
             self.assertEqual(result["categories"]["claude"]["seconds"], 410.0)
             text = onboarding.text(result)
             self.assertIn("飞书操作 250.0 秒（指标 300 秒以内：达到）", text)

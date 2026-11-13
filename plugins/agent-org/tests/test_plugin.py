@@ -1361,10 +1361,12 @@ class PoolSetupTest(PoolProjectCase):
         plan = json.loads(self.read(".claude/agent-org/pool-plan.json"))
         entries = list(setup.plan_entries(plan))
         names = [e["name"] for e in entries]
-        self.assertEqual((plan["version"], plan["total"], len(plan["top"]), len(set(names))), (4, 21, 7, 21))
+        self.assertEqual((plan["version"], plan["total"], len(plan["top"]), len(set(names))), (5, 21, 7, 21))
         # the +2s are opened in batches: what a batch opens below itself stays within what the app runs at once
         self.assertEqual(plan["batches"], [["PMO-p2-01", "Product-p2-01"], ["Alg-p2-01", "RnD-p2-01"],
                                            ["Infra-p2-01", "Quality-p2-01"], ["Liaison-p2-01"]])
+        # ...and the batches in rounds: after one message of the researcher the app lets sessions open ten sessions
+        self.assertEqual(plan["rounds"], [[1, 2], [3, 4]])
         self.assertEqual(plan["order"], [t["name"] for t in plan["top"]])
         self.assertEqual(plan["order"][0], "PMO-p2-01")                     # the scribe is two levels below the entry
         for t in plan["top"]:                                                # a +2 opens its +1, a +1 its +0
@@ -1462,6 +1464,7 @@ class PoolSetupTest(PoolProjectCase):
         # three sessions below a +2 leave no room for a second sequence; one that opens nothing joins the last batch
         self.assertEqual(doc["batches"], [["PMO-p2-01"], ["Product-p2-01"], ["Alg-p2-01"], ["RnD-p2-01"], ["Infra-p2-01"],
                                           ["Quality-p2-01", "Liaison-p2-01"]])
+        self.assertEqual(doc["rounds"], [[1, 2, 3], [4, 5], [6]])            # 2 + 3 + 3 sessions below, then 3 + 3, then 3
         task["pool"].update(p1=0)                                           # no +1: the +0s hang under the +2
         with open(self.task_path, "w", encoding="utf-8") as f:
             json.dump(task, f, ensure_ascii=False)
@@ -1532,8 +1535,10 @@ class PoolSetupTest(PoolProjectCase):
             self.assertEqual(setup.main(["pool", "--target", self.tmp]), 0)
         text = out.getvalue()
         self.assertIn("1. PMO-p2-01（未认领）", text)
-        self.assertIn("只开下面这 7 个 +2，分 4 批开", text)
-        self.assertIn("\n第 1 批\n1. PMO-p2-01", text)
+        self.assertIn("只开下面这 7 个 +2，分 4 批、2 轮开", text)
+        self.assertIn("\n第 1 轮（研究员说完初始化那句话以后）\n第 1 批\n1. PMO-p2-01", text)
+        self.assertIn("\n第 2 轮（研究员回一句“继续开池”以后）\n第 3 批\n5. Infra-p2-01", text)
+        self.assertIn("结束本轮，请研究员回一句“继续开池”", text)
         self.assertIn("\n第 4 批\n7. Liaison-p2-01", text)
         self.assertIn("--wait 180 --batch", text)
         self.assertLess(text.index("各调一次 detach_session"), text.index("逐个运行它们的 expect"))   # top level first, then the permit
@@ -1648,6 +1653,13 @@ class CheckLayersTest(PoolProjectCase):
         code, text = self.wait_batch(1)                                         # the scribe may still be writing
         self.assertEqual(code, 0, text)
         self.assertIn("第 1 批开齐：6 个会话都已认领，首轮都结束了。接着开第 2 批：Alg-p2-01、RnD-p2-01。", text)
+        for name in ("Alg-p2-01", "Alg-p1-01", "Alg-p0-01", "RnD-p2-01", "RnD-p1-01", "RnD-p0-01"):
+            self.hook("instances.py", {"hook_event_name": "Stop", "session_id": "s-" + name})
+        code, text = self.wait_batch(2)                                         # the round ends here: the researcher has to speak
+        self.assertEqual(code, 0, text)
+        self.assertIn("第 2 批开齐：6 个会话都已认领，首轮都结束了。这一轮到此为止：研究员每发一条消息，应用最多让会话自己开出 10 个会话，"
+                      "这一轮用了 8 个。现在结束本轮，请研究员回一句“继续开池”；他回话以后再开第 3 批：Infra-p2-01、Quality-p2-01。", text)
+        self.assertIn("接着开第 4 批：Liaison-p2-01。", self.wait_batch(3)[1])   # inside the second round
         for name in ("Liaison-p2-01", "Liaison-p1-01", "Liaison-p0-01"):
             self.hook("instances.py", {"hook_event_name": "Stop", "session_id": "s-" + name})
         code, text = self.wait_batch(4)
@@ -2185,7 +2197,8 @@ class PoolBatchTest(PoolProjectCase):
         with contextlib.redirect_stdout(out):
             self.assertEqual(setup.main(["pool", "--target", self.tmp]), 0)
         text = out.getvalue()
-        self.assertIn("分 6 批开", text)
+        self.assertEqual(plan["rounds"], [[1, 2], [3], [4], [5], [6]])
+        self.assertIn("分 6 批、5 轮开", text)
         self.assertIn("注意：Product-p2-01 下面要开 5 个会话，一批最多容得下 4 个", text)
         self.assertEqual(text.count("注意："), 5)                               # not the entry: a router and a scribe
         self.assertNotIn("注意：PMO-p2-01", text)

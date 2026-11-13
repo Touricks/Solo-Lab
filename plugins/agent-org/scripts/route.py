@@ -444,8 +444,8 @@ def children_text(root, policy, claim):
              "研究员在本会话里说“补位”时，开表里“补位用”的那一行。每个都用会话管理工具 start_session（它还没加载时，先用 ToolSearch 查 start_session 加载进来）：initiation 写 user_asked，context 写 fresh，"
              "use_worktree 写 false，权限模式不填（继承本会话）；name、title、model、prompt、background 照下表原样填。开好马上用返回的桌面会话 ID 运行表里的 expect。"
              "这是研究员初始化这个项目时定下的开法：下一级由上一级开出，侧栏里它才嵌在上一级下面。"
-             "应用回“Not started: … still working, the most it runs at once”时，是会话自己开出的会话到了应用同时运行的上限："
-             "这一个先不开，也不要改提启动卡，回话里写明还差哪一个；应用再叫醒你时，或者研究员在本会话里说了，再照这张表开。"]
+             "应用回“Not started: …”时，是会话自己开出的会话到了应用的上限（同时在跑的满 5 个，或者研究员这条消息以后已经开了 10 个）："
+             "这一个先不开，也不要改提启动卡，回话里写明还差哪一个；研究员在本会话里说了，或者应用再叫醒你时，再照这张表开。"]
     if entry is top and not top.get("children"):
         lines.append("本序列开池时只开 +2，下表只有补位用的行。")
     if full:
