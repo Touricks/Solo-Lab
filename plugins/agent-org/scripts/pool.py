@@ -744,7 +744,14 @@ def receive_checks(policy, root, pool, msg, me):
     if kind == "report" and item:
         owner = (pool.get("owners") or {}).get(item)
         if owner and sender and owner != sender:
-            out.append("#%s 的负责会话是 %s，这条交回是 %s 发的；可能是重派后旧会话迟到的交回，先核对再用" % (item, owner, sender))
+            owner_claim, above = pool["claims"].get(owner), False
+            if owner_claim and sender_claim:
+                o, s = policy["agents"].get(owner_claim["role"]) or {}, policy["agents"].get(sender_claim["role"]) or {}
+                above = s.get("sequence") == o.get("sequence") and s.get("rank", 0) > o.get("rank", 0)
+            # the owner's own +2 or +1 passing the result up, and whoever reports to the entry, is the normal
+            # way; a report from elsewhere may be a late one from the session the item was taken from
+            if not above and me["role"] != policy.get("entry_role"):
+                out.append("#%s 的负责会话是 %s，这条交回是 %s 发的；可能是重派后旧会话迟到的交回，先核对再用" % (item, owner, sender))
     return out
 
 

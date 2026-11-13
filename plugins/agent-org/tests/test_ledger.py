@@ -196,6 +196,11 @@ class RegisterTest(LedgerCase):
         self.assertEqual(self.fake.shown(item["type_key"], lg.field("research_task", "sequence")["field_key"],
                                          self.value(item_id, "research_task", "sequence"))["label"], "项目管理")
         self.assertIn("负责方：产品 +2", self.quiet(ledger.next_step, self.lg("preview"), item_id))
+        bare = self.task(sender="Alg-p2-01", name="bare.md")                       # only the session: its sequence, not the entry's
+        item = self.fake.item(bare)
+        self.assertEqual(self.fake.shown(item["type_key"], lg.field("research_task", "sequence")["field_key"],
+                                         self.value(bare, "research_task", "sequence"))["label"], "算法")
+        self.assertEqual(self.value(bare, "research_task", "sender"), "Alg-p2-01")
 
     def test_a_revised_sheet_becomes_the_main_document_of_its_task(self):
         task = self.task()

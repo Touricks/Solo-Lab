@@ -731,6 +731,19 @@ def header_of(text):
     return header
 
 
+def sequence_named(spec, who):
+    """The sequence a 发出方 or 接收方 line names: by the sequence's name in front (算法 +2（Alg-p2-01）)
+    or, when only a session is written (Alg-p2-01), by its abbreviation. None for 研究员 and the like."""
+    who = (who or "").strip()
+    for s, _, abbrev in spec.sequences():
+        if who.startswith(spec.term("seq", s)):
+            return s
+    if SESSION_NAME.match(who):
+        head = who.split("-", 1)[0].lower()
+        return next((s for s, _, abbrev in spec.sequences() if abbrev.lower() == head), None)
+    return None
+
+
 def title_of(text):
     return next((l[2:].strip() for l in text.splitlines() if l.startswith("# ")), "")
 
@@ -779,8 +792,8 @@ class Draft:
         m = re.search(r"（([A-Za-z]+-p[0-2]-[\w]+)）", self.header.get("接收方", ""))
         self.receiver = m.group(1) if m else None
         seq_by_cn = {spec.term("seq", s): s for s, _, _ in spec.sequences()}
-        self.sender_seq = next((s for cn, s in seq_by_cn.items() if self.header.get("发出方", "").startswith(cn)), None)
-        self.receiver_seq = next((s for cn, s in seq_by_cn.items() if self.header.get("接收方", "").startswith(cn)), None)
+        self.sender_seq = sequence_named(spec, self.header.get("发出方", ""))
+        self.receiver_seq = sequence_named(spec, self.header.get("接收方", ""))
         link = self.header.get("关联工作项", "")
         self.linked = re.findall(r"#(\d+)", link)
         src = re.search(r"来源工作项[：:\s]*#?(\d+)", self.text)
@@ -831,8 +844,7 @@ class Sheet(Draft):
             raise LedgerError("%s的标题或开头几行还是模板里的占位（<…>），先填好再登记" % word)
         m = re.search(r"（([A-Za-z]+-p[0-2]-[\w]+)）", sender)
         self.author = m.group(1) if m else (sender or None)        # a session, or 研究员, 导师 ...
-        seq_by_cn = {spec.term("seq", s): s for s, _, _ in spec.sequences()}
-        self.sender_seq = next((s for cn, s in seq_by_cn.items() if sender.startswith(cn)), None)
+        self.sender_seq = sequence_named(spec, sender)
         src = re.search(r"来源工作项[：:\s]*#?(\d+)", self.text)
         self.source = src.group(1) if src else None
         ref = re.search(r"#?(\d{3,})", self.header.get("所属研究任务", ""))

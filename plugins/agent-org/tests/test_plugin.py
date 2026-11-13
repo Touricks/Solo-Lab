@@ -2801,6 +2801,16 @@ class PoolReviewStateTest(PoolProjectCase):
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-alg2", "source": "compact"})
         self.assertIn("#2101→Alg-p1-02", out.get("additionalContext", ""))
 
+    def test_a_report_passed_up_is_not_taken_for_a_late_one(self):
+        self.prompt("s-alg1", "【派活 #2101】Alg-p2-01 → Alg-p1-01：需求包 x.md")       # Alg-p1-01 owns #2101
+        _, out = self.prompt("s-entry", "【交回 #2101】Alg-p2-01 → PMO-p2-01：交付包 y.md")   # its +2 passes the result up
+        self.assertNotIn("负责会话是", out.get("additionalContext", ""))
+        self.route("expect", "Alg-p1-02", "--role", "alg-p1", "--desk", "d-a12", sid="s-alg2")
+        self.claim("alg-p1", "Alg-p1-02", "s-alg12", desk="d-a12")
+        self.prompt("s-alg12", "【派活 #2101】Alg-p2-01 → Alg-p1-02：需求包 x.md（重派）")
+        _, out = self.prompt("s-alg2", "【交回 #2101】Alg-p1-01 → Alg-p2-01：交付包 y.md")    # the session it was taken from
+        self.assertIn("#2101 的负责会话是 Alg-p1-02，这条交回是 Alg-p1-01 发的", out.get("additionalContext", ""))
+
     def test_p0_work_names_stand_for_their_claim(self):
         self.prompt("s-alg0", "【派活 #2103】Alg-p1-01 → Alg-p0-2103：需求包 x.md\n会话名：Alg-p0-2103")
         self.assertEqual(self.pool()["owners"]["2103"], "Alg-p0-01")
