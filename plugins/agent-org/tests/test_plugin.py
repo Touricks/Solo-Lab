@@ -1595,6 +1595,7 @@ class AnnounceTest(PoolProjectCase):
         self.assertIn("- 桌面会话 19 个（外联只开 +2），侧栏分区 1 个：新项目\n", text)
         self.assertIn("会话分 2 轮开，第 1 轮开完回一句“%s”" % setup.RESUME_WORDS, text)
         self.assertIn("新建以外的动作", text)
+        self.assertIn("权限模式：本会话用 auto 模式时，开池不用你点。用 bypass 模式时，应用每开一个会话都要你点一次确认，这个池共 19 次。", text)
         self.assertEqual(os.listdir(fresh), [])                                    # it only says, it writes nothing
         code, text = self.announce("--target", fresh, "--name", "另一个名字")
         self.assertIn("- 飞书项目空间 1 个：另一个名字，", text)
@@ -1639,6 +1640,43 @@ class AnnounceTest(PoolProjectCase):
             skill = f.read()
         self.assertIn('setup.py" announce --target <项目目录>', skill)
         self.assertNotIn("将要新建（", skill)                                       # the list is the script's, not the skill's
+
+
+class PoolModeTest(PoolProjectCase):
+    """setup.py pool: in bypass mode the app asks the researcher before every start_session, so it is said first."""
+
+    def checklist(self, mode, sid="s-init"):
+        if mode:
+            pool_lib.update_session(self.tmp, sid, lambda st: st.update({"session_id": sid, "permission_mode": mode}))
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {pool_lib.SESSION_ENV: sid}), contextlib.redirect_stdout(out):
+            self.assertEqual(setup.main(["pool", "--target", self.tmp]), 0)
+        return out.getvalue()
+
+    def test_bypass_mode_is_told_before_the_pool_opens(self):
+        text = self.checklist("bypassPermissions")
+        self.assertIn("注意：本会话是 bypass 模式。", text)
+        self.assertIn("还没开的 21 个会话要点 21 次", text)
+        self.assertIn("1. 换 auto 模式：", text)
+        self.assertIn("2. 留在本会话：", text)
+        self.assertLess(text.index("注意：本会话是 bypass 模式。"), text.index("只开下面这 7 个 +2"))
+
+    def test_auto_mode_and_an_unknown_mode_are_not_warned(self):
+        self.assertNotIn("bypass 模式", self.checklist("auto"))
+        self.assertNotIn("bypass 模式", self.checklist(None, sid="s-nobody"))
+
+    def test_once_sessions_are_open_the_mode_is_kept(self):
+        self.started_pool()
+        text = self.checklist("bypassPermissions")
+        self.assertIn("接着在本会话开", text)
+        self.assertNotIn("1. 换 auto 模式：", text)
+
+    def test_the_manual_checklist_says_nothing_of_it(self):
+        pool_lib.update_session(self.tmp, "s-init", lambda st: st.update({"session_id": "s-init", "permission_mode": "bypassPermissions"}))
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {pool_lib.SESSION_ENV: "s-init"}), contextlib.redirect_stdout(out):
+            self.assertEqual(setup.main(["pool", "--target", self.tmp, "--manual"]), 0)
+        self.assertNotIn("bypass 模式", out.getvalue())                  # the researcher opens those sessions by hand
 
 
 class CheckLayersTest(PoolProjectCase):

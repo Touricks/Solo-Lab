@@ -1303,6 +1303,7 @@ def announce(target, name=None, task_path=None, seq_arg=None):
         "- 桌面会话 %d 个%s，侧栏分区 1 个：%s" % (plan["total"], "（%s只开 +2）" % later if later else "", plan["label"]),
         "- 项目目录 %s 里的 %s，以及 .env 里的两行链接" % (target, "、".join(LOCAL_TOPS)),
         "中途要你做的：%s。" % "；".join(asks),
+        "权限模式：本会话用 auto 模式时，开池不用你点。用 bypass 模式时，应用每开一个会话都要你点一次确认，这个池共 %d 次。" % plan["total"],
         "新建以外的动作（删除、覆盖、改已有的对象、改分享权限）会先停下问你。"]))
     if again:
         print("这个目录已经初始化过：名字和会话数照它的 spec/task.json。")
@@ -1816,6 +1817,13 @@ def pool_health(target, manifest):
     return problems, notes
 
 
+def own_mode(target):
+    """The permission mode the hooks recorded for the session that runs this command; None when unknown."""
+    import pool
+    sid = os.environ.get(pool.SESSION_ENV) or ""
+    return pool.load_session(target, sid).get("permission_mode") if sid else None
+
+
 def pool_checklist(target, manual=False):
     """`setup.py pool`: how to open the pool, and the claims so far. Reads only."""
     import pool
@@ -1862,6 +1870,19 @@ def pool_checklist(target, manual=False):
             print("书记员由路由开出，开局句里带着初始化的两件写入。它没做的话，把这段话发给它：%s" % plan["scribe_first"].lstrip("。"))
     else:
         batches, rounds = plan["batches"], plan["rounds"]
+        left = [e["name"] for e in plan_entries(plan) if e["name"] not in claimed]
+        if pool.mode_class(own_mode(target)) == "bypass" and left:
+            # measured 2026-11-13: in bypass mode the app asks the user before every start_session, in whichever session calls it
+            print("注意：本会话是 bypass 模式。这个模式下，应用对每一次开会话都要研究员点一次确认，卡片弹在发起的那个会话里：本会话开 +2、"
+                  "+2 开 +1、+1 开 +0 都一样。还没开的 %d 个会话要点 %d 次；没点之前那个会话停着，--wait 会等到超时。" % (len(left), len(left)))
+            if claimed:
+                print("已经开出的会话也是 bypass 模式，换模式会让新旧会话之间的消息被扣下，所以接着在本会话开。开之前告诉研究员：每开一个会话，"
+                      "到弹出卡片的那个会话里点一次 Allow once。")
+            else:
+                print("开池之前先停下，把下面两种做法原样告诉研究员，等他选：")
+                print("1. 换 auto 模式：研究员在项目目录新开一个 auto 模式的会话，说“用 agent-org 初始化这个目录”，它从开池接着做，不用点。本会话到此为止。")
+                print("2. 留在本会话：接着开，每开一个会话，研究员到弹出卡片的那个会话里点一次 Allow once。")
+            print("")
         print("研究员的会话（做初始化的这个会话）只开下面这 %d 个 +2，分 %d 批、%d 轮开：" % (len(tops), len(batches), len(rounds)))
         print("- 为什么分批、分轮：会话自己开出的会话（+2 开的 +1、+1 开的 +0），应用有两条上限，所有序列合在一起算：同时最多 %d 个在跑；"
               "研究员每发一条消息以后最多开出 %d 个。所以一批只开一两个序列，等这一批的会话都认领、首轮都结束再开下一批；"
