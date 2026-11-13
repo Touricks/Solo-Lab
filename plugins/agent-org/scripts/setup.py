@@ -32,10 +32,12 @@ Feishu and writes nothing.
 
 Every role runs as a desktop session the researcher can see (the session pool): init adds
 the pool hooks, .claude/agent-org/pool-plan.json and the draft of a first research-task
-sheet. `setup.py pool` prints, for the session that initialises, every session to open in
-order with its title, model and opening lines, and the claims so far (read only);
---manual prints how the researcher opens the top sessions by hand when that session cannot
-open any. A task file may say "mode": "pool"; any other mode is refused.
+sheet. `setup.py pool` prints, for the session that initialises, the +2 sessions it opens
+with their titles, models and opening lines, the tree below each, and the claims so far
+(read only); the levels below open one another, and --wait SECONDS waits until they have all
+claimed and the scribe has done its first writes. --manual prints how the researcher opens
+the top sessions by hand when that session cannot open any. A task file may say
+"mode": "pool"; any other mode is refused.
 
 login starts a device-code login of the command-line tool whose login is gone and prints a
 QR code and a link for the researcher; --wait reads the login back. No device code, password
@@ -85,7 +87,6 @@ SHARED_HOOK_SCRIPTS = ("pool.py",)         # kept in scripts/, copied into the h
 POOL_DEFAULTS = {"p1": 1, "p0": 1, "later": ["liaison"], "max_sessions": 30, "label": ""}
 # plugin scripts the researcher's own session runs from the plugin directory; the hook trusts them by path and hash
 PLUGIN_RUN = ("setup.py", "space.py", "onboarding.py")
-OPEN_BATCH = 4                             # sessions opened before their claims are checked
 FIRST_TASK = "packages/drafts/pmo/研究任务单-首条.md"
 POOL_SESSIONS = (7, 57)
 
@@ -612,9 +613,13 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
     else:
         lines.append("- 你不再往下派。")
     if rank in (1, 2):
-        lines.append("- 上限和补位：每个角色 +1 最多 3 个会话、+0 最多 5 个。没有空闲会话就排队；研究员在这一轮明确说“补位”或“再开一个 …”时，+2 才开新会话（开法照 `route.py claim` 输出里“补位用”那一行，开好马上 `route.py expect` 预登记），其余时候只运行 `route.py refill <角色>` 记一条补位请求，不提卡片。+1 不自己开会话。")
-    if rank == 2:
+        opens = ("你开本序列的 +1；+0 由它上面的 +1 开，要补 +0 请研究员到那个 +1 的会话里说（本序列没有 +1 时才由你开）" if rank == 2
+                 else "你开自己下面的 +0")
+        lines.append("- 上限和补位：每个角色 +1 最多 3 个会话、+0 最多 5 个。没有空闲会话就排队。会话一层开一层，侧栏里新会话嵌在开它的会话下面：%s。"
+                     "开局那句话点了名的，认领那一轮就开；此后只有研究员在你的会话里明确说“补位”或“再开一个 …”时才开"
+                     "（开法照 `route.py claim` 输出里的表，开好马上 `route.py expect` 预登记），其余时候只运行 `route.py refill <角色>` 记一条补位请求，不提卡片。" % opens)
         lines.append("- 你开的会话每结束一轮，应用会叫醒你一次。这不算交回：先跑 `route.py pool --queue <你的会话名>`，有等你派的活、又有空闲会话就派出去，没有就一句话结束本轮。")
+    if rank == 2:
         lines.append("- 跨序列的需求包、决策包写成草稿发给入口 `%s`（【%s】【%s】），由入口转交；你不直接给别的序列派活。" % (
             entry, spec.term("msg", "report"), spec.term("msg", "decide")))
         lines.append("- 研究任务走到你们序列负责的那一步时，这一步归你推进：先用 `python3 -I .claude/agent-org/bin/ledger.py next <研究任务 ID>` 看这一步必填什么，序列内的活派 +1，要别的序列配合就发跨序列的需求包；产出齐了，给 `%s` 发【%s】请它确认节点，写明各必填字段的值。正式分数只认质量序列在冻结的 Eval Set 上跑出的。" % (scribe, reg))
@@ -755,14 +760,15 @@ def shared_mechanics(spec, policy):
     entry, router, scribe = (agents[r]["fixed_session"] for r in ("pmo-p2", "pmo-router", "pmo-scribe"))
     words = "、".join("【%s】" % spec.term("msg", k) for k in ("report", "register_request", "register_receipt", "decide", "resume", "notice"))
     return bullets([
-        "本目录是会话池：每个角色是研究员看得见的一个桌面会话。侧栏顶层是 %d 个序列的 +2，各自下面挂本序列的 +1 和 +0；入口 `%s` 下面挂路由 `%s` 和书记员 `%s`。研究员平时找入口，特殊情况直接点开某个会话交代。" % (
+        "本目录是会话池：每个角色是研究员看得见的一个桌面会话。侧栏顶层是 %d 个序列的 +2，+2 下面是本序列的 +1，+1 下面是 +0：谁开出的会话就嵌在谁下面；入口 `%s` 下面是路由 `%s`，路由下面是书记员 `%s`。研究员平时找入口，特殊情况直接点开某个会话交代。" % (
             len(policy.get("sequences") or []), entry, router, scribe),
         "认领：只有开局第一句写着“认领 <角色>（会话名 <名字>）”的会话才认领，照那句话运行 `python3 -I .claude/agent-org/bin/route.py claim <角色> --as <会话名>`，读输出里的角色说明，它就是本会话的工作说明。第一句没有这句话的，是研究员自己的会话：不要自己认领，也不替池里的角色干活。",
         "找人：派活前先跑 `python3 -I .claude/agent-org/bin/route.py pool --role <角色>`，看各会话忙不忙、手上是哪个工作项、桌面会话 ID，照脚本的建议发给空闲的会话。没有空闲的就排队，台账里“待开工”的工作项就是队列。",
         "发消息：派活、交回、登记请求、需拍板都用会话管理工具发消息，按对方的桌面会话 ID 发，同一家族里也可以写短名（会话名的小写）。首行写抬头 `%s：<包名> <包路径>`，抬头里的会话名写池位名（`route.py pool` 列的那个，+0 也写 `Alg-p0-01` 这样的池位名），其余几种只换抬头里的词：%s。正文放在包文件里，消息里只写抬头、包路径和三行以内的摘要。回执是 delivered 或 queued 才算发出，记下 message_id；对方收没收到，以对方 hook 记在 `.claude/logs/dispatch.jsonl` 的时间为准。" % (
             msg_head(spec, "assign"), words),
         "自动提醒：你开的会话每结束一轮，应用会叫醒你一次。这不算交回：先跑 `route.py pool --queue <自己的会话名>`，有待开工的活、又有空闲会话就派出去，没有就一句话结束本轮。【%s】（比如补充信息）也是消息，会叫起对方的下一轮；对方在 `route.py pool` 里显示“研究员在用”的不打断，改用 `route.py notify <会话名> --text '...'` 留在它的收件箱。" % spec.term("msg", "notice"),
-        "开会话：只有研究员在这一轮明确要求开会话（“补位”“再开一个 alg-p0”）时才开；其余时候运行 `route.py refill <角色>` 记一条补位请求，不开会话，也不提卡片。",
+        "开会话：会话一层开一层，+2 开本序列的 +1，+1 开自己下面的 +0，侧栏里新会话嵌在开它的会话下面。开局那句话点了名要你开的，在认领那一轮照认领输出开，这是研究员初始化时定下的开法；"
+        "此后只有研究员在你的会话里明确要求（“补位”“再开一个 alg-p0”）时才开。其余时候运行 `route.py refill <角色>` 记一条补位请求，不开会话，也不提卡片。",
         "工作项、字段、节点和文档只由唯一认领的书记员 `%s` 写，写操作都走 `ledger.py`；其他会话只能加带会话标签的评论。每一步谁负责、必填什么，以飞书空间为准：`ledger.py next <工作项 ID>` 现读。" % scribe,
         "high-risk-write 和带 `--yes` 的飞书命令、在本目录切分支、stash、reset 之类的 git 命令都由研究员执行：把完整命令写给研究员。",
         "知识库、文档和云空间的命令显式带 `--as user`；收发消息和订阅事件带 `--as bot`。",
@@ -874,21 +880,26 @@ def pool_label(task, ids=None):
 
 
 BRIEF_END = "，回一句“已认领 %s”就结束本轮，等派活消息。"      # how an opening line ends when nothing else is asked
+# what the researcher pastes into a +2 opened by hand ends with this: that +2 titles and files itself
+BY_HAND = "本会话由研究员手工开出。"
+# ...and when the session opens the next level in its first turn
+OPENS = "；再照输出里的表开出 %s，每开一个马上运行表里的 expect；然后回一句“已认领 %s，已开 …”，结束本轮。"
 
 
 def pool_entry(spec, task, policy, role, name, label):
     pol = policy["agents"][role]
     route = "python3 -I .claude/agent-org/bin/route.py"
+    claim = "认领 %s（会话名 %s）。先运行 %s claim %s --as %s，读输出里的角色说明" % (role, name, route, role, name)
     return {
         "role": role, "name": name, "short": "{short}" if name == "{name}" else name.lower(),
         "title": "[%s] %s" % (label, name),
         "model": task["models"].get(role) or task["models"].get("p%d" % pol["rank"]) or "inherit",
-        "brief": "认领 %s（会话名 %s）。先运行 %s claim %s --as %s，读输出里的角色说明%s" % (
-            role, name, route, role, name, BRIEF_END % name),
+        "claim": claim, "brief": claim + BRIEF_END % name,
         "background": "本目录是「%s」的智能体组织，按会话池运行：每个角色一个桌面会话，派活、交回、登记都发消息，抬头格式见项目的 CLAUDE.md。"
                       "你是 %s（%s +%d），开局先认领角色，认领输出里的角色说明就是你的工作说明；工作项和状态包在飞书，不靠对话记状态。" % (
                           task["name"], name, pol["sequence_cn"], pol["rank"]),
         "expect": "%s expect %s --role %s --desk <开会话时返回的桌面会话 ID>" % (route, name, role),
+        "children": [],
     }
 
 
@@ -901,51 +912,70 @@ SCRIBE_FIRST = (
     "回话写明：建了几个节点、沿用了几个，研究任务的工作项 ID 和主文档链接；哪一条命令失败，原样贴出报错，不要重试两次以上。" % FIRST_TASK)
 
 
+MODEL_TIERS = ("haiku", "sonnet", "opus", "fable")
+
+
+def model_tier(model):
+    """Where a model sits among the families; -1 when it cannot be told (inherit, an unknown id)."""
+    text = str(model or "").lower()
+    return next((i for i, word in enumerate(MODEL_TIERS) if word in text), -1)
+
+
+def plan_entries(plan):
+    """Every session of a pool plan, a parent before the sessions it opens."""
+    def walk(entry):
+        yield entry
+        for child in entry.get("children") or []:
+            yield from walk(child)
+    for top in (plan or {}).get("top") or []:
+        yield from walk(top)
+
+
 def pool_plan(spec, task, policy, seqs, ids=None):
-    """.claude/agent-org/pool-plan.json: every session of the pool with its title, model and
-    opening lines. By default the initialising session opens them all in `order`, the scribe
-    first; when it cannot open sessions, the researcher opens the top ones by hand with
-    `opening` and each +2 opens its own children."""
+    """.claude/agent-org/pool-plan.json: the pool as a tree, the way work is handed down. The
+    initialising session opens each sequence's +2; a +2 opens its +1s and a +1 its +0s in
+    their first turns, so the sidebar nests them: a session sits under the one that opened
+    it. When that session cannot open any, the researcher opens the +2s by hand (`opening`)."""
     cfg = task["pool"]
     later = set(cfg.get("later") or [])
     label = pool_label(task, ids)
-    tops, total = [], 0
-    for seq in sorted(seqs, key=lambda x: x != "pmo"):     # the entry first
+    tops = []
+    for seq in sorted(seqs, key=lambda x: x != "pmo"):     # the entry first: the scribe is two levels below it
         role2 = agent_name(seq, 2)
         pol2 = policy["agents"][role2]
-        name2 = pol2.get("fixed_session") or "%s-p2-01" % pol2["abbrev"]
-        top = pool_entry(spec, task, policy, role2, name2, label)
-        children = []
+        top = pool_entry(spec, task, policy, role2, pol2.get("fixed_session") or "%s-p2-01" % pol2["abbrev"], label)
+        ranks = {1: [], 0: []}
         if seq not in later:
             for rank in (1, 0):
                 role = agent_name(seq, rank)
                 pol = policy["agents"][role]
-                count = 1 if pol.get("fixed_session") else cfg["p%d" % rank]
-                for i in range(1, count + 1):
-                    children.append(pool_entry(spec, task, policy, role,
-                                               pol.get("fixed_session") or "%s-p%d-%02d" % (pol["abbrev"], rank, i), label))
+                for i in range(1, (1 if pol.get("fixed_session") else cfg["p%d" % rank]) + 1):
+                    ranks[rank].append(pool_entry(spec, task, policy, role,
+                                                  pol.get("fixed_session") or "%s-p%d-%02d" % (pol["abbrev"], rank, i), label))
+        top["children"] = ranks[1] or ranks[0]              # a sequence that opens no +1 hangs its +0s under the +2
+        for i, zero in enumerate(ranks[0] if ranks[1] else []):
+            ranks[1][i % len(ranks[1])]["children"].append(zero)
+        for entry in [top] + ranks[1]:
+            kids = [c["name"] for c in entry["children"]]
+            if kids:
+                entry["brief"] = entry["claim"] + OPENS % ("、".join(kids), entry["name"])
+        kids = [c["name"] for c in top["children"]]
+        if not kids:
+            top["brief"] += "本序列的 +1、+0 开池时先不开，研究员说“补位”时再照认领输出开。"
+        # templates for a refill: a +2 opens another +1, a +1 (or the +2 while there is none) another +0
         top["child_roles"] = [pool_entry(spec, task, policy, agent_name(seq, rank), "{name}", label) for rank in (1, 0)]
-        what = "路由和书记员" if seq == "pmo" else "本序列的 +1 和 +0"
-        top["brief"] += ("不开子会话：研究员的会话会开出%s，找它们用 route.py pool。" % what if children else
-                         "不开子会话：本序列的 +1、+0 开池时先不开，研究员说“补位”时再照认领输出开。")
-        top["opening"] = ("认领 %s（会话名 %s），然后照认领输出开出%s。" % (role2, name2, what) if children
-                          else "认领 %s（会话名 %s）。本序列先不开子会话。" % (role2, name2))
-        top["rebuild"] = "认领 %s（会话名 %s），不开子会话；用 route.py pool 找回本序列已有的会话，按桌面会话 ID 给它们发消息。" % (role2, name2)
-        top["children"] = children
+        top["opening"] = ("认领 %s（会话名 %s），然后照认领输出开出 %s。" % (role2, top["name"], "、".join(kids)) if kids
+                          else "认领 %s（会话名 %s）。本序列先不开下一级。" % (role2, top["name"])) + BY_HAND
+        top["rebuild"] = "认领 %s（会话名 %s），不开下一级；用 route.py pool 找回本序列已有的会话，按桌面会话 ID 给它们发消息。%s" % (
+            role2, top["name"], BY_HAND)
         tops.append(top)
-        total += 1 + len(children)
-    if total > cfg["max_sessions"]:
+    plan = {"version": 3, "project": task["name"], "label": label, "max_sessions": cfg["max_sessions"],
+            "order": [t["name"] for t in tops], "scribe_first": SCRIBE_FIRST, "opens": OPENS, "top": tops}
+    plan["total"] = sum(1 for _ in plan_entries(plan))
+    if plan["total"] > cfg["max_sessions"]:
         raise SetupError("开池要开 %d 个会话，超过任务文件的 pool.max_sessions=%d：调小 pool.p1、pool.p0，把不急的序列写进 pool.later，"
-                         "或调大 max_sessions" % (total, cfg["max_sessions"]))
-
-    def weight(e):                                           # the scribe, the entry, the router, then by rank
-        if e["role"] in (policy.get("scribe_role"), policy.get("entry_role"), policy.get("router_role")):
-            return (policy.get("scribe_role"), policy.get("entry_role"), policy.get("router_role")).index(e["role"])
-        return 5 - policy["agents"][e["role"]]["rank"]
-    flat = tops + [c for t in tops for c in t["children"]]
-    return {"version": 2, "project": task["name"], "label": label, "max_sessions": cfg["max_sessions"], "total": total,
-            "batch": OPEN_BATCH, "order": [e["name"] for e in sorted(flat, key=weight)], "scribe_first": SCRIBE_FIRST,
-            "top": tops}
+                         "或调大 max_sessions" % (plan["total"], cfg["max_sessions"]))
+    return plan
 
 
 def first_task_sheet(task):
@@ -1537,6 +1567,7 @@ def listed_sessions(target, path, plan, pl):
         return ["--sessions 给的文件不是会话列表：把 list_sessions 的结果原样存成 JSON 文件（include_archived 写 true，limit 写够）"], []
     by_id = {str(r.get("sessionId")): r for r in rows if isinstance(r, dict)}
     label, here = plan.get("label"), os.path.realpath(target)
+    desks = {str(c.get("desk")) for c in pl["claims"].values()}      # the session that initialised is not one of them
     gone, archived, elsewhere, loose, pinned, titled, unknown = [], [], [], [], [], [], []
     for name, claim in sorted(pl["claims"].items()):
         row = by_id.get(str(claim.get("desk")))
@@ -1547,9 +1578,13 @@ def listed_sessions(target, path, plan, pl):
             archived.append(name)
         if row.get("cwd") and os.path.realpath(row["cwd"]) != here:
             elsewhere.append(name)
-        if "group" not in row:
+        above, seen = row, set()                       # a nested session is filed where the pool session above it is
+        while above.get("startedBy") in desks and above["startedBy"] in by_id and above["startedBy"] not in seen:
+            seen.add(above["startedBy"])
+            above = by_id[above["startedBy"]]
+        if "group" not in row and "group" not in above:
             unknown.append(name)
-        elif (row["group"] or {}).get("name") != label:
+        elif label not in ((row.get("group") or {}).get("name"), (above.get("group") or {}).get("name")):
             loose.append(name)
         if row.get("pinned"):
             pinned.append(name)
@@ -1618,7 +1653,7 @@ def pool_health(target, manifest):
         return ["读不出 .claude/state/pool.json：认领表坏了，台账写入会全部被拒；请研究员先看这个文件"], []
     problems, notes = [], []
     plan = load_json_file(os.path.join(target, ".claude", "agent-org", "pool-plan.json")) or {}
-    planned = [t["name"] for t in plan.get("top", [])] + [c["name"] for t in plan.get("top", []) for c in t.get("children", [])]
+    planned = [e["name"] for e in plan_entries(plan)]
     held = {}
     for c in pl["claims"].values():
         held.setdefault(c["role"], []).append(c["name"])
@@ -1662,54 +1697,66 @@ def pool_checklist(target, manual=False):
     if not policy.get("agents") or not plan:
         print("这个项目还没有开池清单：先跑 init --apply。")
         return 2
-    if plan.get("version") != 2:
+    if plan.get("version") != 3:
         print("开池清单是旧版插件生成的：重跑 init --apply。")
         return 2
     pl, ok = pool.load(target)
     claimed = set(pl["claims"]) if ok else set()
-    label = plan["label"]
+    label, tops = plan["label"], plan["top"]
+
+    def tree(entry, depth=1):
+        lines = []
+        for child in entry["children"]:
+            lines.append("   %s└ %s（%s，%s）" % ("  " * (depth - 1), child["name"], child["model"],
+                                              "已认领" if child["name"] in claimed else "未认领"))
+            lines += tree(child, depth + 1)
+        return lines
     print("开池清单：%s（共 %d 个会话，总上限 %d）。会话标题的前缀和侧栏分区的名字：%s" % (
         plan["project"], plan["total"], plan["max_sessions"], label))
+    print("会话按派活的方向一层开一层：+2 开本序列的 +1，+1 开 +0。侧栏里谁开的就嵌在谁下面。")
+    for above in plan_entries(plan):
+        for child in above["children"]:
+            if model_tier(child["model"]) > model_tier(above["model"]) >= 0:
+                print("注意：%s 的模型 %s 高于开它的 %s（%s）。会话的模型不能高于开它的会话，高出的不生效，它会沿用 %s 的模型；"
+                      "要它用 %s，把任务文件 models 里 %s 的模型也调高。" % (
+                          child["name"], child["model"], above["name"], above["model"], above["name"], child["model"], above["role"]))
     print("")
     if manual:
         print("手工开池（研究员的会话开不了会话时用）：")
-        if any(t["children"] for t in plan["top"] if t["role"] != policy.get("entry_role")):
-            print("这份清单是按研究员的会话开出全部会话生成的。手工开池只建各序列的 +2：先把任务文件的 pool.later 写成"
-                  "入口以外的全部序列，重跑 init --apply，再看这份清单。")
-        print("研究员在桌面应用里新建 %d 个会话（New session，目录选本项目，不开 worktree），模型照括号里的选，每个粘贴一句：" % len(plan["top"]))
-        for i, top in enumerate(plan["top"], 1):
-            kids = "、".join("%s（%s）" % (c["name"], c["model"]) for c in top["children"]) or "先不开"
+        print("研究员在桌面应用里新建 %d 个会话（New session，目录选本项目，不开 worktree），模型照括号里的选，每个粘贴一句：" % len(tops))
+        for i, top in enumerate(tops, 1):
             print("%d. %s（%s，%s）：%s" % (i, top["name"], top["model"], "已认领" if top["name"] in claimed else "未认领", top["opening"]))
-            print("   它会开出：%s" % kids)
-            if ok and top["name"] not in claimed and any(c["name"] in claimed for c in top["children"]):
-                print("   它的子会话还在，换会话时粘贴重建句：%s" % top["rebuild"])
-        print("每个 +2 认领以后，照认领输出把自己的标题改成“[%s] <会话名>”，归入侧栏分区“%s”。其余的 +1、+0 开池时不建："
-              "某个序列第一次有活时，研究员在它的 +2 会话里说一句“补位”。" % (label, label))
+            for line in tree(top):
+                print(line)
+            if ok and top["name"] not in claimed and any(e["name"] in claimed for e in plan_entries({"top": top["children"]})):
+                print("   它下面的会话还在，换会话时粘贴重建句：%s" % top["rebuild"])
+        print("每个 +2 认领以后，照认领输出把自己的标题改成“[%s] <会话名>”，归入侧栏分区“%s”；它下面的会话跟着它走。" % (label, label))
         if bool(feishu_gaps(target, enabled_sequences(target))) or not registered_tasks(target):
-            print("书记员认领以后，把这段话发给它，让它做初始化的两件写入：%s" % plan["scribe_first"].lstrip("。"))
+            print("书记员由路由开出，开局句里带着初始化的两件写入。它没做的话，把这段话发给它：%s" % plan["scribe_first"].lstrip("。"))
     else:
-        flat = {e["name"]: e for t in plan["top"] for e in [t] + t["children"]}
-        first = bool(feishu_gaps(target, enabled_sequences(target))) or not registered_tasks(target)
-        print("研究员的会话（做初始化的这个会话）照下面的顺序开出全部会话：")
-        print("- 每个会话用会话管理工具 start_session：initiation 写 user_asked，context 写 fresh，use_worktree 写 false，"
+        print("研究员的会话（做初始化的这个会话）只开下面这 %d 个 +2，可以一批开完：" % len(tops))
+        print("- 每个用会话管理工具 start_session（它还没加载时，先用 ToolSearch 查 start_session 加载进来）：initiation 写 user_asked，context 写 fresh，use_worktree 写 false，"
               "权限模式不填（继承本会话）；name、title、model、prompt、background 照下表。")
-        print("- 每开一个，马上用返回的桌面会话 ID 运行它的 expect。第 1 个开书记员；其余每批至多 %d 个，这一批都认领了再开下一批。" % plan["batch"])
-        print("- 全部认领以后：用 detach_session 把它们移到顶层；侧栏里没有叫“%s”的分区就用 create_section 建一个；"
-              "用 move_sessions 把它们连同本会话归进去。本会话的标题是应用自动起的，就用 set_session_title 改成“[%s] Researcher”。" % (label, label))
-        print("- model 填不进去就不填，开好以后再改；模型高于本会话的会被降档，记进交接。")
+        print("- 每开一个，马上用返回的桌面会话 ID 运行它的 expect。入口 %s 第 1 个开：书记员在它下面第三层，越早开越早建节点、登记首条研究任务。" % tops[0]["name"])
+        print("- 每个 +2 在首轮里开出自己的 +1，+1 开出自己的 +0，不用本会话管。开完这 %d 个就运行 setup.py pool --target <项目目录> --wait 240："
+              "它等到 %d 个会话都认领、书记员的首轮结束才返回，没等到就列出还差谁。" % (len(tops), plan["total"]))
+        print("- 全部认领以后：对这 %d 个 +2 调 detach_session 移到顶层，它们下面的会话跟着走；侧栏里没有叫“%s”的分区就用 create_section 建一个；"
+              "用 move_sessions 把这 %d 个 +2 连同本会话归进去。本会话的标题是应用自动起的，就用 set_session_title 改成“[%s] Initialization”：它是做初始化的会话，不是入口。" % (
+                  len(tops), label, len(tops), label))
+        print("- 过了两三分钟某个 +2 下面还有没认领的：它首轮没把下一级开出来。给它发消息多半没用，被消息叫起来的那一轮它不开会话；"
+              "请研究员点开那个会话，说一句“照认领输出开出下一级”。")
+        print("- model 填不进去就不填，开好以后再改；模型高于本会话的不生效（会话的模型不能高于开它的会话），记进交接。")
         print("")
-        for i, name in enumerate(plan["order"], 1):
-            e = flat[name]
-            prompt = e["brief"]
-            if first and e["role"] == policy.get("scribe_role"):       # the scribe's first turn does the two first writes
-                prompt = prompt.replace(BRIEF_END % name, "") + plan["scribe_first"]
-            print("%d. %s（%s）" % (i, name, "已认领，不用再开" if name in claimed else "未认领"))
-            print("   name：%s　title：%s　model：%s" % (e["short"], e["title"], e["model"]))
-            print("   prompt：%s" % prompt)
-            print("   background：%s" % e["background"])
-            print("   expect：%s" % e["expect"])
+        for i, top in enumerate(tops, 1):
+            print("%d. %s（%s）" % (i, top["name"], "已认领，不用再开" if top["name"] in claimed else "未认领"))
+            print("   name：%s　title：%s　model：%s" % (top["short"], top["title"], top["model"]))
+            print("   prompt：%s" % top["brief"])
+            print("   background：%s" % top["background"])
+            print("   expect：%s" % top["expect"])
+            for line in tree(top):
+                print(line)
         print("")
-        print("这个会话开不了会话时（比如它是别的会话代开的）：setup.py pool --target <项目目录> --manual 打印手工开池的做法。")
+        print("这个会话开不了会话时（比如这一轮不是研究员亲口开始的，是被别的会话的消息叫起来的）：setup.py pool --target <项目目录> --manual 打印手工开池的做法。")
     print("")
     if ok:
         rows = pool.session_view(target, policy, pl)
@@ -1727,6 +1774,65 @@ def pool_checklist(target, manual=False):
             print("会话池已开齐。接着运行 setup.py check --target <项目目录> --live。")
     else:
         print("读不出 .claude/state/pool.json。")
+    return 0
+
+
+def pool_wait(target, seconds, every=5):
+    """Wait for what the researcher's session does not do itself: the levels below the +2s open
+    one another, and the scribe, two levels down, builds the nodes and registers the first
+    research task. 0 when every planned session has claimed and the scribe's first turn is
+    over with the nodes in place; 1 with what is still missing."""
+    import pool
+    policy = load_json_file(os.path.join(target, ".claude", "hooks", "policy.json")) or {}
+    plan = load_json_file(os.path.join(target, ".claude", "agent-org", "pool-plan.json")) or {}
+    if not policy or plan.get("version") != 3:
+        print("这个项目没有开池清单，或者清单是旧版插件生成的：重跑 init --apply。")
+        return 2
+    entries = list(plan_entries(plan))
+    opened_by = {c["name"]: e["name"] for e in entries for c in e["children"]}
+    deadline = time.time() + max(0, seconds)
+    while True:
+        pl, ok = pool.load(target)
+        claims = pl["claims"] if ok else {}
+        missing = [e["name"] for e in entries if e["name"] not in claims]
+        scribe = next((r for r in (pool.session_view(target, policy, pl) if ok else [])
+                       if r["role"] == policy.get("scribe_role")), None)
+        writing = scribe is None or scribe["status"] in ("busy", "unknown", "uncertain")   # its first turn is not over
+        if (ok and not missing and not writing) or time.time() >= deadline:
+            break
+        time.sleep(every)
+    if not ok:
+        print("读不出 .claude/state/pool.json。")
+        return 1
+    if missing:
+        print("等了 %d 秒，%d 个会话里还有 %d 个没认领：" % (seconds, len(entries), len(missing)))
+        for name in missing:
+            above = opened_by.get(name)
+            print("- %s：%s" % (name, "+2，由做初始化的会话开出" if not above else
+                                 "由 %s 开出，%s %s" % (above, above, "已认领" if above in claims else "还没认领")))
+        if any(opened_by.get(n) in claims for n in missing):
+            print("上一级已认领、下一级没出来的：它首轮没把下一级开出来。请研究员点开上一级的会话，说一句“照认领输出开出下一级”；"
+                  "给它发消息没有用，被消息叫起来的那一轮开不了会话。")
+        return 1
+    line = "会话池已开齐：%d/%d 条认领。" % (len(entries), len(entries))
+    read = "用会话管理工具 list_events 读书记员（桌面会话 %s）的最后几条" % ((scribe or {}).get("desk") or "ID 没记下")
+    if writing:
+        print(line + "书记员的首轮还没结束（状态：%s），两件初始化写入还在做：重跑这条命令接着等。" % (scribe or {}).get("status", "unknown"))
+        return 1
+    if scribe["status"] == "waiting_researcher":
+        print(line + "书记员停在一个确认框上，等研究员批准：请研究员到侧栏点开它处理，再重跑这条命令。")
+        return 1
+    gaps = feishu_gaps(target, enabled_sequences(target))
+    if gaps:
+        print(line + "书记员的首轮已结束，但是%s。" % gaps[0])
+        print(read + "，照技能里“书记员回话里的情况”处理。")
+        return 1
+    tasks = registered_tasks(target)
+    if tasks:
+        print(line + "书记员的首轮已结束：知识库节点都在，首条研究任务已登记（#%s）。" % tasks[0][0].get("work_item_id", "?"))
+    else:
+        print(line + "书记员的首轮已结束：知识库节点都在；这个目录里没有首条研究任务的登记回执。空间里原来就有研究任务时书记员会跳过登记，"
+              "check --live 会核对；不是这种情况，%s。" % read)
     return 0
 
 
@@ -2427,6 +2533,7 @@ def main(argv=None):
     p = sub.add_parser("pool")
     p.add_argument("--target", required=True)
     p.add_argument("--manual", action="store_true", help="研究员的会话开不了会话时：打印手工开池的做法")
+    p.add_argument("--wait", type=int, metavar="SECONDS", help="等到清单里的会话都认领、书记员的首轮结束，最多等这么多秒")
     args = ap.parse_args(argv)
     try:
         if args.cmd == "precheck":
@@ -2462,6 +2569,8 @@ def main(argv=None):
                 import codex_runtime
                 print(dump_json(codex_runtime.Pool(args.target).plan()))
                 return 0
+            if args.wait is not None:
+                return pool_wait(os.path.abspath(args.target), args.wait)
             return pool_checklist(os.path.abspath(args.target), args.manual)
     except (SetupError, ValueError, OSError) as e:
         print("出错：%s" % e)

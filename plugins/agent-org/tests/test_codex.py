@@ -469,6 +469,16 @@ class CodexTest(unittest.TestCase):
         self.task.write_text(json.dumps(raw))
         with self.assertRaises(setup.SetupError): self.build()
 
+    def test_slots_keep_their_order_when_the_shared_plan_is_a_tree(self):
+        raw = json.loads(self.task.read_text())
+        raw["pool"].update({"p1": 2, "p0": 3, "max_sessions": 57})
+        self.task.write_text(json.dumps(raw))
+        slots = [s["name"] for s in json.loads(self.build().files[".agent-org/pool-plan.json"][0])["slots"]]
+        self.assertEqual(len(slots), 39)
+        self.assertIn("PMO-p0-01", slots)                    # the scribe sits two levels down in the shared plan
+        self.assertEqual([n for n in slots if n.startswith("Alg-")],
+                         ["Alg-p2-01", "Alg-p1-01", "Alg-p1-02", "Alg-p0-01", "Alg-p0-02", "Alg-p0-03"])
+
     def test_local_modified_role_not_silently_accepted_as_upgrade(self):
         role = self.root / ".agent-org/roles/alg-p2.md"
         role.write_text(role.read_text() + "\n自定义职责\n")

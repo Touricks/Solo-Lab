@@ -393,6 +393,21 @@ def tombstoned(pool, sid, desk):
                for t in pool["tombstones"])
 
 
+def first_writes_due(root):
+    """The scribe's two first writes (the knowledge nodes, the first research task) are still to
+    do: nothing has been registered from this directory yet."""
+    sent = os.path.join(root, "packages", "sent")
+    for name in os.listdir(sent) if os.path.isdir(sent) else []:
+        if name.endswith(".json") and not name.startswith("reply-"):
+            try:
+                with open(os.path.join(sent, name), encoding="utf-8") as f:
+                    if (json.load(f) or {}).get("status") == "registered":
+                        return False
+            except (OSError, ValueError, AttributeError):
+                pass
+    return True
+
+
 def single_roles(policy):
     return policy.get("single_claim_roles") or [policy.get("entry_role", "pmo-p2"), policy.get("scribe_role", "pmo-scribe")]
 

@@ -963,7 +963,7 @@ def check_pool_command(data, who, policy, root, command):
         if who.researcher:
             return None
         if who.origin != "claim":
-            return Verdict("deny", "只有已认领的 +2（预登记本序列的 +1、+0）、入口（预登记路由和书记员）和研究员自己的会话能预登记。")
+            return Verdict("deny", "只有已认领的 +2（预登记本序列的 +1、+0）、+1（预登记本序列的 +0）、入口（预登记路由和书记员）和研究员自己的会话能预登记。")
         mine = policy["agents"].get(who.role) or {}
         target = policy["agents"].get(role) or {}
         if who.role == policy.get("entry_role") and role in (policy.get("router_role"), policy.get("scribe_role")):
@@ -971,7 +971,10 @@ def check_pool_command(data, who, policy, root, command):
         if mine.get("rank") == 2 and who.role != policy.get("entry_role") and target.get("sequence") == mine.get("sequence") \
                 and target.get("rank") in (0, 1):
             return None
-        return Verdict("deny", "（%s）不能预登记 %s：+2 只预登记本序列的 +1、+0，入口只预登记路由和书记员。" % (who.label, role or "这个角色"))
+        if mine.get("rank") == 1 and target.get("sequence") == mine.get("sequence") and target.get("rank") == 0:
+            return None                       # a +1 opens its +0s: the sidebar nests a session under the one that opened it
+        return Verdict("deny", "（%s）不能预登记 %s：+2 只预登记本序列的 +1、+0，+1 只预登记本序列的 +0，入口只预登记路由和书记员。" % (
+            who.label, role or "这个角色"))
     if who.researcher:
         return refuse(who, data, "释放认领会让这个会话不再是 %s；请研究员确认。" % (args[0] if args else "该角色"))
     return Verdict("deny", "只有研究员能释放认领（route.py release）。")

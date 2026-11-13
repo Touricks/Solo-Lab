@@ -87,7 +87,9 @@ def adapt(base, original, target, spec, task, policy, seqs):
     legacy = base.pool_plan(spec, task, policy, seqs)
     slots = []
     for top in legacy["top"]:
-        for item in [top] + top["children"]:
+        # the plan is a tree (+2 > +1 > +0); the slots keep the order they always had: by rank, then by number
+        for item in sorted(base.plan_entries({"top": [top]}),
+                           key=lambda e: (-policy["agents"][e["role"]]["rank"], e["name"])):
             role = item["role"]
             slots.append({"name": item["name"], "role": role,
                           "title": "[%s] %s" % (task["name"], item["name"]),

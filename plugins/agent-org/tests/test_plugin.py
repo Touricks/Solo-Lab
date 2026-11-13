@@ -1359,32 +1359,29 @@ class PoolSetupTest(PoolProjectCase):
 
     def test_pool_plan(self):
         plan = json.loads(self.read(".claude/agent-org/pool-plan.json"))
-        self.assertEqual(len(plan["top"]), 7)
-        self.assertEqual(sum(len(t["children"]) for t in plan["top"]), 14)
-        self.assertEqual(plan["total"], 21)
-        names = [t["name"] for t in plan["top"]] + [c["name"] for t in plan["top"] for c in t["children"]]
-        self.assertEqual(len(set(names)), 21)
-        for t in plan["top"]:
-            self.assertTrue(re.fullmatch(r"[a-z0-9-]{1,24}", t["short"]))
+        entries = list(setup.plan_entries(plan))
+        names = [e["name"] for e in entries]
+        self.assertEqual((plan["version"], plan["total"], len(plan["top"]), len(set(names))), (3, 21, 7, 21))
+        self.assertEqual(plan["order"], [t["name"] for t in plan["top"]])
+        self.assertEqual(plan["order"][0], "PMO-p2-01")                     # the scribe is two levels below the entry
+        for t in plan["top"]:                                                # a +2 opens its +1, a +1 its +0
             self.assertTrue(t["opening"].startswith("认领 %s（会话名 %s）" % (t["role"], t["name"])))
-            for c in t["children"]:
-                self.assertTrue(re.fullmatch(r"[a-z0-9-]{1,24}", c["short"]))
-                self.assertIn("route.py claim %s --as %s" % (c["role"], c["name"]), c["brief"])
-                self.assertGreater(len(c["background"]), 80)
-        pmo = plan["top"][[t["role"] for t in plan["top"]].index("pmo-p2")]
-        self.assertEqual([c["name"] for c in pmo["children"]], ["PMO-p1-01", "PMO-p0-01"])
-        self.assertIn("开出路由和书记员", pmo["opening"])
-        self.assertEqual((plan["version"], plan["batch"]), (2, 4))
-        self.assertEqual(plan["order"][:3], ["PMO-p0-01", "PMO-p2-01", "PMO-p1-01"])      # the scribe first
-        self.assertEqual(sorted(plan["order"]), sorted(names))
-        ranks = [int(n.split("-p")[1][0]) for n in plan["order"][3:]]
-        self.assertEqual(ranks, sorted(ranks, reverse=True))                              # then +2, +1, +0
-        for t in plan["top"]:
-            for e in [t] + t["children"]:
-                self.assertEqual(e["title"], "[%s] %s" % (plan["label"], e["name"]))
-                self.assertLess(len(e["title"]), 60)
-                self.assertIn("route.py expect %s --role %s" % (e["name"], e["role"]), e["expect"])
-            self.assertIn("不开子会话", t["brief"])
+            self.assertEqual([c["name"].split("-")[1] for c in t["children"]], ["p1"])
+            one = t["children"][0]
+            self.assertEqual([c["name"].split("-")[1] for c in one["children"]], ["p0"])
+            self.assertEqual(one["children"][0]["children"], [])
+            self.assertIn("开出 %s，" % one["name"], t["brief"])
+            self.assertIn("开出 %s，" % one["children"][0]["name"], one["brief"])
+            self.assertIn("就结束本轮，等派活消息", one["children"][0]["brief"])
+        pmo = plan["top"][0]
+        self.assertEqual((pmo["children"][0]["name"], pmo["children"][0]["children"][0]["name"]), ("PMO-p1-01", "PMO-p0-01"))
+        for e in entries:
+            self.assertTrue(re.fullmatch(r"[a-z0-9-]{1,24}", e["short"]))
+            self.assertIn("route.py claim %s --as %s" % (e["role"], e["name"]), e["brief"])
+            self.assertGreater(len(e["background"]), 80)                    # start_session refuses a shorter one
+            self.assertEqual(e["title"], "[%s] %s" % (plan["label"], e["name"]))
+            self.assertLess(len(e["title"]), 60)
+            self.assertIn("route.py expect %s --role %s" % (e["name"], e["role"]), e["expect"])
         self.assertIn("ensure-node all --apply", plan["scribe_first"])
         self.assertIn("register %s --apply" % setup.FIRST_TASK, plan["scribe_first"])
 
@@ -1457,7 +1454,14 @@ class PoolSetupTest(PoolProjectCase):
         liaison = next(t for t in doc["top"] if t["role"] == "liaison-p2")
         self.assertEqual(liaison["children"], [])
         alg = next(t for t in doc["top"] if t["role"] == "alg-p2")
-        self.assertEqual([c["name"] for c in alg["children"]], ["Alg-p1-01", "Alg-p0-01", "Alg-p0-02"])
+        self.assertEqual([c["name"] for c in alg["children"]], ["Alg-p1-01"])
+        self.assertEqual([c["name"] for c in alg["children"][0]["children"]], ["Alg-p0-01", "Alg-p0-02"])
+        task["pool"].update(p1=0)                                           # no +1: the +0s hang under the +2
+        with open(self.task_path, "w", encoding="utf-8") as f:
+            json.dump(task, f, ensure_ascii=False)
+        doc = json.loads(setup.build_plan(self.tmp, self.task_path, None).files[".claude/agent-org/pool-plan.json"][0])
+        alg = next(t for t in doc["top"] if t["role"] == "alg-p2")
+        self.assertEqual([c["name"] for c in alg["children"]], ["Alg-p0-01", "Alg-p0-02"])
 
     def test_injection_fits_every_role(self):
         sys.path.insert(0, self.hooks)
@@ -1521,18 +1525,23 @@ class PoolSetupTest(PoolProjectCase):
         with contextlib.redirect_stdout(out):
             self.assertEqual(setup.main(["pool", "--target", self.tmp]), 0)
         text = out.getvalue()
-        self.assertIn("1. PMO-p0-01（未认领）", text)
-        self.assertIn("ledger.py ensure-node all --apply", text)                  # the scribe's first writes are still to do
-        scribe = text[text.index("1. PMO-p0-01"):text.index("2. PMO-p2-01")]
-        self.assertNotIn("就结束本轮", scribe)                                     # its first turn goes on to the writes
-        self.assertIn("回一句“已认领 PMO-p2-01”就结束本轮", text)
+        self.assertIn("1. PMO-p2-01（未认领）", text)
+        self.assertIn("只开下面这 7 个 +2", text)
+        self.assertIn("   └ PMO-p1-01（", text)                                    # the levels below, opened by the level above
+        self.assertIn("     └ PMO-p0-01（", text)
+        self.assertNotIn("PMO-p1-01（未认领）\n   name：", text)
+        self.assertIn("再照输出里的表开出 PMO-p1-01，", text)
+        self.assertIn("] Initialization”", text)
         self.assertIn("当前：0/21 条认领", text)
         self.assertNotIn("--watch", text)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(setup.main(["pool", "--target", self.tmp, "--manual"]), 0)
-        self.assertIn("认领 pmo-p2（会话名 PMO-p2-01）", out.getvalue())
-        self.assertIn("pool.later", out.getvalue())
+        self.assertIn("认领 pmo-p2（会话名 PMO-p2-01），然后照认领输出开出 PMO-p1-01。本会话由研究员手工开出。", out.getvalue())
+        self.assertIn("书记员由路由开出", out.getvalue())
+        self.assertIn("--wait 240", text)                                         # how the initialising session waits for the levels below
+        plan = json.loads(self.read(".claude/agent-org/pool-plan.json"))
+        self.assertNotIn(setup.BY_HAND, "".join(e["brief"] for e in setup.plan_entries(plan)))   # only a +2 opened by hand files itself
 
 
 class CheckLayersTest(PoolProjectCase):
@@ -1555,16 +1564,15 @@ class CheckLayersTest(PoolProjectCase):
     def claim_all(self):
         policy = json.loads(self.read(".claude/hooks/policy.json"))
         with pool_lib.locked(self.tmp) as table:
-            for t in self.plan["top"]:
-                for e in [t] + t["children"]:
-                    permit = {"role": e["role"], "name": e["name"], "via": "test", "by": "researcher"}
-                    claim, note = pool_lib.promote(table, policy, permit, "s-" + e["name"], "local_" + e["name"])
-                    self.assertIsNotNone(claim, note)
+            for e in setup.plan_entries(self.plan):
+                permit = {"role": e["role"], "name": e["name"], "via": "test", "by": "researcher"}
+                claim, note = pool_lib.promote(table, policy, permit, "s-" + e["name"], "local_" + e["name"])
+                self.assertIsNotNone(claim, note)
 
     def listing(self, edit=None):
         rows = {name: {"sessionId": "local_" + name, "title": "[%s] %s" % (self.plan["label"], name), "cwd": self.tmp,
                        "isArchived": False, "group": {"id": "g1", "name": self.plan["label"]}, "pinned": False}
-                for name in self.plan["order"]}
+                for name in (e["name"] for e in setup.plan_entries(self.plan))}
         if edit:
             edit(rows)
         path = os.path.join(self.tmp, "sessions.json")
@@ -1580,6 +1588,57 @@ class CheckLayersTest(PoolProjectCase):
             task = ledger.register(lg, os.path.join(self.tmp, setup.FIRST_TASK))
             setup.env_cmd(self.tmp, True)
         return task
+
+    def wait(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = setup.main(["pool", "--target", self.tmp, "--wait", "0"])
+        return code, out.getvalue()
+
+    def test_wait_says_who_is_missing_and_who_opens_it(self):
+        code, text = self.wait()
+        self.assertEqual(code, 1)
+        self.assertIn("21 个会话里还有 21 个没认领", text)
+        self.assertIn("- PMO-p2-01：+2，由做初始化的会话开出", text)
+        self.assertIn("- PMO-p0-01：由 PMO-p1-01 开出，PMO-p1-01 还没认领", text)
+        self.assertNotIn("请研究员点开上一级的会话", text)
+        self.claim_all()
+        with pool_lib.locked(self.tmp) as table:
+            del table["claims"]["Alg-p0-01"]
+        code, text = self.wait()
+        self.assertEqual(code, 1)
+        self.assertIn("还有 1 个没认领", text)
+        self.assertIn("- Alg-p0-01：由 Alg-p1-01 开出，Alg-p1-01 已认领", text)
+        self.assertIn("请研究员点开上一级的会话，说一句“照认领输出开出下一级”", text)
+
+    def test_wait_ends_when_the_scribe_has_done_its_first_writes(self):
+        scribe = "s-PMO-p0-01"
+        self.claim_all()
+        code, text = self.wait()
+        self.assertEqual(code, 1)
+        self.assertIn("会话池已开齐：21/21 条认领。书记员的首轮还没结束（状态：unknown）", text)
+        self.prompt(scribe, "认领 pmo-scribe（会话名 PMO-p0-01）。")
+        self.assertIn("书记员的首轮还没结束（状态：busy）", self.wait()[1])
+        self.hook("instances.py", {"hook_event_name": "Stop", "session_id": scribe})
+        code, text = self.wait()                                  # its turn is over, nothing registered from this directory
+        self.assertEqual(code, 0, text)
+        self.assertIn("没有首条研究任务的登记回执", text)
+        self.assertIn("桌面会话 local_PMO-p0-01", text)
+        lg = fake_space.SimLedger(self.tmp, "apply", self.fake, ())
+        with contextlib.redirect_stdout(io.StringIO()):
+            task = ledger.register(lg, os.path.join(self.tmp, setup.FIRST_TASK))
+        code, text = self.wait()
+        self.assertEqual(code, 0, text)
+        self.assertIn("知识库节点都在，首条研究任务已登记（#%s）" % task, text)
+        ids = json.loads(self.read("feishu/ids.json"))
+        ids["wiki"]["nodes"].pop(sorted(ids["wiki"]["nodes"])[0])
+        with open(os.path.join(self.tmp, "feishu", "ids.json"), "w", encoding="utf-8") as f:
+            json.dump(ids, f, ensure_ascii=False)
+        code, text = self.wait()
+        self.assertEqual(code, 1)
+        self.assertIn("书记员的首轮已结束，但是知识库节点还缺 1 个", text)
+        self.hook("instances.py", {"hook_event_name": "PermissionRequest", "session_id": scribe, "tool_name": "Bash"})
+        self.assertIn("书记员停在一个确认框上", self.wait()[1])
 
     def test_a_fresh_project_says_what_each_layer_lacks(self):
         code, text = self.check()
@@ -1601,6 +1660,31 @@ class CheckLayersTest(PoolProjectCase):
         self.assertIn("加 --live 回读飞书", text)
         code, text = self.check("--sessions", self.listing())
         self.assertEqual(code, 0, text)
+
+        def nested(rows):                                    # as the client lists them: only a +2 is filed, the rest sit under it
+            for e in setup.plan_entries(self.plan):
+                for c in e["children"]:
+                    rows[c["name"]].update(startedBy="local_" + e["name"], group=None)
+        code, text = self.check("--sessions", self.listing(nested))
+        self.assertEqual(code, 0, text)
+
+        def with_opener(rows):                               # a list taken elsewhere also has the session that opened the +2s
+            nested(rows)
+            rows["init"] = {"sessionId": "local_init", "title": "x", "cwd": self.tmp, "isArchived": False, "group": None}
+            for top in self.plan["top"]:
+                rows[top["name"]]["startedBy"] = "local_init"
+        code, text = self.check("--sessions", self.listing(with_opener))
+        self.assertEqual(code, 0, text)
+
+        def unfiled(rows):                                   # one +2 left outside the section takes its whole sequence with it
+            nested(rows)
+            rows["Alg-p2-01"]["group"] = None
+        code, text = self.check("--sessions", self.listing(unfiled))
+        self.assertEqual(code, 1)
+        self.assertIn("不在侧栏分区", text)
+        for name in ("Alg-p2-01", "Alg-p1-01", "Alg-p0-01"):
+            self.assertIn(name, text)
+        self.assertNotIn("RnD-p1-01", text.split("不在侧栏分区")[1].split("\n")[0])
 
     def test_the_first_task_needs_its_document_and_its_id_in_the_draft(self):
         task = self.ready()
@@ -1832,7 +1916,8 @@ class PoolClaimTest(PoolProjectCase):
 
 
 class PoolOpenedByTheResearcherTest(PoolProjectCase):
-    """The default opening: the researcher's own session opens every session and pre-registers it."""
+    """Sessions pre-registered by the session that opens them: the researcher's own session the
+    +2s, a +2 its +1s, a +1 its +0s."""
 
     OPENED = (("PMO-p0-01", "pmo-scribe", "s-scribe"), ("PMO-p2-01", "pmo-p2", "s-entry"),
               ("Alg-p2-01", "alg-p2", "s-alg2"), ("Alg-p0-01", "alg-p0", "s-alg0"))
@@ -1873,6 +1958,44 @@ class PoolOpenedByTheResearcherTest(PoolProjectCase):
         self.prompt("s-rnd2", briefs["RnD-p2-01"], desk="d-s-rnd2")
         self.assertIn("RnD-p2-01", self.pool()["claims"])
         self.assertEqual(self.pool()["permits"], [])                           # nothing is left waiting
+
+    def test_each_level_opens_the_next(self):
+        """A +2 pre-registers and opens its +1, a +1 its +0: a session nests under the one that opened it."""
+        self.route("expect", "Alg-p2-01", "--role", "alg-p2", "--desk", "d-alg2", sid="s-researcher")
+        self.claim("alg-p2", "Alg-p2-01", "s-alg2", desk="d-alg2")
+        _, out = self.route("claim", "alg-p2", "--as", "Alg-p2-01", "--wait", "0", sid="s-alg2", desk="d-alg2")
+        self.assertIn("- Alg-p1-01：name=alg-p1-01", out)
+        self.assertNotIn("- Alg-p0-01：", out)                                 # not the +2's to open
+        self.assertEqual(self.route("expect", "Alg-p1-01", "--role", "alg-p1", "--desk", "d-alg1", sid="s-alg2")[0], 0)
+        _, out = self.claim("alg-p1", "Alg-p1-01", "s-alg1", desk="d-alg1")   # its very first claim already says what to open
+        self.assertIn("- Alg-p0-01：name=alg-p0-01", out)
+        _, verdict = self.bash("s-alg1", "python3 -I %s expect Alg-p0-01 --role alg-p0 --desk d-alg0" % self.R, desk="d-alg1")
+        self.assertNotEqual(verdict.get("permissionDecision"), "deny")
+        code, out = self.route("expect", "Alg-p0-01", "--role", "alg-p0", "--desk", "d-alg0", sid="s-alg1")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.claim("alg-p0", "Alg-p0-01", "s-alg0", desk="d-alg0")[0], 0)
+        for role, name in (("rnd-p0", "RnD-p0-01"), ("alg-p1", "Alg-p1-02")):   # another sequence, its own rank
+            _, verdict = self.bash("s-alg1", "python3 -I %s expect %s --role %s --desk d-x" % (self.R, name, role), desk="d-alg1")
+            self.assertEqual(verdict.get("permissionDecision"), "deny", name)
+            self.assertEqual(self.route("expect", name, "--role", role, "--desk", "d-x", sid="s-alg1")[0], 1, name)
+        self.assertEqual(sorted(self.pool()["claims"]), ["Alg-p0-01", "Alg-p1-01", "Alg-p2-01"])
+
+    def test_the_router_opens_the_scribe_with_its_first_writes(self):
+        plan = json.loads(self.read(".claude/agent-org/pool-plan.json"))
+        self.prompt("s-entry", plan["top"][0]["brief"], desk="d-entry")        # the entry claims through its opening line
+        _, out = self.route("claim", "pmo-p2", "--as", "PMO-p2-01", "--wait", "0", sid="s-entry", desk="d-entry")
+        self.assertIn("- PMO-p1-01：", out)
+        self.assertNotIn("- PMO-p0-01：", out)
+        self.route("expect", "PMO-p1-01", "--role", "pmo-router", "--desk", "d-router", sid="s-entry")
+        _, out = self.claim("pmo-router", "PMO-p1-01", "s-router", desk="d-router")
+        row = out[out.index("- PMO-p0-01："):]
+        self.assertIn("ledger.py ensure-node all --apply", row)                # nothing is registered yet
+        self.assertNotIn("就结束本轮，等派活消息", row.split("background：")[0])
+        self.assertEqual(self.route("expect", "PMO-p0-01", "--role", "pmo-scribe", "--desk", "d-scribe", sid="s-router")[0], 0)
+        with open(os.path.join(self.tmp, "packages", "sent", "7160000001.json"), "w", encoding="utf-8") as f:
+            json.dump({"status": "registered", "draft": "packages/drafts/pmo/x.md"}, f)
+        _, out = self.route("claim", "pmo-router", "--as", "PMO-p1-01", "--wait", "0", sid="s-router", desk="d-router")
+        self.assertNotIn("ensure-node all --apply", out)                       # a later scribe gets the plain opening
 
     def test_a_p2_is_told_its_title_and_section(self):
         self.open_all()
@@ -1935,6 +2058,92 @@ class PoolOpenedByTheResearcherTest(PoolProjectCase):
         with contextlib.redirect_stdout(out):
             setup.check(self.tmp)
         self.assertIn("hook 不再放行研究员会话里的 setup.py", out.getvalue())
+
+
+class PoolTreeAfterOpeningTest(PoolProjectCase):
+    """Sessions opened after the pool nest the same way: a +2 opens a +1, a +1 a +0."""
+
+    POOL = {"p1": 1, "p0": 1, "later": ["liaison"], "max_sessions": 30}
+
+    def test_a_sequence_opened_later_nests_too(self):
+        self.route("expect", "Liaison-p2-01", "--role", "liaison-p2", "--desk", "d-l2", sid="s-researcher")
+        _, out = self.claim("liaison-p2", "Liaison-p2-01", "s-l2", desk="d-l2")
+        self.assertIn("本序列开池时只开 +2", out)
+        row = out[out.index("- Liaison-p1-01："):]
+        self.assertIn("（补位用）", row.split("\n")[0])
+        self.assertIn("再照输出里的表开出 Liaison-p0-01", row.split("background：")[0])   # the first +1 brings the first +0 along
+        self.assertNotIn("- Liaison-p0-01：", out)                              # not the +2's to open
+        self.assertEqual(self.route("expect", "Liaison-p1-01", "--role", "liaison-p1", "--desk", "d-l1", sid="s-l2")[0], 0)
+        _, out = self.claim("liaison-p1", "Liaison-p1-01", "s-l1", desk="d-l1")
+        self.assertIn("- Liaison-p0-01：name=liaison-p0-01", out)                # not in the plan, and still told what to open
+        self.assertEqual(self.route("expect", "Liaison-p0-01", "--role", "liaison-p0", "--desk", "d-l0", sid="s-l1")[0], 0)
+        self.assertEqual(self.claim("liaison-p0", "Liaison-p0-01", "s-l0", desk="d-l0")[0], 0)
+        _, out = self.route("claim", "liaison-p2", "--as", "Liaison-p2-01", "--wait", "0", sid="s-l2", desk="d-l2")
+        row = out[out.index("- Liaison-p1-02："):]
+        self.assertNotIn("再照输出里的表开出", row.split("background：")[0])     # the sequence has its +0 now
+        self.assertNotIn("- Liaison-p0-", out)
+
+    def test_a_refilled_p1_is_told_what_to_open(self):
+        self.route("expect", "Alg-p2-01", "--role", "alg-p2", "--desk", "d-a2", sid="s-researcher")
+        self.claim("alg-p2", "Alg-p2-01", "s-a2", desk="d-a2")
+        for name, sid in (("Alg-p1-01", "s-a1"), ("Alg-p1-02", "s-a1b")):
+            self.assertEqual(self.route("expect", name, "--role", "alg-p1", "--desk", "d-" + sid, sid="s-a2")[0], 0)
+            code, out = self.claim("alg-p1", name, sid, desk="d-" + sid)
+            self.assertEqual(code, 0, out)
+        row = out[out.index("- Alg-p0-02："):]                                  # Alg-p0-01 is kept for Alg-p1-01, which opens it
+        self.assertIn("（补位用）", row.split("\n")[0])
+        self.assertNotIn("- Alg-p0-01：", out)
+        self.assertEqual(self.route("expect", "Alg-p0-02", "--role", "alg-p0", "--desk", "d-a0b", sid="s-a1b")[0], 0)
+        _, out = self.route("claim", "alg-p2", "--as", "Alg-p2-01", "--wait", "0", sid="s-a2", desk="d-a2")
+        self.assertNotIn("- Alg-p0-", out)                                      # a +0 is opened by a +1, never by this +2
+        code, out = self.route("pool", "--role", "alg-p0", sid="s-a2")
+        self.assertIn("本序列的一个 +1", out)
+
+
+class PoolModelTest(PoolProjectCase):
+    """A session cannot run a higher model than the session that opens it."""
+
+    def setUp(self):
+        super().setUp()
+        with open(self.task_path, encoding="utf-8") as f:
+            task = json.load(f)
+        task["models"] = dict(task.get("models") or {}, **{"alg-p0": "opus", "alg-p1": "sonnet", "alg-p2": "opus"})
+        with open(self.task_path, "w", encoding="utf-8") as f:
+            json.dump(task, f, ensure_ascii=False)
+        with contextlib.redirect_stdout(io.StringIO()):
+            plan = setup.build_plan(self.tmp, self.task_path, None)
+            setup.apply_plan(self.tmp, plan, setup.actions_for(self.tmp, plan))
+
+    def test_the_checklist_names_a_model_above_its_opener(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(setup.main(["pool", "--target", self.tmp]), 0)
+        text = out.getvalue()
+        self.assertIn("注意：Alg-p0-01 的模型 opus 高于开它的 Alg-p1-01（sonnet）", text)
+        self.assertEqual(text.count("注意："), 1)                   # opus under opus, sonnet under opus: nothing to say
+        self.assertEqual([setup.model_tier(m) for m in ("claude-haiku-5-5", "sonnet", "Opus", "inherit", None)], [0, 1, 2, -1, -1])
+
+
+class PoolWithoutP1Test(PoolProjectCase):
+    """A sequence run without +1s: the +2 opens its +0s itself, until it has a +1."""
+
+    POOL = {"p1": 0, "p0": 2, "later": [], "max_sessions": 30}
+
+    def test_the_p2_opens_its_p0s(self):
+        self.route("expect", "Alg-p2-01", "--role", "alg-p2", "--desk", "d-a2", sid="s-researcher")
+        _, out = self.claim("alg-p2", "Alg-p2-01", "s-a2", desk="d-a2")
+        for name in ("Alg-p0-01", "Alg-p0-02"):
+            self.assertIn("- %s：name=%s，" % (name, name.lower()), out)
+            self.assertNotIn("（补位用）", out[out.index("- %s：" % name):].split("\n")[0])
+        self.assertNotIn("- Alg-p0-03：", out)                                  # no refill before the planned ones are open
+        row = out[out.index("- Alg-p1-01："):]
+        self.assertIn("（补位用）", row.split("\n")[0])
+        self.assertNotIn("再照输出里的表开出", row.split("background：")[0])     # the sequence has its +0s planned
+        self.assertEqual(self.route("expect", "Alg-p1-01", "--role", "alg-p1", "--desk", "d-a1", sid="s-a2")[0], 0)
+        _, out = self.claim("alg-p1", "Alg-p1-01", "s-a1", desk="d-a1")
+        self.assertIn("- Alg-p0-03：name=alg-p0-03", out)                        # from now on a +0 goes under the +1
+        _, out = self.route("claim", "alg-p2", "--as", "Alg-p2-01", "--wait", "0", sid="s-a2", desk="d-a2")
+        self.assertNotIn("- Alg-p0-03：", out)
 
 
 class PoolGuardTest(PoolProjectCase):
