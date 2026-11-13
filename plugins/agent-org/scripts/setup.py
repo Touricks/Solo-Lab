@@ -1294,6 +1294,8 @@ def announce(target, name=None, task_path=None, seq_arg=None):
     elif rounds > 2:
         asks.append("会话分 %d 轮开，每两轮之间回一句“%s”，共 %d 次" % (rounds, RESUME_WORDS, rounds - 1))
     asks += ["飞书命令行的登录失效时扫码", "应用弹出确认框时点一下"]
+    print("把下面的清单原样发给研究员，一个字不改；发出去以后再运行下一条命令。")
+    print("")
     print("\n".join([
         "将要新建（已经有的直接沿用，不重复建）：",
         "- 飞书项目空间 1 个：%s，用模板创建" % ((ids.get("meegle") or {}).get("space_name") or task["feishu"]["meegle_space"]),

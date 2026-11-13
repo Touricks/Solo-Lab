@@ -1590,6 +1590,7 @@ class AnnounceTest(PoolProjectCase):
         os.mkdir(fresh)
         code, text = self.announce("--target", fresh)
         self.assertEqual(code, 0, text)
+        self.assertTrue(text.startswith("把下面的清单原样发给研究员，一个字不改；发出去以后再运行下一条命令。\n\n将要新建（"), text[:80])
         self.assertIn("- 飞书项目空间 1 个：新项目，用模板创建\n- 飞书知识空间 1 个：新项目\n", text)
         self.assertIn("- 知识库节点 %d 个\n" % len(self.spec.node_keys()), text)
         self.assertIn("- 桌面会话 19 个（外联只开 +2），侧栏分区 1 个：新项目\n", text)
@@ -1639,6 +1640,7 @@ class AnnounceTest(PoolProjectCase):
         with open(os.path.join(ROOT, "skills", "setup", "SKILL.md"), encoding="utf-8") as f:
             skill = f.read()
         self.assertIn('setup.py" announce --target <项目目录>', skill)
+        self.assertLess(skill.index('setup.py" announce --target'), skill.index('onboarding.py" begin --target'))   # the first command of all
         self.assertNotIn("将要新建（", skill)                                       # the list is the script's, not the skill's
 
 
@@ -2760,6 +2762,20 @@ class PoolReviewIdentityTest(PoolProjectCase):
                     "cat > packages/drafts/alg/n.md <<'EOF'\npython3 -I %s expect Alg-p0-02 --role alg-p0 --desk d\nEOF" % R):
             self.assertIsNone(self.decision("s-alg2", cmd), cmd)
 
+    def test_a_cd_to_this_project_in_front_of_a_claim_is_the_same_command(self):
+        self.route("expect", "RnD-p2-01", "--role", "rnd-p2", "--desk", "d-rnd", sid="s-researcher")
+        plain = "python3 -I %s claim rnd-p2 --as RnD-p2-01" % self.R
+        for front in ('cd "%s" && ' % self.tmp, "cd '%s' && " % self.tmp, "cd %s && " % self.tmp, 'cd "%s/" &&  ' % self.tmp):
+            self.assertIsNone(self.decision("s-term", front + plain), front)
+        for cmd in ('cd "%s" ; %s' % (self.tmp, plain), "cd /tmp && " + plain, 'cd "%s" && %s | tail -3' % (self.tmp, plain),
+                    'cd "%s" && cd /tmp && %s' % (self.tmp, plain), 'X=1 cd "%s" && %s' % (self.tmp, plain),
+                    'cd "%s/.claude" && %s' % (self.tmp, plain), "cd . && " + plain):
+            verdict = self.bash("s-term", cmd)[1]
+            self.assertEqual(verdict.get("permissionDecision"), "deny", cmd)
+            self.assertIn("前面最多带一句 cd 到本项目目录", verdict.get("permissionDecisionReason", ""), cmd)
+        plain = "python3 -I %s expect Alg-p0-02 --role alg-p0 --desk d-x" % self.R
+        self.assertIsNone(self.decision("s-alg2", 'cd "%s" && %s' % (self.tmp, plain)))       # expect is read the same way
+
     def test_claim_with_an_asserted_desk_or_an_old_session_asks(self):
         self.route("expect", "RnD-p2-01", "--role", "rnd-p2", "--desk", "d-rnd", sid="s-researcher")
         cmd = "python3 -I %s claim rnd-p2 --as RnD-p2-01 --desk d-rnd" % self.R
@@ -3514,6 +3530,11 @@ class BracketPathTest(PoolProjectCase):
     def setUp(self):
         super().setUp()
         self.started_pool()
+
+    def test_a_cd_to_a_path_with_brackets_is_still_this_project(self):
+        self.route("expect", "RnD-p2-01", "--role", "rnd-p2", "--desk", "d-rnd", sid="s-researcher")
+        cmd = 'cd "%s" && python3 -I %s claim rnd-p2 --as RnD-p2-01' % (self.tmp, self.R)
+        self.assertIsNone(self.bash("s-term", cmd)[1].get("permissionDecision"), cmd)
 
     def test_pool_views_read_sessions_and_receipts(self):
         self.assertIn("[", self.tmp)

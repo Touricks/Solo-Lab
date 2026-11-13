@@ -916,6 +916,20 @@ def flag_value(args, flag):
     return None
 
 
+def past_cd_home(command, root):
+    """The command after a leading `cd <this project's directory> &&`. Sessions often put it in
+    front of a project script, and it changes nothing about what runs. Any other cd stays."""
+    m = re.match(r"""\s*cd\s+("[^"$`\\]*"|'[^']*'|[^\s;&|`$<>"'\\]+)\s*&&\s*(\S.*)$""", command, re.S)
+    if not m:
+        return command
+    where = m.group(1)
+    if where[:1] in ("'", '"'):
+        where = where[1:-1]
+    if os.path.isabs(where) and os.path.realpath(where) == os.path.realpath(root):
+        return m.group(2)
+    return command
+
+
 def check_pool_command(data, who, policy, root, command):
     """route.py claim / expect / release: one plain command, run by a session allowed to."""
     runs = command_runs(command, data.get("cwd") or root, root)
@@ -928,16 +942,18 @@ def check_pool_command(data, who, policy, root, command):
         return None
     if data.get("agent_id"):
         return Verdict("deny", "子智能体不能运行 route.py %s：认领属于会话本身，不属于会话里开出的子智能体。" % sub)
+    text = past_cd_home(command, root)
     try:
-        argv = shlex.split(command)
+        argv = shlex.split(text)
     except ValueError:
         argv = []
     plain = (len(argv) >= 4 and PYTHON.search(os.path.basename(argv[0])) and argv[1] == "-I"
              and argv[2].endswith(".claude/agent-org/bin/route.py") and argv[3] == sub
-             and not re.search(r"[;&|`$<>\n]", command))
+             and not re.search(r"[;&|`$<>\n]", text))
     if not plain:
         return Verdict("deny", "route.py %s 要写成单条简单命令：python3 -I .claude/agent-org/bin/route.py %s …；"
-                               "前面不带环境变量赋值、包装命令或 --offline 这类全局选项，后面不接管道。" % (sub, sub))
+                               "前面最多带一句 cd 到本项目目录（cd <项目目录> &&），不带环境变量赋值、包装命令或 --offline 这类全局选项，"
+                               "后面不接管道。" % (sub, sub))
     args = argv[4:]
     names = [a.split("=", 1)[0] for a in args if a.startswith("--")]
     twice = sorted({n for n in names if names.count(n) > 1})
