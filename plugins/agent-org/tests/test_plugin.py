@@ -2367,6 +2367,17 @@ class PoolGuardTest(PoolProjectCase):
         self.assertEqual(out.get("permissionDecision"), "allow")
         self.assertIn("[Alg+2]", out.get("updatedInput", {}).get("command", ""))
 
+    def test_the_scribe_uploads_a_local_file_for_a_link_field(self):
+        L = "python3 -I .claude/agent-org/bin/ledger.py"
+        update = L + " update 2101 --set 需求文档=@packages/drafts/product/prd.md --apply"
+        confirm = L + " confirm 2101 --by Alg-p2-01 --set 上下文文档=@packages/drafts/alg/context.md --apply"
+        for command in (update, confirm):
+            self.assertEqual(self.decision("s-scribe", command), "allow", command)
+            self.assertEqual(self.decision("s-scribe", command, permission_mode="bypassPermissions"), "allow", command)
+            self.assertEqual(self.decision("s-alg2", command), "deny", command)
+            self.assertEqual(self.decision("s-researcher", command), "ask", command)
+        self.assertEqual(self.decision("s-alg2", update.replace(" --apply", "")), "deny")     # the preview is the scribe's too
+
     def test_two_scribe_claims_stop_all_writes(self):
         pl = self.pool()
         pl["claims"]["PMO-p0-02"] = dict(pl["claims"]["PMO-p0-01"], name="PMO-p0-02", session_id="s-x")
