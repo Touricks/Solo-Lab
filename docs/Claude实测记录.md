@@ -1,6 +1,8 @@
 # Claude 实测记录（0.6.0）
 
-版本 0.6.0，测试日期 2026-11-12 至 2026-11-13，测试项目 `agent-org-claude-test`（前四轮和流程测试）和 `agent-org-claude-fresh`（第五轮）。名词和日常用法见[使用说明](使用说明.md)，会话池的机制和假设清单见[机制说明](../plugins/agent-org/skills/setup/references/mechanisms.md)。
+> 这份记录写于插件改名之前。文中的 `agent-org` 是 Solo-Lab 当时的插件名，命令和路径照当时的写法保留。文中的“派活”“交回”也是当时的说法，1.0.0 起叫“委托”“交付”，消息抬头【派活】【交回】就是现在的【委托】【交付】。
+
+版本 0.6.0，测试日期 2026-11-12 至 2026-11-13，测试项目 `agent-org-claude-test`（前四轮和流程测试）和 `agent-org-claude-fresh`（第五轮）。名词和日常用法见[使用说明](使用说明.md)，会话池的机制和假设清单见[机制说明](../plugins/solo-lab/skills/setup/references/mechanisms.md)。
 
 0.6.0 的初始化和六个流程都在真实的 Claude Desktop 和飞书环境里走通了，最后按最终版本从空目录又完整初始化了一遍。
 

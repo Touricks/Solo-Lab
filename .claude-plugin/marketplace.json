@@ -1,14 +1,14 @@
 {
-  "name": "agent-org",
+  "name": "solo-lab",
   "owner": {
     "name": "Fanshi"
   },
   "plugins": [
     {
-      "name": "agent-org",
-      "description": "智能体组织：七个序列、三个职级，每个角色一个 Claude 桌面会话；三种任务包，飞书项目记台账，飞书文档放内容，项目管理 +2 做入口。",
-      "source": "./plugins/agent-org"
+      "name": "solo-lab",
+      "description": "Solo-Lab：七个序列、三个职级，每个角色一个 Claude 桌面会话；三种任务包，飞书项目记任务台账，飞书文档放内容，项目管理 +2 做入口。",
+      "source": "./plugins/solo-lab"
     }
   ],
-  "description": "智能体组织插件：七个序列、三个职级，每个角色一个 Claude 桌面会话，用飞书项目做任务账本、飞书文档放任务包。"
+  "description": "Solo-Lab 插件：七个序列、三个职级，每个角色一个 Claude 桌面会话，用飞书项目做任务台账、飞书文档放任务包。"
 }

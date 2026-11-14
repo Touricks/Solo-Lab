@@ -16,9 +16,9 @@
 
 | 位置 | 修复前行为 | 本次处理 |
 | --- | --- | --- |
-| [codex_hook.py](../plugins/agent-org/scripts/codex_hook.py) 的 `evaluate` | 非书记员不能正式登记；识别到的直接飞书写命令一律要求走 `ledger.py` | 移除角色写权判断；按操作类型区分台账事务与独立文档操作 |
-| [codex_runtime.py](../plugins/agent-org/scripts/codex_runtime.py) 的 `assert_writer` | 写入要求绑定身份、已观察到 hook，正式操作限定 `pmo-scribe` | 改为项目配置完整性检查；会话信息用于追溯 |
-| [codex_setup.py](../plugins/agent-org/scripts/codex_setup.py) 的 `adapt` | 生成唯一书记员规则，并继承 Claude 书记员模板 | 同步生成 Codex 的职责规则、角色说明和操作说明 |
+| [codex_hook.py](../plugins/solo-lab/scripts/codex_hook.py) 的 `evaluate` | 非书记员不能正式登记；识别到的直接飞书写命令一律要求走 `ledger.py` | 移除角色写权判断；按操作类型区分台账事务与独立文档操作 |
+| [codex_runtime.py](../plugins/solo-lab/scripts/codex_runtime.py) 的 `assert_writer` | 写入要求绑定身份、已观察到 hook，正式操作限定 `pmo-scribe` | 改为项目配置完整性检查；会话信息用于追溯 |
+| [codex_setup.py](../plugins/solo-lab/scripts/codex_setup.py) 的 `adapt` | 生成唯一书记员规则，并继承 Claude 书记员模板 | 同步生成 Codex 的职责规则、角色说明和操作说明 |
 
 只改项目 `AGENTS.md` 会留下代码拒绝；只放开命令会留下角色说明拒绝。规则、执行检查和升级流程需要一起更新。
 

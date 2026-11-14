@@ -1,11 +1,11 @@
-# 飞书项目模板：SuperOrgAgent科研模版
+# 飞书项目模板：Solo-Lab 科研模版
 
-agent-org 插件把飞书项目空间当台账用。空间里有哪些工作项类型、每类怎么走、每一步必填什么，由这个模板决定；插件不内置这些结构，运行时读空间。模板和插件各自发版。
+Solo-Lab 插件把飞书项目空间当任务台账用。空间里有哪些工作项类型、每类怎么走、每一步必填什么，由这个模板决定；插件不内置这些结构，运行时读空间。模板和插件各自发版。
 
 | 项 | 现状 |
 | --- | --- |
 | 模板版本 | 2.1.0 |
-| 符合的约定 | `contract_version` 1，见 `plugins/agent-org/orgspec/contract.json` |
+| 符合的约定 | `contract_version` 1，见 `plugins/solo-lab/orgspec/contract.json` |
 | 模板中心链接 | <https://project.feishu.cn/templates/detail/7f032046eb974cab877ce8df79389895>，模板名 research_template；同一个链接记在约定文件的 `template.url` |
 | 结构 | [结构.md](结构.md) |
 | 自己搭 | [搭建手册.md](搭建手册.md) |
@@ -18,7 +18,7 @@ agent-org 插件把飞书项目空间当台账用。空间里有哪些工作项�
 | 类型 | 用途 | 流程 |
 | --- | --- | --- |
 | 研究任务 | 主线。一个空间可以有多条 | 验证：九步加归档；试探：定方向、试探、提出假设、归档 |
-| 同序列需求 | 序列内派活和交回 | 开工、执行、验收、归档 |
+| 同序列需求 | 序列内委托和交付 | 开工、执行、验收、归档 |
 | 跨序列需求 | 序列之间 +2 对 +2 的请求 | 提出、接单、执行、验收、归档 |
 | 决策 | 研究员拍板和签字 | 决定、归档 |
 | 反馈 | 导师和研究员的反馈 | 解析、归档 |
@@ -40,7 +40,7 @@ agent-org 插件把飞书项目空间当台账用。空间里有哪些工作项�
 ## 核对一个空间
 
 ```bash
-python3 -I plugins/agent-org/scripts/space.py check --space <空间名、simple_name 或 project_key>
+python3 -I plugins/solo-lab/scripts/space.py check --space <空间名、simple_name 或 project_key>
 ```
 
 这条命令只读飞书，不写文件。它读出空间的结构，逐个槽位找对应的对象，再核对流程：每个流程正好一个末尾节点且由书记员负责，每个节点正好一个约定里的角色，签字字段和结论字段在某个节点上是必填。退出码 0 是通过，1 是有缺项，缺项逐条列出。
@@ -54,11 +54,11 @@ python3 -I plugins/agent-org/scripts/space.py check --space <空间名、simple_
 3. 跑上面的核对命令，通过后把结构快照读到一个临时文件，再从它生成[结构.md](结构.md)。快照文件里有空间的各种标识，不放进仓库：
 
 ```bash
-python3 -I plugins/agent-org/scripts/space.py export --space <模板空间的名字> --out <space.json>
+python3 -I plugins/solo-lab/scripts/space.py export --space <模板空间的名字> --out <space.json>
 ```
 
 ```bash
-python3 -I plugins/agent-org/scripts/space.py show --snapshot <space.json> structure
+python3 -I plugins/solo-lab/scripts/space.py show --snapshot <space.json> structure
 ```
 
 4. 在网页上删掉第 2 步的样例工作项：工作项详情页右上角的“···”里有“删除”。命令行删不了。
