@@ -1610,10 +1610,15 @@ class AnnounceTest(PoolProjectCase):
             code = setup.main(["announce"] + list(args))
         return code, out.getvalue()
 
-    def test_a_fresh_directory_is_named_after_itself_and_gets_the_defaults(self):
-        fresh = os.path.join(self.tmp, "新项目")
+    def test_a_fresh_directory_needs_a_name_and_gets_the_defaults(self):
+        fresh = os.path.join(self.tmp, "Thesis-Phase1")
         os.mkdir(fresh)
-        code, text = self.announce("--target", fresh)
+        code, text = self.announce("--target", fresh)                    # the directory's name is not taken for the project's
+        self.assertEqual(code, 2)
+        self.assertIn("还没有项目名：先问研究员这个项目叫什么", text)
+        self.assertNotIn("Thesis-Phase1", text)
+        self.assertEqual(self.announce("--target", fresh, "--name", " ")[0], 2)
+        code, text = self.announce("--target", fresh, "--name", "新项目")
         self.assertEqual(code, 0, text)
         self.assertTrue(text.startswith("把下面的清单原样发给研究员，一个字不改；发出去以后再运行下一条命令。\n\n将要新建（"), text[:80])
         self.assertIn("- 飞书项目空间 1 个：新项目，用模板创建\n- 飞书知识空间 1 个：新项目\n", text)
@@ -1629,7 +1634,7 @@ class AnnounceTest(PoolProjectCase):
     def test_the_counts_follow_the_task_file_and_the_enabled_sequences(self):
         fresh = os.path.join(self.tmp, "demo")
         os.mkdir(fresh)
-        code, text = self.announce("--target", fresh, "--sequences", "pmo,quality,alg")
+        code, text = self.announce("--target", fresh, "--name", "demo", "--sequences", "pmo,quality,alg")
         self.assertEqual(code, 0, text)
         self.assertIn("- 知识库节点 %d 个\n" % len(self.spec.node_keys(["pmo", "quality", "alg"])), text)
         self.assertIn("- 桌面会话 9 个，侧栏分区 1 个：demo\n", text)
@@ -1667,6 +1672,24 @@ class AnnounceTest(PoolProjectCase):
         self.assertIn('setup.py" announce --target <项目目录>', skill)
         self.assertLess(skill.index('setup.py" announce --target'), skill.index('onboarding.py" begin --target'))   # the first command of all
         self.assertNotIn("将要新建（", skill)                                       # the list is the script's, not the skill's
+        for old in ("没说用目录名", "脚本用目录名"):                                # no name: it asks
+            self.assertNotIn(old, skill)
+        self.assertIn("还没有项目名", skill)
+
+
+class SpaceNameTest(unittest.TestCase):
+    """CLAUDE.md and feishu/README.md name the spaces as Feishu does once they are bound."""
+
+    def test_the_spaces_go_by_their_feishu_names_once_bound(self):
+        task = {"name": "ThesisP1", "feishu": {"meegle_space": "bw4etl"}}
+        self.assertIn("飞书项目空间「bw4etl」", setup.where_text(task, {}))        # before binding: as the task file says
+        self.assertIn("飞书知识库空间「ThesisP1」", setup.where_text(task, {}))    # the knowledge space is named after the project
+        ids = {"meegle": {"project_key": "p_1", "space_name": "ThesisP1"}, "wiki": {"space_id": "s_1", "space_name": "ThesisP1 知识库"}}
+        text = setup.where_text(task, ids)
+        self.assertIn("飞书项目空间「ThesisP1」，project_key `p_1`", text)
+        self.assertIn("飞书知识库空间「ThesisP1 知识库」，space_id `s_1`", text)
+        self.assertNotIn("bw4etl", text)
+        self.assertIn("飞书项目「ThesisP1」（project_key p_1）；知识库「ThesisP1 知识库」。", setup.feishu_readme(task, ids))
 
 
 class PoolModeTest(PoolProjectCase):

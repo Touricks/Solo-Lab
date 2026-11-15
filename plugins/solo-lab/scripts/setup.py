@@ -788,17 +788,25 @@ def task_summary(task):
     return "\n".join(lines)
 
 
+def space_names(task, ids):
+    """(project space, knowledge space) by the names Feishu gave when they were bound, else as the
+    task file wrote them: the task file may name the project space by simple_name or project_key."""
+    fs = task.get("feishu") or {}
+    return ((ids.get("meegle") or {}).get("space_name") or fs.get("meegle_space") or "未填",
+            (ids.get("wiki") or {}).get("space_name") or fs.get("wiki_space") or task["name"])
+
+
 def where_text(task, ids):
     m = ids.get("meegle") or {}
     w = ids.get("wiki") or {}
-    fs = task.get("feishu") or {}
+    meegle, wiki = space_names(task, ids)
     state = ("- 会话池的认领表和各会话的状态在 `.claude/state/`，由 hook 维护，不要手改；委托、交付和认领的记录在 `.claude/logs/dispatch.jsonl`；"
              "开池清单在 `.claude/solo-lab/pool-plan.json`；飞书写操作的日志在 `feishu/write-log.jsonl`；收件箱在 `inbox/`。")
     return "\n".join([
         "- 台账：飞书项目空间「%s」，project_key %s；空间的结构（类型、流程、字段）在 `feishu/space.md`。" % (
-            fs.get("meegle_space", "未填"), "`%s`" % m["project_key"] if m.get("project_key") else "待填（跑 `setup.py feishu`）"),
+            meegle, "`%s`" % m["project_key"] if m.get("project_key") else "待填（跑 `setup.py feishu`）"),
         "- 任务包：飞书知识库空间「%s」%s；发出前的草稿在 `packages/drafts/<序列>/`。" % (
-            fs.get("wiki_space") or task["name"], "，space_id `%s`" % w["space_id"] if w.get("space_id") else ""),
+            wiki, "，space_id `%s`" % w["space_id"] if w.get("space_id") else ""),
         "- 实验规格、评测协议和需求文档在 `spec/`，运行记录在 `runs/`，研究任务的流程（每一步谁负责、必填什么）在 `org/phases.md`。",
         state,
     ])
@@ -1151,9 +1159,8 @@ def deviations_text(spec):
 
 def feishu_readme(task, ids):
     m = ids.get("meegle") or {}
-    line = "飞书项目「%s」（project_key %s）；知识库「%s」。" % (
-        (task.get("feishu") or {}).get("meegle_space", "未填"), m.get("project_key") or "待填",
-        (task.get("feishu") or {}).get("wiki_space") or task["name"])
+    meegle, wiki = space_names(task, ids)
+    line = "飞书项目「%s」（project_key %s）；知识库「%s」。" % (meegle, m.get("project_key") or "待填", wiki)
     return render(scaffold("feishu/README.md.tmpl"), {"space_line": line})
 
 
@@ -1278,7 +1285,11 @@ def announce(target, name=None, task_path=None, seq_arg=None):
         task = load_task(known)
         seq_arg = seq_arg or ",".join(enabled_sequences(target) or [])
     else:
-        name = (name or os.path.basename(target)).strip()
+        refuse_other_runtime(target, {"runtime": "claude"})
+        name = (name or "").strip()
+        if not name:                               # a directory's name is no project's name: it may not follow any rule
+            raise SetupError("还没有项目名：先问研究员这个项目叫什么，再用 --name 传进来。研究员只说了飞书项目空间或知识空间的名字的，"
+                             "就用那个名字。它会用作项目名、两个空间的名字和会话标题的前缀，不拿目录名代替")
         task = parse_task({"name": name, "description": "待立项访谈补充", "feishu": {"meegle_space": name}})[0]
     refuse_other_runtime(target, task)
     seqs = pick_sequences(spec, seq_arg)
@@ -1298,8 +1309,8 @@ def announce(target, name=None, task_path=None, seq_arg=None):
     print("")
     print("\n".join([
         "将要新建（已经有的直接沿用，不重复建）：",
-        "- 飞书项目空间 1 个：%s，用模板创建" % ((ids.get("meegle") or {}).get("space_name") or task["feishu"]["meegle_space"]),
-        "- 飞书知识空间 1 个：%s" % (task["feishu"].get("wiki_space") or task["name"]),
+        "- 飞书项目空间 1 个：%s，用模板创建" % space_names(task, ids)[0],
+        "- 飞书知识空间 1 个：%s" % space_names(task, ids)[1],
         "- 知识库节点 %d 个" % len(spec.node_keys(seqs)),
         "- 研究任务 1 条和它的主文档",
         "- 桌面会话 %d 个%s，侧栏分区 1 个：%s" % (plan["total"], "（%s只开 +2）" % later if later else "", plan["label"]),
@@ -2777,8 +2788,8 @@ def main(argv=None):
     sub.add_parser("precheck")
     p = sub.add_parser("announce")
     p.add_argument("--target", required=True)
-    p.add_argument("--name", help="项目名；不写就用目录名")
-    p.add_argument("--task", help="已经写好的任务文件：名字和会话数照它算")
+    p.add_argument("--name", help="项目名，也是两个空间和会话标题前缀的默认名")
+    p.add_argument("--task", help="任务文件：项目名、空间名和会话数从它读")
     p.add_argument("--sequences")
     p = sub.add_parser("init")
     p.add_argument("--target", required=True)
