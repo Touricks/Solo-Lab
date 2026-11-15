@@ -1342,7 +1342,7 @@ class PoolSetupTest(PoolProjectCase):
         settings = json.loads(self.read(".claude/settings.json"))
         self.assertNotIn("agent", settings)
         self.assertIs(settings["autoMemoryEnabled"], False)
-        self.assertEqual(settings["autoCompactWindow"], 200000)
+        self.assertNotIn("autoCompactWindow", settings)    # the window is the account's and the model's own
         for event in ("Stop", "StopFailure", "Notification", "PermissionRequest", "PermissionDenied", "PostCompact"):
             self.assertIn(event, settings["hooks"])
         self.assertIn("AskUserQuestion", settings["hooks"]["PreToolUse"][0]["matcher"])
@@ -1960,6 +1960,67 @@ class CheckLayersTest(PoolProjectCase):
             f.write("{}")
         self.assertIn("不是会话列表", self.check("--sessions", os.path.join(self.tmp, "bad.json"))[1])
 
+    def readback(self, edit=None, own=None):
+        ids = {"fable": "claude-fable-5-2", "opus": "claude-opus-5-5"}
+        rows = {e["name"]: {"sessionId": "local_" + e["name"], "model": ids[e["model"]], "effort": "xhigh",
+                            "contextWindow": 1000000} for e in setup.plan_entries(self.plan)}
+        if edit:
+            edit(rows)
+        path = os.path.join(self.tmp, "readback.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"self": dict({"model": "claude-fable-5-2", "effort": "xhigh", "contextWindow": 1000000}, **(own or {})),
+                       "sessions": list(rows.values())}, f, ensure_ascii=False)
+        return path
+
+    def test_each_sessions_model_window_and_effort_are_read_back(self):
+        self.ready()
+        code, text = self.check("--readback", self.readback())
+        self.assertEqual(code, 0, text)
+        self.assertIn("| 本会话 | — | claude-fable-5-2 | xhigh | 1000000 |", text)
+        self.assertIn("| PMO-p2-01 | fable | claude-fable-5-2 | xhigh | 1000000 |", text)
+        self.assertIn("| PMO-p0-01 | opus | claude-opus-5-5 | xhigh | 1000000 |", text)
+        table = text.split("回读表：")[1]
+        self.assertEqual(table.count("\n| ") - 2, 1 + len(list(setup.plan_entries(self.plan))))   # header, rule, this session, the pool
+        self.assertLess(table.index("PMO-p2-01"), table.index("PMO-p1-01"))                  # in the order the pool opens
+        self.assertNotIn("回读表", self.check()[1])
+
+    def test_a_wrong_model_or_a_narrow_window_is_a_problem(self):
+        self.ready()
+
+        def edit(rows):
+            rows["PMO-p2-01"]["model"] = "claude-opus-5-5"             # start_session fell back to the opener's model
+            rows["Alg-p1-01"]["model"] = "claude-sonnet-5-5"
+            rows["Alg-p0-01"]["contextWindow"] = 200000
+        code, text = self.check("--readback", self.readback(edit))
+        self.assertEqual(code, 1)
+        self.assertIn("会话：2 个问题", text)
+        self.assertIn("模型和开池清单不在一档的会话：PMO-p2-01、Alg-p1-01", text)
+        self.assertIn("窗口小于本会话（1000000）的会话：Alg-p0-01", text)
+        self.assertIn("autoCompactWindow", text)
+        code, text = self.check("--readback", self.readback(own={"model": "claude-opus-5-5", "contextWindow": 200000}))
+        self.assertEqual(code, 0, text)                               # the pool matches its plan; this session's window is no floor
+
+    def test_another_effort_or_an_unread_session_is_a_reminder(self):
+        self.ready()
+
+        def edit(rows):
+            rows["RnD-p2-01"]["effort"] = "high"
+            rows["RnD-p1-01"]["contextWindow"] = None                 # get_usage said unavailable
+            del rows["RnD-p0-01"]
+        code, text = self.check("--readback", self.readback(edit))
+        self.assertEqual(code, 0, text)
+        self.assertIn("提醒：推理强度和本会话（xhigh）不同的会话：RnD-p2-01", text)
+        self.assertIn("提醒：没读到模型或窗口的会话：RnD-p1-01、RnD-p0-01", text)
+        self.assertIn("| RnD-p0-01 | opus | 读不到 | 读不到 | 读不到 |", text)
+        code, text = self.check("--readback", self.readback(own={"contextWindow": None}))
+        self.assertEqual(code, 0, text)
+        self.assertIn("回读表里没有本会话的窗口", text)
+        with open(os.path.join(self.tmp, "bad.json"), "w", encoding="utf-8") as f:
+            f.write("[]")
+        code, text = self.check("--readback", os.path.join(self.tmp, "bad.json"))
+        self.assertEqual(code, 1)
+        self.assertIn("不是回读表", text)
+
     def test_a_session_working_elsewhere_and_a_leftover_pre_registration(self):
         self.ready()
         self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-Alg-p2-01", "source": "startup", "cwd": "/tmp"})
@@ -2304,6 +2365,30 @@ class PoolTreeAfterOpeningTest(PoolProjectCase):
         self.assertNotIn("- Alg-p0-", out)                                      # a +0 is opened by a +1, never by this +2
         code, out = self.route("pool", "--role", "alg-p0", sid="s-a2")
         self.assertIn("本序列的一个 +1", out)
+
+
+class DefaultModelTest(PoolProjectCase):
+    """The defaults: the entry runs fable, every other session opus."""
+
+    def test_the_entry_runs_fable_and_the_rest_opus(self):
+        task, _, _ = setup.load_task_and_seeds(TASK)
+        self.assertEqual(task["models"], setup.DEFAULT_MODELS)          # the example says what the defaults are
+        with open(self.task_path, encoding="utf-8") as f:
+            raw = json.load(f)
+        raw.pop("models")
+        with open(self.task_path, "w", encoding="utf-8") as f:
+            json.dump(raw, f, ensure_ascii=False)
+        with contextlib.redirect_stdout(io.StringIO()):
+            plan = setup.build_plan(self.tmp, self.task_path, None)
+            setup.apply_plan(self.tmp, plan, setup.actions_for(self.tmp, plan))
+        models = {e["role"]: e["model"] for e in setup.plan_entries(json.loads(self.read(".claude/solo-lab/pool-plan.json")))}
+        self.assertEqual(models.pop("pmo-p2"), "fable")
+        self.assertIn("pmo-scribe", models)
+        self.assertEqual(set(models.values()), {"opus"})
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(setup.main(["pool", "--target", self.tmp]), 0)
+        self.assertNotRegex(out.getvalue(), "注意：\\S+ 的模型")              # opus under fable, opus under opus
 
 
 class PoolModelTest(PoolProjectCase):

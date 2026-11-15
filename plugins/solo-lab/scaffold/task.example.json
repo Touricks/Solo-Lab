@@ -21,10 +21,8 @@
   },
   "models": {
     "p2": "opus",
-    "p1": "sonnet",
-    "p0": "sonnet",
-    "pmo-router": "sonnet",
-    "pmo-scribe": "haiku",
-    "quality-p1": "opus"
+    "p1": "opus",
+    "p0": "opus",
+    "pmo-p2": "fable"
   }
 }

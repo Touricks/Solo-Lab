@@ -6,7 +6,7 @@
     python3 -I scripts/setup.py init --target DIR --task task.json [--sequences product,alg,...] [--apply]
     python3 -I scripts/setup.py feishu --target DIR [--map ID=NAME ...] [--live] [--apply]
     python3 -I scripts/setup.py template [--space NAME] [--target DIR]
-    python3 -I scripts/setup.py check --target DIR [--live] [--sessions FILE]
+    python3 -I scripts/setup.py check --target DIR [--live] [--sessions FILE] [--readback FILE]
     python3 -I scripts/setup.py pool --target DIR [--manual]
     python3 -I scripts/setup.py login [--wait]
     python3 -I scripts/setup.py env --target DIR [--apply]
@@ -55,7 +55,9 @@ the project's .env and touches no other line of it.
 
 check reports four layers: the project's own files, the Feishu side, the sessions, the first
 research task. It returns 0 only when all four are ready. --live reads Feishu back (read
-only); --sessions takes the client's own list of sessions saved as JSON.
+only); --sessions takes the client's own list of sessions saved as JSON; --readback takes each
+session's model, effort and context window as the client reported them, holds the model against
+the pool plan and the window against the session that initialised, and prints the table.
 Python 3.9 standard library only.
 """
 import argparse
@@ -86,8 +88,7 @@ PLUGIN_ROOT = orgspec.PLUGIN_ROOT
 SCAFFOLD = os.path.join(PLUGIN_ROOT, "scaffold")
 TEMPLATES = os.path.join(PLUGIN_ROOT, "skills", "packages", "assets")
 MIN_VERSIONS = {"lark-cli": "1.0.96", "meegle": "1.0.23", "claude": "2.1.219"}
-DEFAULT_MODELS = {"p2": "opus", "p1": "sonnet", "p0": "sonnet", "pmo-p2": "opus",
-                  "pmo-router": "sonnet", "pmo-scribe": "haiku", "quality-p1": "opus"}
+DEFAULT_MODELS = {"p2": "opus", "p1": "opus", "p0": "opus", "pmo-p2": "fable"}
 REQUIRED_SEQUENCES = ("pmo", "quality")
 BIN_SCRIPTS = ("orgspec.py", "ledger.py", "route.py", "space.py", "pool.py", "project_paths.py", "onboarding.py")
 HOOK_SCRIPTS = ("guard.py", "audit.py", "instances.py", "inbox.py", "feishu_cmd.py")
@@ -286,7 +287,7 @@ def parse_task(raw, runtime=None):
     task["runtime"] = runtime
     models = {} if runtime == "codex" else dict(DEFAULT_MODELS)
     models.update(raw.get("models") or {})
-    if runtime == "codex" and any(v in ("opus", "sonnet", "haiku") for v in models.values()):
+    if runtime == "codex" and any(v in MODEL_TIERS for v in models.values()):
         raise SetupError("Codex 不沿用 Claude 的模型别名；移除 models 以继承用户设置，或填写明确选定的 Codex 模型")
     task["models"] = models
     if raw.get("mode", "pool") != "pool":
@@ -516,7 +517,6 @@ def build_settings(task, risk, policy):
     out = {}
     out["env"] = {"MEEGLE_NO_UPDATE_CHECK": "1", "MEEGLE_AI_HANDOFF": "disabled"}
     out["autoMemoryEnabled"] = False          # 21 sessions would share one memory directory
-    out["autoCompactWindow"] = 200000
     allow += POOL_ALLOW + SCRIBE_ALLOW        # guard.py denies the ledger writes of every session but the scribe
     for event in POOL_HOOK_EVENTS:
         hooks[event] = [{"hooks": hook("instances.py")}]
@@ -1733,6 +1733,59 @@ def listed_sessions(target, path, plan, pl):
     return problems, notes
 
 
+def session_readback(target, path):
+    """(problems, reminders, rows): what each claimed session actually runs, against the pool plan
+    and the session that initialised. The file is what get_session and get_usage reported, saved by
+    that session: {"self": {model, effort, contextWindow}, "sessions": [{sessionId, model, effort,
+    contextWindow}, ...]}; a value it could not read is null."""
+    import pool
+    data = load_json_file(path)
+    if not isinstance(data, dict) or not isinstance(data.get("self"), dict) or not isinstance(data.get("sessions"), list):
+        return ["--readback 给的文件不是回读表：要写成 {\"self\": {...}, \"sessions\": [...]}，每条带 sessionId、model、effort、"
+                "contextWindow，读不到的写 null；做法见 setup 技能第 8 步"], [], []
+    pl, ok = pool.load(target)
+    if not ok:
+        return [], [], []                              # pool_health reports the broken claims table
+    plan = load_json_file(os.path.join(target, ".claude", "solo-lab", "pool-plan.json")) or {}
+    entries = list(plan_entries(plan))
+    planned = {e["name"]: e["model"] for e in entries}
+    by_role = {e["role"]: e["model"] for e in entries}
+    window = lambda r: r.get("contextWindow") if type(r.get("contextWindow")) is int else None
+    own, by_id = data["self"], {str(r.get("sessionId")): r for r in data["sessions"] if isinstance(r, dict)}
+    names = [e["name"] for e in entries if e["name"] in pl["claims"]] + sorted(set(pl["claims"]) - set(planned))
+    models, narrow, efforts, unread = [], [], [], []
+    rows = [("本会话", "—", own.get("model"), own.get("effort"), window(own))]
+    for name in names:
+        claim = pl["claims"][name]
+        r = by_id.get(str(claim.get("desk"))) or {}
+        want = planned.get(name) or by_role.get(claim.get("role")) or "inherit"
+        model, effort, size = r.get("model"), r.get("effort"), window(r)
+        rows.append((name, want, model, effort, size))
+        if not model or size is None:
+            unread.append(name)
+        if model and model_tier(want) >= 0 and model_tier(model) != model_tier(want):
+            models.append(name)
+        if size is not None and window(own) and size < window(own):
+            narrow.append(name)
+        if effort and own.get("effort") and effort != own["effort"]:
+            efforts.append(name)
+    some = lambda names: "、".join(names[:8]) + ("等" if len(names) > 8 else "")
+    problems, notes = [], []
+    if models:
+        problems.append("模型和开池清单不在一档的会话：%s。会话的模型不能高于开它的会话，入口要用 fable，做初始化的会话本身就得是 fable；"
+                        "照回读表在应用里切换模型，要换默认就改任务文件的 models 重跑 init --apply" % some(models))
+    if narrow:
+        problems.append("窗口小于本会话（%d）的会话：%s。查用户设置、项目设置、项目本地设置里的 autoCompactWindow 和环境变量 "
+                        "CLAUDE_CODE_AUTO_COMPACT_WINDOW；设置只在会话进程启动时读，改完请研究员退出并重开桌面应用" % (window(own), some(narrow)))
+    if window(own) is None:
+        notes.append("回读表里没有本会话的窗口，各会话的窗口没比对")
+    if efforts:
+        notes.append("推理强度和本会话（%s）不同的会话：%s" % (own["effort"], some(efforts)))
+    if unread:
+        notes.append("没读到模型或窗口的会话：%s（会话进程没在跑、还在启动或已归档时读不到；过一会儿重读，还读不到就写进交接）" % some(unread))
+    return problems, notes, rows
+
+
 def session_layer(target, m, listing=None):
     """(problems, reminders): every planned session holds its claim, one entry and one scribe,
     no pre-registration left over, one class of permission mode, all working in the project."""
@@ -1748,9 +1801,10 @@ def session_layer(target, m, listing=None):
     return problems, notes
 
 
-def check(target, live=False, sessions=None):
+def check(target, live=False, sessions=None, readback=None):
     """Is the project ready, layer by layer: its own files, the Feishu side, the sessions, the
-    first research task. 0 only when every layer is. --live reads Feishu back (read only)."""
+    first research task. 0 only when every layer is. --live reads Feishu back (read only);
+    --readback holds each session's model, window and effort against the pool plan."""
     mpath = os.path.join(target, ".claude", "solo-lab", "manifest.json")
     if not os.path.isfile(mpath):
         print("没有 %s：这个目录还没初始化。" % mpath)
@@ -1758,12 +1812,20 @@ def check(target, live=False, sessions=None):
     m = json.loads(read_text(mpath))
     layers = [("本地配置",) + local_layer(target, m), ("飞书",) + feishu_layer(target, m, live),
               ("会话",) + session_layer(target, m, sessions), ("首条研究任务",) + first_task_layer(target, live)]
+    more, extra, rows = session_readback(target, readback) if readback else ([], [], [])
+    layers[2] = ("会话", layers[2][1] + more, layers[2][2] + extra)
     for name, problems, notes in layers:
         print("%s：%s" % (name, "%d 个问题" % len(problems) if problems else "就绪"))
         for n in notes:
             print("  提醒：" + n)
         for p in problems:
             print("  问题：" + p)
+    if rows:
+        print("回读表：")
+        print("| 会话 | 清单模型 | 实际模型 | 推理强度 | 窗口 |")
+        print("| --- | --- | --- | --- | --- |")
+        for row in rows:
+            print("| %s |" % " | ".join("读不到" if v is None else str(v) for v in row))
     bad = [(name, len(problems)) for name, problems, _ in layers if problems]
     print("检查：%s%s" % ("还有 %d 个问题（%s）" % (sum(n for _, n in bad), "、".join("%s %d" % x for x in bad)) if bad else "四层都就绪",
                         "" if live else "。飞书一侧只看了本地记下的标识；加 --live 回读飞书"))
@@ -2739,6 +2801,8 @@ def main(argv=None):
     p.add_argument("--target", required=True)
     p.add_argument("--live", action="store_true", help="只读回读飞书：结构和绑定、知识库节点、首条研究任务和它的主文档")
     p.add_argument("--sessions", metavar="FILE", help="客户端 list_sessions 的结果存成的 JSON 文件：核对会话还在、没归档、都在项目分区里")
+    p.add_argument("--readback", metavar="FILE",
+                   help="本会话用 get_session、get_usage 读回的各会话模型、推理强度和窗口存成的 JSON 文件：模型对照开池清单，窗口和推理强度对照本会话")
     p = sub.add_parser("login")
     p.add_argument("--wait", action="store_true", help="研究员授权以后：等到登录完成，读回登录状态")
     p.add_argument("--timeout", type=int, default=LOGIN_WAIT, help="--wait 最多等多少秒")
@@ -2775,7 +2839,7 @@ def main(argv=None):
             if os.path.isfile(os.path.join(args.target, ".agent-org", "manifest.json")):
                 import codex_setup
                 return codex_setup.check(os.path.abspath(args.target), sys.modules[__name__])
-            return check(os.path.abspath(args.target), args.live, args.sessions)
+            return check(os.path.abspath(args.target), args.live, args.sessions, args.readback)
         if args.cmd == "login":
             return login(args.wait, args.timeout)
         if args.cmd == "env":
