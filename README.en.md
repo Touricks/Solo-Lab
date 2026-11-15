@@ -152,6 +152,7 @@ The phrase means "go on opening the pool".
 After initialisation the user should be able to see:
 
 - A newly created Feishu Project space, named after the project by default.
+- A research task named after the project already exists in the Feishu Project space, stopped at the first step.
 - A Feishu knowledge space (wiki) with the same name
 - 19 new sessions in Claude Desktop, in the project session that holds the initialisation session.
 - A new `.env` in the local project directory, recording the links to Feishu Project and Feishu Wiki.
@@ -159,6 +160,8 @@ After initialisation the user should be able to see:
 ## Usage
 
 The user normally only needs to talk to the project entry session. Its name in the sidebar is `[<project name>] PMO-p2-01`. Every task has 9 steps from opening to archive. The agents can advance some of them on their own, but three steps need a decision from the user, which gives the user more control over what the agents do. The steps are outlined below
+
+After initialisation, the first thing the user does is discuss with the entry session to set up the first research task. The entry session interviews the user, then fills in and renames the research task that was generated during initialisation. If the user would rather look for a project direction first, the user tells the entry session “先探索下项目方向” ("explore the project direction first") to open a separate task, and terminates the research task generated during initialisation in the Feishu Project GUI.
 
 | Step | Task | Sequence of the agent responsible | The user's part |
 | --- | --- | --- | --- |
