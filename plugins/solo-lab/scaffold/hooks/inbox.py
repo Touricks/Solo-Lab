@@ -29,8 +29,10 @@ The hook also:
   archive, a re-send) mention nothing;
 - when the researcher writes to the entry with no earlier message of theirs on
   record in this session, or after 30 minutes or more (pool.FOCUS_IDLE), asks it
-  to list the decisions waiting, the researcher's to-dos and the refill requests
-  after its answer;
+  to list after its answer the decisions waiting on the researcher (`ledger.py
+  query queue`: to be decided, or decided and carried out by the researcher, not
+  archived yet), each with who carries it out and what the researcher must do by
+  hand, and the refill requests after them (they are no decisions);
 - turns the researcher's opening line in a new top-level session
   ("认领 <+2 角色>（会话名 …）", also after <system-reminder> blocks) into a claim
   and injects the role text;
@@ -164,16 +166,16 @@ FEISHU = "照路由决策表处理"
 ENTRY_WOKEN = ("本轮由其他 agent 会话叫醒%s，研究员多半不在。面向研究员最多写一行状态：不提问，不标“等研究员回答”，"
                "不复述已经登记过的决策；收尾里的提问会被 hook 去掉。")
 POOL_WOKEN = "本轮由其他 agent 会话叫醒%s：不向研究员提问，要拍板的事照规则写进包里；收尾里的提问会被 hook 去掉。"
-QUEUED = "本轮登记了待定决策 #%s：在这一行状态里提一次，写事项、选项一句话和工作项链接，不超过 3 行。"
+QUEUED = "本轮登记了待定决策 #%s：在这一行状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和工作项链接，不超过 3 行。"
 URGENT = "它是插队的：本轮可以在收尾里问研究员一次。"
 # The app reports a session this one opened from the wrap-up as the model wrote it, before guard.py
 # took the question out (seen 2026-11-15).
 SIDE_REPORT = "回报里说它在等研究员、带着提问的，不转告研究员：被其他 agent 会话叫醒的轮次，它收尾里的提问已被 hook 去掉。"
 FIRST_TALK = "研究员来谈了。"           # no earlier message of theirs on record, in a new session or one from before 1.0.3
 BACK_AFTER = "研究员隔了 %d 分钟回来。"
-LIST_DUE = ("先回答研究员，再跑 python3 -I .claude/solo-lab/bin/ledger.py query queue 和 "
-            "python3 -I .claude/solo-lab/bin/ledger.py query blocked，把待决定的决策和“等研究员：”开头的阻塞（研究员待办）"
-            "附在末尾，每条一行：事项、紧急程度、回复期限、链接；route.py pool 里还没处理的补位请求一起列。都没有就不附。")
+LIST_DUE = ("先回答研究员，再跑 python3 -I .claude/solo-lab/bin/ledger.py query queue，"
+            "把待决定的决策和等研究员执行的决策附在末尾，每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接；"
+            "route.py pool 里还没处理的补位请求一起列，补位请求不算决策。都没有就不附。")
 SOURCE_SHOWN = 80                     # characters of the sender's title shown
 
 

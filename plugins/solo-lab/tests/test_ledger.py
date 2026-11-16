@@ -22,7 +22,10 @@ import ledger  # noqa: E402
 import orgspec  # noqa: E402
 
 EXAMPLES = os.path.join(ROOT, "skills", "packages", "references", "examples.md")
-ASSIGN, DELIVERY, CROSS, EXECUTE, EXECUTE_DELIVERY, DECISION, DECIDED = 0, 1, 2, 5, 6, 7, 8   # blocks of examples.md
+ASSIGN, DELIVERY, CROSS, EXECUTE, EXECUTE_DELIVERY, DECISION, DECIDED, BY_HAND = 0, 1, 2, 5, 6, 7, 8, 9   # blocks of examples.md
+# BY_HAND's 研究员要做的事: the same whichever option the researcher picks
+API_KEY = "用自己的账号在模型服务的控制台建一个 API key，照定下的金额设好每天的花费上限，再把 key 填进 gpu-01 上实验平台的配置"
+SESSION_DOES = "- 执行方：Alg-p2-01\n- 研究员要做的事：无\n"             # DECISION's two lines: its sender carries it out
 SHEET = """# 研究任务单：复现并测量基线
 
 - 流程：%s
@@ -60,6 +63,11 @@ STEPS = [   # the 验证 flow: who asks for each step, and what its form require
 def example(n):
     with open(EXAMPLES, encoding="utf-8") as f:
         return re.findall(r"```markdown\n(.*?)\n```", f.read(), re.S)[n]
+
+
+def by_hand(value):
+    """An edit of DECISION: the researcher carries it out and must do value by hand."""
+    return lambda t: t.replace(SESSION_DOES, "- 执行方：研究员\n- 研究员要做的事：%s\n" % value)
 
 
 class LedgerCase(unittest.TestCase):
@@ -107,6 +115,20 @@ class LedgerCase(unittest.TestCase):
 
     def state(self, item_id):
         return self.fake.state_of(self.fake.item(item_id))
+
+    def receipt(self, item_id):
+        """The registration receipt packages/sent/<ID>.json."""
+        with open(os.path.join(self.tmp, "packages", "sent", "%s.json" % item_id), encoding="utf-8") as f:
+            return json.load(f)
+
+    def edit_receipt(self, item_id, *drop, **values):
+        """The registration receipt as an earlier version wrote it: the keys in drop left out, values changed."""
+        rec = self.receipt(item_id)
+        for key in drop:
+            del rec[key]
+        rec.update(values)
+        with open(os.path.join(self.tmp, "packages", "sent", "%s.json" % item_id), "w", encoding="utf-8") as f:
+            json.dump(rec, f, ensure_ascii=False)
 
     def value(self, item_id, wid, ref):
         return self.fake.item(item_id)["fields"].get(self.lg().field(wid, ref)["field_key"], "")
@@ -303,28 +325,224 @@ class RegisterTest(LedgerCase):
         self.assertIn("confirm %s --by 研究员 --set 决定内容='停止条件的“四周”从搜索开始计时，试点期另设两周观察。' --set 决定人=研究员" % item_id, text)
 
     def test_the_receipt_says_what_was_registered(self):
-        """The inbox hook of the session the 【登记回执】 reaches reads type, queue and urgent off the receipt."""
-        def receipt(item_id):
-            with open(os.path.join(self.tmp, "packages", "sent", "%s.json" % item_id), encoding="utf-8") as f:
-                return json.load(f)
+        """The inbox hook of the session the 【登记回执】 reaches reads type, queue and urgent off the receipt;
+        query queue reads a decision's 回复期限, 执行方 and 研究员要做的事 there."""
         task = self.task()
-        self.assertEqual((receipt(task)["type"], receipt(task)["queue"]), ("research_task", False))
+        self.assertEqual((self.receipt(task)["type"], self.receipt(task)["queue"]), ("research_task", False))
         urgent = self.draft(DECISION, "u.md", edit=lambda t: t.replace("- 紧急程度：今天\n", "- 紧急程度：插队\n"))
-        rec = receipt(self.quiet(ledger.register, self.lg(), urgent))
+        rec = self.receipt(self.quiet(ledger.register, self.lg(), urgent))
         self.assertEqual((rec["type"], rec["status"], rec["due"]), ("decision", "registered", "两天"))
         self.assertIs(rec["queue"], True)
         self.assertIs(rec["urgent"], True)
-        rec = receipt(self.quiet(ledger.register, self.lg(), self.draft(DECISION, "today.md")))
+        self.assertIn("researcher_action", rec)
+        self.assertIsNone(rec["researcher_action"])                          # 研究员要做的事：无
+        self.assertEqual(rec["executor"], "Alg-p2-01")                       # 执行方：Alg-p2-01
+        rec = self.receipt(self.quiet(ledger.register, self.lg(), self.draft(DECISION, "today.md")))
         self.assertEqual((rec["type"], rec["queue"], rec["urgent"]), ("decision", True, False))
-        rec = receipt(self.quiet(ledger.register, self.lg(), self.draft(
+        rec = self.receipt(self.quiet(ledger.register, self.lg(), self.draft(BY_HAND, "hand.md")))
+        self.assertEqual((rec["executor"], rec["researcher_action"]), ("研究员", API_KEY))
+        rec = self.receipt(self.quiet(ledger.register, self.lg(), self.draft(
+            DECISION, "named.md", edit=lambda t: t.replace("- 执行方：Alg-p2-01\n", "- 执行方：算法 +2（Alg-p2-01）\n"))))
+        self.assertEqual(rec["executor"], "Alg-p2-01")                       # written like 发出方: the session's name
+        rec = self.receipt(self.quiet(ledger.register, self.lg(), self.draft(
             DECIDED, "d2.md", edit=lambda t: t.replace("- 紧急程度：可延后\n", "- 紧急程度：插队\n"))))
-        self.assertEqual(rec["type"], "decision")
+        self.assertEqual((rec["type"], rec["executor"]), ("decision", "Product-p2-01"))
         self.assertIs(rec["queue"], False)                                   # the researcher decided it in a talk
         for block, name, wid in ((ASSIGN, "a.md", "same_seq"), (CROSS, "c.md", "cross_request")):
-            rec = receipt(self.quiet(ledger.register, self.lg(), self.draft(block, name)))
+            rec = self.receipt(self.quiet(ledger.register, self.lg(), self.draft(block, name)))
             self.assertEqual((rec["type"], rec["queue"], rec["urgent"]), (wid, False, False), name)
-        rec = receipt(self.quiet(ledger.register, self.lg(), self.write(FEEDBACK, "fb.md")))
+            self.assertNotIn("researcher_action", rec, name)
+            self.assertNotIn("executor", rec, name)
+        rec = self.receipt(self.quiet(ledger.register, self.lg(), self.write(FEEDBACK, "fb.md")))
         self.assertEqual(rec["type"], "feedback")
+        def action(n, value, edit):
+            return self.receipt(self.quiet(ledger.register, self.lg(), self.draft(DECISION, "action-%d.md" % n, edit=edit)))["researcher_action"]
+        for n, value in enumerate(("无", "无。", "无，发出方自己办", "无：发出方自己办", "无（发出方自己办）")):   # nothing for the researcher
+            self.assertIsNone(action(n, value, lambda t: t.replace("- 研究员要做的事：无\n", "- 研究员要做的事：%s\n" % value)), value)
+        for n, value in enumerate(("（今晚以前）把真实数据放进 data/raw/", "(今晚以前) 把真实数据放进 data/raw/",
+                                   "无论选哪个，都要研究员在 gpu-01 上装好驱动"), 10):           # kept as written
+            self.assertEqual(action(n, value, by_hand(value)), value)
+
+    def test_a_decision_the_researcher_carries_out(self):
+        """2026-11-16: what the researcher must do by hand is a decision; its package header says so: 执行方
+        研究员, and the work in 研究员要做的事. It goes 待决定 → 待执行 (the space's 已决定, confirmed as soon as
+        the researcher decides) → 归档 (carried out), and query queue lists it until it is archived. The stuck
+        work item names it in its blocked reason."""
+        text = example(BY_HAND)
+        self.assertIn("\n- 渠道：决策队列\n", text)
+        self.assertIn("\n- 需要接收方做的事：拍板\n- 执行方：研究员\n- 研究员要做的事：%s\n" % API_KEY, text)
+        self.assertEqual(orgspec.lint_text(self.spec, text)[0], [])
+        task = self.task()
+        hand = self.quiet(ledger.register, self.lg(), self.draft(BY_HAND, "hand.md"))
+        self.assertEqual(self.state(hand), "待决定")
+        self.assertEqual((self.receipt(hand)["executor"], self.receipt(hand)["researcher_action"]), ("研究员", API_KEY))
+        rows, out = self.out(ledger.query, self.lg("preview"), "queue")
+        self.assertEqual([(str(r["work_item_id"]), r["stage"], r["executor"], r["researcher_action"]) for r in rows],
+                         [(hand, "待决定", "研究员", API_KEY)])
+        self.assertRegex(out, r"(?m)^#%s  待决定  .*  执行方：研究员  研究员要做的事：%s  主文档：https://\S+$" % (hand, re.escape(API_KEY)))
+        waits = "等研究员：决策 #%s" % hand
+        self.quiet(ledger.update, self.lg(), task, ["blocked_reason=" + waits])
+        rows = self.quiet(ledger.query, self.lg("preview"), "blocked")
+        self.assertEqual([(str(r["work_item_id"]), r["blocked_reason"]) for r in rows], [(task, waits)])
+        # the researcher decides: 决定 is confirmed at once, and the decision waits for the researcher to carry it out
+        _, out = self.out(ledger.confirm, self.lg(), hand, "研究员", ["决定内容=每天上限 30 美元", "决定人=研究员"])
+        self.assertEqual(out.splitlines()[-1], "执行方：研究员。")              # nobody else to tell
+        self.assertEqual((self.state(hand), self.value(hand, "decision", "决定内容")), ("已决定", "每天上限 30 美元"))
+        rows, out = self.out(ledger.query, self.lg("preview"), "queue")
+        self.assertEqual([(str(r["work_item_id"]), r["stage"], r["work_item_status"]) for r in rows], [(hand, "待执行", "已决定")])
+        self.assertRegex(out, r"(?m)^#%s  待执行  .*  执行方：研究员  研究员要做的事：%s  主文档：https://\S+$" % (hand, re.escape(API_KEY)))
+        # one a session carries out leaves the queue once it is decided: the scribe tells that session what was decided
+        other = self.quiet(ledger.register, self.lg(), self.draft(DECISION, "q.md"))
+        self.assertEqual([str(r["work_item_id"]) for r in self.quiet(ledger.query, self.lg("preview"), "queue")], [hand, other])
+        _, out = self.out(ledger.confirm, self.lg(), other, "研究员", ["决定内容=移进评测协议", "决定人=研究员"])
+        self.assertEqual(out.splitlines()[-1], "执行方：Alg-p2-01。")
+        self.assertEqual(self.state(other), "已决定")
+        self.assertEqual([str(r["work_item_id"]) for r in self.quiet(ledger.query, self.lg("preview"), "queue")], [hand])
+        # the researcher says it is done: the scribe comments what was done and archives it
+        self.quiet(ledger.comment, self.lg(), hand, "研究员建好 API key，每天上限设成 30 美元，key 填进了 gpu-01 上实验平台的配置（原话：“key 挂好了，上限 30”）")
+        self.quiet(ledger.archive, self.lg(), hand)
+        self.assertEqual(self.state(hand), "归档")
+        self.assertEqual(self.quiet(ledger.query, self.lg("preview"), "queue"), [])
+        self.quiet(ledger.update, self.lg(), task, ["blocked_reason="])
+        self.assertEqual(self.quiet(ledger.query, self.lg("preview"), "blocked"), [])
+
+    def test_what_the_researcher_does_stays_listed_however_it_opens(self):
+        """研究员要做的事 opening with a bracket is still something for the researcher: query queue lists the
+        decision as 待执行 once it is decided."""
+        value = "（今晚以前）把真实数据放进 data/raw/"
+        hand = self.quiet(ledger.register, self.lg(), self.draft(DECISION, "b.md", edit=by_hand(value)))
+        self.assertEqual(self.receipt(hand)["researcher_action"], value)
+        self.quiet(ledger.confirm, self.lg(), hand, "研究员", ["决定内容=移进评测协议", "决定人=研究员"])
+        self.assertEqual(self.state(hand), "已决定")
+        rows = self.quiet(ledger.query, self.lg("preview"), "queue")
+        self.assertEqual([(str(r["work_item_id"]), r["stage"], r["researcher_action"]) for r in rows], [(hand, "待执行", value)])
+
+    def test_a_decision_package_says_what_the_researcher_does_by_hand(self):
+        """The package check wants 研究员要做的事 in a decision package's header (无 when nothing), and in no other package."""
+        good = example(DECISION)
+        self.assertIn("\n- 研究员要做的事：无\n", good)
+        self.assertEqual(orgspec.lint_text(self.spec, good)[0], [])
+        without = good.replace("- 研究员要做的事：无\n", "")
+        errors = orgspec.lint_text(self.spec, without)[0]
+        self.assertEqual(errors, ["包头缺“研究员要做的事”：写这条决策定下以后要研究员亲手做的事，没有写“无”"])
+        self.assertIn("草稿没通过检查", self.fails(ledger.register, self.lg(), self.write(without)))
+        self.assertEqual(self.fake.items, {})
+        for value, why in (("", "没写内容"), ("<这条决策定下以后要研究员亲手做的事；没有写“无”>", "还是模板里的占位")):
+            errors = orgspec.lint_text(self.spec, good.replace("- 研究员要做的事：无\n", "- 研究员要做的事：%s\n" % value))[0]
+            self.assertEqual(len(errors), 1, errors)
+            self.assertIn(why, errors[0])
+        for value in ("没有", "不需要", "无需研究员动手", "暂无", "N/A", "不用研究员做", "—"):   # nothing, written otherwise
+            text = good.replace("- 研究员要做的事：无\n", "- 研究员要做的事：%s\n" % value)
+            self.assertEqual(orgspec.lint_text(self.spec, text)[0], [
+                "包头“研究员要做的事”写的是“%s”：没有要研究员亲手做的事，只写“无”；有的话，直接写要他做什么" % value], value)
+        self.assertIn("草稿没通过检查", self.fails(ledger.register, self.lg(), self.write(text, "dash.md")))
+        self.assertEqual(self.fake.items, {})
+        for value in ("在 gpu-01 上装好驱动", "无论选哪个，都要研究员在 gpu-01 上装好驱动", "NAS 上的原始数据由研究员拷到 gpu-01"):
+            self.assertEqual(orgspec.lint_text(self.spec, by_hand(value)(good))[0], [], value)
+        for block in (ASSIGN, DELIVERY, CROSS, EXECUTE, EXECUTE_DELIVERY):     # the other packages have no such lines
+            text = example(block)
+            self.assertNotIn("研究员要做的事", text)
+            self.assertNotIn("\n- 执行方：", text)
+            self.assertEqual(orgspec.lint_text(self.spec, text)[0], [], block)
+        with open(os.path.join(ROOT, "skills", "packages", "assets", "decision.md"), encoding="utf-8") as f:
+            template = orgspec.template_block(f.read())
+        self.assertIn("\n- 需要接收方做的事：拍板（决策队列）／确认记录无误（研究员主动发起）\n"
+                      "- 执行方：<研究员，或者执行这条决策的会话名，多半是发出方的会话名>\n- 研究员要做的事：<", template)
+
+    def test_a_decision_package_names_who_carries_it_out(self):
+        """2026-11-16: a decision package's header says who carries it out once it is decided (执行方): 研究员, or
+        one session, mostly the sender. The researcher has something to do by hand (研究员要做的事), a session has
+        无. The package check sends back a package whose two lines disagree, and the scribe registers nothing."""
+        good = example(DECISION)
+        self.assertIn("\n- 需要接收方做的事：拍板\n" + SESSION_DOES, good)
+        # what only the researcher can do (the task file, init) goes in a package he carries out, not in this one
+        signed = good.split("\n## 待签版本\n", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("再重跑 init，这两步要研究员亲手做，写进重新签字的那份决策包：那份包的执行方写“研究员”", signed)
+        lint = lambda text: orgspec.lint_text(self.spec, text)[0]
+        idle = good.replace(SESSION_DOES, "- 执行方：研究员\n- 研究员要做的事：无\n")
+        self.assertEqual(lint(idle), ["执行方是研究员，包头“研究员要做的事”却写“无”：写清楚要研究员亲手做什么；"
+                                      "不用他亲手做什么的，执行方改写执行这条决策的会话名"])
+        busy = good.replace(SESSION_DOES, "- 执行方：Alg-p2-01\n- 研究员要做的事：把真实数据放进 data/raw/\n")
+        self.assertEqual(lint(busy), ["执行方是 Alg-p2-01，包头“研究员要做的事”就要写“无”；要研究员亲手做这件事的，执行方改写“研究员”"])
+        for text, name in ((idle, "idle.md"), (busy, "busy.md")):
+            self.assertIn("草稿没通过检查", self.fails(ledger.register, self.lg(), self.write(text, name)))
+        self.assertEqual(self.fake.items, {})
+        for who, action in (("Alg-p2-01", "无"), ("算法 +2（Alg-p2-01）", "无（发出方自己办）"), ("Infra-p2-01", "无"),
+                            ("研究员", "把真实数据放进 data/raw/"), ("研究员", "（今晚以前）把真实数据放进 data/raw/")):
+            self.assertEqual(lint(good.replace(SESSION_DOES, "- 执行方：%s\n- 研究员要做的事：%s\n" % (who, action))), [], who)
+        self.assertEqual(lint(example(BY_HAND)), [])
+        hint = "写“研究员”，或者执行这条决策的那个会话的名字（多半是发出方的会话名），只写名字、不加说明，比如 Alg-p2-01"
+        self.assertEqual(lint(good.replace("- 执行方：Alg-p2-01\n", "")), ["包头缺“执行方”：" + hint])
+        for value, why in (("", "没写内容"), ("<研究员，或者执行这条决策的会话名，多半是发出方的会话名>", "还是模板里的占位"),
+                           ("发出方", "写的是“发出方”"), ("Alg-p2-01（发出方）", "写的是“Alg-p2-01（发出方）”"),
+                           ("研究员和 Alg-p2-01", "写的是“研究员和 Alg-p2-01”")):
+            errors = lint(good.replace("- 执行方：Alg-p2-01\n", "- 执行方：%s\n" % value))
+            self.assertEqual(len(errors), 1, errors)                        # whether the two agree waits until both are right
+            self.assertIn(why, errors[0])
+            self.assertTrue(errors[0].endswith(hint), errors[0])
+
+    def test_the_executor_is_one_of_the_organizations_sessions(self):
+        """A session named as 执行方 is the organization's: its abbreviation names a sequence (case aside, as the
+        ledger compares names), and a sequence and rank written in front are its own. The receipt, confirm and
+        route.py name the session as the abbreviation spells it."""
+        good = example(DECISION)
+        lint = lambda who: orgspec.lint_text(self.spec, good.replace(SESSION_DOES, "- 执行方：%s\n- 研究员要做的事：无\n" % who))[0]
+        for who, why in (("Algo-p2-01", "序列的简写只有 Product、Alg、RnD、Infra、Quality、PMO、Liaison，没有 Algo"),
+                         ("Foo-p2-01", "序列的简写只有 Product、Alg、RnD、Infra、Quality、PMO、Liaison，没有 Foo"),
+                         ("产品 +2（Alg-p2-01）", "Alg-p2-01 是算法 +2 的会话，前面写的序列和职级要和它一致，或者只写会话名"),
+                         ("算法 +1（Alg-p2-01）", "Alg-p2-01 是算法 +2 的会话，前面写的序列和职级要和它一致，或者只写会话名")):
+            self.assertEqual(lint(who), ["包头“执行方”写的是“%s”：%s" % (who, why)], who)
+        self.assertIn("草稿没通过检查", self.fails(ledger.register, self.lg(), self.write(good.replace("Alg-p2-01\n- 研究员", "Algo-p2-01\n- 研究员"))))
+        self.assertEqual(self.fake.items, {})
+        for who, name in (("alg-p2-01", "Alg-p2-01"), ("算法 +2（alg-p2-01）", "Alg-p2-01"), ("项目管理 +2（PMO-p2-01）", "PMO-p2-01"),
+                          ("Quality-p0-2106", "Quality-p0-2106")):
+            self.assertEqual(lint(who), [], who)
+            self.assertEqual(orgspec.executor_of(self.spec, who), name, who)
+
+    def test_a_researcher_who_carries_it_out_is_never_told_to_write_nothing(self):
+        """When 执行方 is 研究员, a 研究员要做的事 that is missing, empty, the template's placeholder or nothing written
+        otherwise is sent back to say what the researcher does, or to hand the decision to a session with 无: the
+        advice leads to a package that passes, not to the disagreement the next check would send back."""
+        good = example(DECISION)
+        lint = lambda text: orgspec.lint_text(self.spec, text)[0]
+        mine = lambda action: good.replace(SESSION_DOES, "- 执行方：研究员\n" + ("" if action is None else "- 研究员要做的事：%s\n" % action))
+        does = ("执行方是研究员，写清楚要研究员亲手做什么；不用他亲手做什么的，执行方改写执行这条决策的会话名，"
+                "“研究员要做的事”写“无”")
+        for action, why in ((None, "包头缺“研究员要做的事”"), ("", "包头“研究员要做的事”没写内容"),
+                            ("<这条决策定下以后要研究员亲手做的事；没有写“无”>", "包头“研究员要做的事”还是模板里的占位"),
+                            ("没有", "包头“研究员要做的事”写的是“没有”"), ("不需要", "包头“研究员要做的事”写的是“不需要”")):
+            self.assertEqual(lint(mine(action)), [why + "：" + does], action)
+        self.assertEqual(lint(mine("把真实数据放进 data/raw/")), [])                         # either way the advice goes
+        self.assertEqual(lint(good), [])                                                  # (the session and 无)
+
+    def test_query_queue_keeps_what_the_researcher_carries_out(self):
+        """query queue lists a decided decision until it is archived only when the researcher carries it out.
+        The receipt's executor says who does; a receipt older than the 执行方 line goes by researcher_action:
+        something for the researcher makes him the executor, and confirm names the sender otherwise."""
+        self.task()
+        register = lambda name, edit=None: self.quiet(ledger.register, self.lg(), self.draft(BY_HAND if name == "mine" else DECISION,
+                                                                                              name + ".md", edit=edit))
+        mine, theirs = register("mine"), register("theirs")
+        old_hand, old_none, older = register("old_hand", by_hand("把真实数据放进 data/raw/")), register("old_none"), register("older")
+        odd = register("odd")
+        self.edit_receipt(old_hand, "executor")                             # 1.0.3 before the 执行方 line
+        self.edit_receipt(old_none, "executor")
+        self.edit_receipt(older, "executor", "researcher_action")           # 1.0.2 and before
+        self.edit_receipt(odd, researcher_action="把真实数据放进 data/raw/")   # the executor decides, not researcher_action
+        rows = self.quiet(ledger.query, self.lg("preview"), "queue")
+        self.assertEqual({str(r["work_item_id"]): (r["stage"], r.get("executor")) for r in rows},
+                         {mine: ("待决定", "研究员"), theirs: ("待决定", "Alg-p2-01"), old_hand: ("待决定", "研究员"),
+                          old_none: ("待决定", None), older: ("待决定", None), odd: ("待决定", "Alg-p2-01")})
+        said = {}
+        for item_id in (mine, theirs, old_hand, old_none, older, odd):
+            _, out = self.out(ledger.confirm, self.lg(), item_id, "研究员", ["决定内容=照建议办", "决定人=研究员"])
+            said[item_id] = out.splitlines()[-1]
+        self.assertEqual(said, {mine: "执行方：研究员。", theirs: "执行方：Alg-p2-01。", old_hand: "执行方：研究员。",
+                                old_none: "执行方：Alg-p2-01。", older: "执行方：Alg-p2-01。", odd: "执行方：Alg-p2-01。"})
+        rows, out = self.out(ledger.query, self.lg("preview"), "queue")
+        self.assertEqual([(str(r["work_item_id"]), r["stage"], r["executor"]) for r in rows],
+                         [(mine, "待执行", "研究员"), (old_hand, "待执行", "研究员")])
+        self.assertIn("#%s  待执行  " % old_hand, out)
 
     def test_what_the_new_item_page_requires_is_asked_for_before_creating(self):
         self.task()
@@ -731,7 +949,7 @@ class FieldsAndQueriesTest(LedgerCase):
     def test_named_queries(self):
         lg = self.lg("offline")
         mql = lambda name, seq=None: ledger.mql_text(lg, name, seq)
-        self.assertIn("`work_item_status` = '待决定'", mql("queue")[0])
+        self.assertIn("`work_item_status` IN ('待决定', '已决定')", mql("queue")[0])    # 已决定: see query queue's stages
         self.assertIn("NOT IN ('已验收', '归档', '已终止')", mql("open")[0])
         self.assertIn("NOT IN ('归档', '已终止')", mql("tasks")[0])
         self.assertEqual(len(mql("blocked")), 3)                                        # the three types that can be blocked
@@ -756,23 +974,31 @@ class FieldsAndQueriesTest(LedgerCase):
         self.assertEqual(ledger.open_tasks(self.lg("preview")), [(task, "复现并测量基线")])
 
     def test_queue_and_blocked_show_what_the_entry_lists(self):
-        """The researcher comes back: the entry lists the decisions waiting and the 等研究员： blocks off these two queries."""
+        """The researcher comes back: the entry lists query queue, each decision with its stage, who carries it
+        out and what the researcher must do by hand; query blocked shows what each stuck work item waits on."""
         self.task()
         urgent = self.draft(DECISION, "u.md", edit=lambda t: t.replace("- 紧急程度：今天\n", "- 紧急程度：插队\n"))
         decision = self.quiet(ledger.register, self.lg(), urgent)
+        hand = self.quiet(ledger.register, self.lg(), self.draft(BY_HAND, "hand.md"))
         rows, text = self.out(ledger.query, self.lg("preview"), "queue")
         line = next(x for x in text.splitlines() if x.startswith("#%s " % decision))
-        self.assertRegex(line, r"  紧急程度：插队  回复期限：两天  主文档：https://\S+/wiki/\w+$")
-        self.assertEqual((rows[0]["urgency"], rows[0]["due"]), ("插队", "两天"))
+        self.assertRegex(line, r"^#%s  待决定  决策包（Alg-p2-01）：要不要把时间切分移进评测协议  紧急程度：插队  回复期限：两天  "
+                               r"执行方：Alg-p2-01  研究员要做的事：无  主文档：https://\S+/wiki/\w+$" % decision)
+        row = next(r for r in rows if str(r["work_item_id"]) == decision)
+        self.assertEqual((row["stage"], row["urgency"], row["due"], row["executor"], row["researcher_action"]),
+                         ("待决定", "插队", "两天", "Alg-p2-01", "无"))
+        line = next(x for x in text.splitlines() if x.startswith("#%s " % hand))
+        self.assertRegex(line, r"  紧急程度：今天  回复期限：无  执行方：研究员  研究员要做的事：%s  主文档：https://\S+/wiki/\w+$" % re.escape(API_KEY))
         mine = self.quiet(ledger.register, self.lg(), self.draft(ASSIGN, "a.md"))
         other = self.quiet(ledger.register, self.lg(), self.draft(CROSS, "c.md"))
-        self.quiet(ledger.update, self.lg(), mine, ["blocked_reason=等研究员：拿真实数据（截止 2026-11-20 12:00）"])
+        self.quiet(ledger.update, self.lg(), mine, ["blocked_reason=等研究员：决策 #%s" % hand])
         self.quiet(ledger.update, self.lg(), other, ["blocked_reason=等基础设施：GPU 节点没排上"])
         rows, text = self.out(ledger.query, self.lg("preview"), "blocked")
         lines = {x.split()[0]: x for x in text.splitlines() if x.startswith("#")}
-        self.assertIn("  阻塞原因：等研究员：拿真实数据（截止 2026-11-20 12:00）  主文档：https://", lines["#" + mine])
+        self.assertIn("  阻塞原因：等研究员：决策 #%s  主文档：https://" % hand, lines["#" + mine])
         self.assertIn("  阻塞原因：等基础设施：GPU 节点没排上", lines["#" + other])
-        self.assertEqual(sorted(r["blocked_reason"] for r in rows), ["等基础设施：GPU 节点没排上", "等研究员：拿真实数据（截止 2026-11-20 12:00）"])
+        self.assertEqual(sorted(r["blocked_reason"] for r in rows), ["等基础设施：GPU 节点没排上", "等研究员：决策 #%s" % hand])
+        self.assertTrue(all("stage" not in r and "executor" not in r and "researcher_action" not in r for r in rows))   # queue columns only
         self.assertNotIn("回复期限", lines["#" + mine])                                  # a request keeps no due in its receipt
         lg = self.lg("offline")
         self.assertIn("`%s`" % lg.field("decision", "urgency")["field_key"], ledger.mql_text(lg, "queue")[0])

@@ -464,7 +464,97 @@ class Contract:
 # ------------------------------------------------------------------ lint
 HEADER = re.compile(r"^- ([^：:]+)[：:]\s*(.*)$")
 HEADER_KEYS = ["包类型", "发出方", "接收方", "关联工作项", "需要接收方做的事", "回复期限", "上下文范围"]
+# A decision package's header also says who carries it out once it is decided (执行方: 研究员, or the
+# session's name, mostly the sender's) and what the researcher must do by hand (研究员要做的事: 整理数据、
+# 挂 API、开 Docker ..., 无 when nothing). The two agree: 研究员 has something to do, a session has 无.
+# Required on decision packages only. The registration receipt keeps both; `ledger.py query queue` lists
+# a decided decision until it is archived while the researcher carries it out.
+EXECUTOR = "执行方"
+RESEARCHER = "研究员"
+RESEARCHER_ACTION = "研究员要做的事"
+NOTHING = "无"
+WHO_EXECUTES = "写“研究员”，或者执行这条决策的那个会话的名字（多半是发出方的会话名），只写名字、不加说明，比如 Alg-p2-01"
+WHAT_RESEARCHER_DOES = "写这条决策定下以后要研究员亲手做的事，没有写“%s”" % NOTHING
+# How 研究员要做的事 is filled when the researcher carries the decision out: never 无 alone, which the
+# check would send back as disagreeing with 执行方.
+RESEARCHER_DOES = ("执行方是研究员，写清楚要研究员亲手做什么；不用他亲手做什么的，执行方改写执行这条决策的会话名，"
+                   "“%s”写“%s”" % (RESEARCHER_ACTION, NOTHING))
+# One session's name alone (Alg-p2-01), or written like 发出方: 算法 +2（Alg-p2-01）, the sequence and rank
+# in front being the session's own. The name is ASCII only, so that a remark run on after it is no part of it.
+EXECUTOR_SESSION = re.compile(r"([A-Za-z]+-p[0-2]-[A-Za-z0-9]+)"
+                              r"|([^\s（()）<>、，,；;]+)\s*\+([0-2])\s*[（(]\s*([A-Za-z]+-p[0-2]-[A-Za-z0-9]+)\s*[）)]")
+# 无 alone or followed by punctuation or a remark (无。 无，发出方自己办 无（…）) says nothing; 无需…, 无论… do not
+# start with the word 无.
+SAYS_NOTHING = re.compile(r"无(?:$|[\s（(，,。.；;：:、])")
+# Other ways of writing nothing (没有, 不需要, 无需研究员动手, 暂无, N/A) are sent back to be written 无: the receipt
+# would keep them as something the researcher must do.
+OTHER_NOTHING = re.compile(r"(?i)(?:没有|不需要|不用|无需|暂无|n/?a\b|none\b|[-—/／]+$)")
 ADDED_ON_UPLOAD = {"状态包", "交接记录"}
+
+
+def read_executor(spec, value):
+    """(who, None) when a decision package's 执行方 line names 研究员 or one of the organization's
+    sessions, else (None, how to write it). A session's abbreviation names a sequence, case aside as the
+    ledger compares names (the name comes back spelled with the sequence's abbreviation), and a sequence
+    and rank written in front of it (算法 +2（Alg-p2-01）) are its own."""
+    value = (value or "").strip().rstrip("。.")
+    if value == RESEARCHER:
+        return RESEARCHER, None
+    m = EXECUTOR_SESSION.fullmatch(value)
+    if not m:
+        return None, WHO_EXECUTES
+    name = m.group(1) or m.group(4)
+    head, rank = name.split("-")[0], name.split("-")[1][1:]
+    seq = next(((cn, abbrev) for _, cn, abbrev in spec.sequences() if abbrev.lower() == head.lower()), None)
+    if not seq:
+        return None, "序列的简写只有 %s，没有 %s" % ("、".join(abbrev for _, _, abbrev in spec.sequences()), head)
+    name = seq[1] + name[len(head):]
+    if m.group(4) and (m.group(2), m.group(3)) != (seq[0], rank):
+        return None, "%s 是%s +%s 的会话，前面写的序列和职级要和它一致，或者只写会话名" % (name, seq[0], rank)
+    return name, None
+
+
+def executor_of(spec, value):
+    """Who a decision package's 执行方 line names: 研究员, or one of the organization's sessions by name;
+    None when it names neither, or more than one (read_executor)."""
+    return read_executor(spec, value)[0]
+
+
+def placeholder(value):
+    return value.startswith("<") and value.endswith(">")
+
+
+def decision_errors(spec, header):
+    """What is wrong with a decision package's 执行方 and 研究员要做的事 lines; a line that is missing
+    is reported with the other header keys. Whether the two agree is checked once both are right; until
+    then a 研究员要做的事 that names nothing for the researcher is told to say 无 only when the researcher
+    does not carry the decision out."""
+    errors = []
+    action, who = header.get(RESEARCHER_ACTION), header.get(EXECUTOR)
+    by, why = read_executor(spec, who)
+    mine = by == RESEARCHER
+    if action == "":
+        errors.append("包头“%s”没写内容：%s" % (RESEARCHER_ACTION, RESEARCHER_DOES if mine else "没有要研究员亲手做的事，写“%s”" % NOTHING))
+    elif action and placeholder(action):
+        errors.append("包头“%s”还是模板里的占位：%s" % (RESEARCHER_ACTION, RESEARCHER_DOES if mine else WHAT_RESEARCHER_DOES))
+    elif action and OTHER_NOTHING.match(action):
+        errors.append("包头“%s”写的是“%s”：%s" % (RESEARCHER_ACTION, action, RESEARCHER_DOES if mine else
+                                                "没有要研究员亲手做的事，只写“%s”；有的话，直接写要他做什么" % NOTHING))
+    if who == "":
+        errors.append("包头“%s”没写内容：%s" % (EXECUTOR, WHO_EXECUTES))
+    elif who and placeholder(who):
+        errors.append("包头“%s”还是模板里的占位：%s" % (EXECUTOR, WHO_EXECUTES))
+    elif who is not None and not by:
+        errors.append("包头“%s”写的是“%s”：%s" % (EXECUTOR, who, why))
+    if errors or action is None or who is None:
+        return errors
+    nothing = bool(SAYS_NOTHING.match(action))
+    if mine and nothing:
+        errors.append("执行方是研究员，包头“%s”却写“%s”：写清楚要研究员亲手做什么；不用他亲手做什么的，执行方改写执行这条决策的会话名"
+                      % (RESEARCHER_ACTION, NOTHING))
+    elif not mine and not nothing:
+        errors.append("执行方是 %s，包头“%s”就要写“%s”；要研究员亲手做这件事的，执行方改写“%s”" % (by, RESEARCHER_ACTION, NOTHING, RESEARCHER))
+    return errors
 
 
 def template_path(name):
@@ -532,9 +622,15 @@ def lint_text(spec, text):
         keys.insert(1, "关系")
     if pid == "decision":
         keys.insert(1, "渠道")
+        at = keys.index("需要接收方做的事") + 1
+        keys[at:at] = [EXECUTOR, RESEARCHER_ACTION]
+    hints = {EXECUTOR: WHO_EXECUTES,
+             RESEARCHER_ACTION: RESEARCHER_DOES if executor_of(spec, header.get(EXECUTOR)) == RESEARCHER else WHAT_RESEARCHER_DOES}
     for k in keys:
         if k not in header:
-            errors.append("包头缺“%s”" % k)
+            errors.append("包头缺“%s”" % k + ("：" + hints[k] if k in hints else ""))
+    if pid == "decision":
+        errors += decision_errors(spec, header)
     relation = header.get("关系", "").strip()
     rel_names = set(spec.terms["rel"].values())
     if "关系" in keys and relation and relation not in rel_names:

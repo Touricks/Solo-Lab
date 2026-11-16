@@ -5,6 +5,7 @@ agent session started. Standard library only, no Feishu access.
 
     python3 -I -B tests/test_delivery.py
 """
+import ast
 import datetime
 import json
 import os
@@ -22,9 +23,11 @@ from test_plugin import PoolProjectCase  # noqa: E402
 WRAPUP = "mcp__ccd_turn__wrap_up"
 WOKEN = "本轮由其他 agent 会话叫醒"
 QUEUED = "本轮登记了待定决策"
-LIST_DUE = ("先回答研究员，再跑 python3 -I .claude/solo-lab/bin/ledger.py query queue 和 python3 -I .claude/solo-lab/bin/ledger.py "
-            "query blocked，把待决定的决策和“等研究员：”开头的阻塞（研究员待办）附在末尾，每条一行：事项、紧急程度、回复期限、链接；"
-            "route.py pool 里还没处理的补位请求一起列。都没有就不附。")
+LIST_DUE = ("先回答研究员，再跑 python3 -I .claude/solo-lab/bin/ledger.py query queue，把待决定的决策和等研究员执行的决策附在末尾，"
+            "每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接；route.py pool 里还没处理的补位请求一起列，"
+            "补位请求不算决策。都没有就不附。")
+QUEUED_TEXT = ("本轮登记了待定决策 #%s：在这一行状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和工作项链接，"
+               "不超过 3 行。")
 DENIED = ("这一轮是其他 agent 会话叫醒的，研究员多半不在：不用 AskUserQuestion。要研究员拍板的事写决策包或发【需拍板】给入口；"
           "+1、+0 写进交给上一级的交付包。")
 
@@ -49,6 +52,16 @@ SIDE_REPORT = "回报里说它在等研究员、带着提问的，不转告研�
 def wrap(text, name="[示例] PMO-p0-01"):
     """A message another session sent, as the desktop app hands it to the hook."""
     return '<cross-session-message from="local_peer" from-name="%s">\n%s\n</cross-session-message>' % (name, text)
+
+
+def constant(path, name):
+    """The value of a module-level string constant of a hook script, read without running the script."""
+    with open(path, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
+            return ast.literal_eval(node.value)
+    raise KeyError(name)
 
 
 def audit_lines(text, title):
@@ -171,12 +184,19 @@ class DeliveryCase(PoolProjectCase):
 
 
 class InboxDeliveryTest(DeliveryCase):
+    def test_the_wording_about_decisions(self):
+        """2026-11-16: the list the researcher gets holds the decisions to be decided and those waiting for
+        the researcher to carry them out; it and the mention at registration say who carries each out
+        (执行方) and what the researcher must do by hand."""
+        for path in (os.path.join(ROOT, "scaffold", "hooks", "inbox.py"), os.path.join(self.tmp, ".claude", "hooks", "inbox.py")):
+            self.assertEqual(constant(path, "LIST_DUE"), LIST_DUE, path)
+            self.assertEqual(constant(path, "QUEUED"), QUEUED_TEXT, path)
+
     def test_a_queued_decision_is_mentioned_in_the_turn_it_is_registered(self):
         self.receipt("2301", type="decision", queue=True, urgent=False)
         text = self.context("s-entry", self.registered("2301"))
         self.assertIn(WOKEN + "（来自 [示例] PMO-p0-01），研究员多半不在。面向研究员最多写一行状态：不提问，不标“等研究员回答”，"
-                      "不复述已经登记过的决策；收尾里的提问会被 hook 去掉。本轮登记了待定决策 #2301：在这一行状态里提一次，"
-                      "写事项、选项一句话和工作项链接，不超过 3 行。", text)
+                      "不复述已经登记过的决策；收尾里的提问会被 hook 去掉。" + QUEUED_TEXT % "2301", text)
         self.assertNotIn("它是插队的", text)
         st = self.session("s-entry")
         self.assertEqual(st["turn_origin"], "agent")
@@ -266,6 +286,8 @@ class InboxDeliveryTest(DeliveryCase):
     def test_the_researcher_coming_back_to_the_entry(self):
         text = self.context("s-entry", "早")
         self.assertIn(FIRST_TALK + LIST_DUE, text)
+        for old in ("query blocked", "等研究员：", "阻塞", "待办"):      # what the researcher does by hand is a decision in the queue
+            self.assertNotIn(old, text)
         self.assertNotIn(WOKEN, text)
         self.assertEqual(self.session("s-entry")["turn_origin"], "researcher")
         self.set_state("s-entry", researcher_at=self.ago(10))

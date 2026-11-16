@@ -3869,14 +3869,15 @@ class DeliveryTextTest(PoolProjectCase):
                         day + "的决策队列", "被消息叫起来的轮次不停下来问人"):
                 self.assertNotIn(old, text, name)
         entry = texts["pmo-p2.md"]
-        for part in ("**决策队列。** 待决定的决策只在两个时刻推给研究员，到时 hook 会在上下文里提示你",
-                     "在状态里提一次，写事项、选项一句话和工作项链接，不超过 3 行",
+        for part in ("**决策队列。** 决策只在两个时刻推给研究员，到时 hook 会在上下文里提示你",
+                     "在状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和工作项链接，不超过 3 行",
                      "紧急程度为“插队”的，这一轮可以在收尾里问研究员一次",
                      "距他上一条消息 30 分钟以上，或者第一次", "之前提过的也附", "改版、截止前、每日汇总都不推",
-                     "**面向研究员的内容。** 你主动给研究员的只有三类：新决策（给链接）、研究员待办（带期限）、里程碑",
+                     "**面向研究员的内容。** 你主动给研究员的只有两类：决策（给链接，执行方和要研究员亲手做的事一并写上）、"
+                     "里程碑（研究任务走完一步、出了结论）",
                      "收到【需拍板】，请发来的 +2 写成决策包，不直接转问研究员",
                      "面向研究员最多写一行状态，不提问，不标“等研究员回答”，不复述已经登记过的决策",
-                     "“等研究员：<事项>（截止 <时间>）”", "补位请求（`route.py refill`）记在 `route.py pool` 里，研究员来谈时和研究员待办一起列出"):
+                     "补位请求（`route.py refill`）记在 `route.py pool` 里，研究员来谈时跟在决策清单后面列出；补位请求不算决策"):
             self.assertIn(part, entry)
         self.assertIn("研究员在本会话里拍板后，请书记员确认决策的“决定”这一步", entry)     # what follows the decision stays
         self.assertIn("入口要时汇总决策队列", texts["pmo-router.md"])
@@ -3884,12 +3885,10 @@ class DeliveryTextTest(PoolProjectCase):
         for part in ("被其他 agent 会话叫醒的轮次，研究员多半不在，不向研究员提问",
                      "其他会话发来的消息、本会话开出的会话结束一轮的回报、开会话时上级写的首轮",
                      "hook 会去掉收尾里的提问、拒绝 AskUserQuestion", "唯一的例外是插队决策的登记回执到入口的那一轮",
-                     "研究员待办（要研究员动手的事）记成阻塞", "再给入口 `PMO-p2-01` 发【通知】",
                      "hook 只拦两类事：会损坏数据的，和研究员多半不在时向他提的问题",
                      "池会话被其他 agent 会话叫醒的轮次：拒绝 AskUserQuestion，去掉收尾工具里的提问"):
             self.assertIn(part, claude)
         self.assertNotIn("收尾时不留等研究员回答的问题", claude)                  # the exception above would contradict it
-        self.assertIn("等研究员：<事项>（截止 <时间>）", texts["alg-p2.md"])
         for name in ("alg-p2.md", "alg-p1.md", "alg-p0.md"):
             self.assertIn("被其他 agent 会话叫醒的轮次", texts[name], name)
             self.assertIn("收尾里的提问 hook 会去掉", texts[name], name)
@@ -3903,6 +3902,127 @@ class DeliveryTextTest(PoolProjectCase):
         self.assertNotIn("下文略", text)                                         # the entry's role text is injected whole
         self.assertIn("**面向研究员的内容。**", text)
 
+    def test_what_the_researcher_does_by_hand_is_a_decision(self):
+        """2026-11-16: whatever needs the researcher is a decision; its package header says who carries it out
+        (执行方: 研究员 or a session) and what the researcher must do by hand (研究员要做的事). A decision goes
+        待决定 → 待执行 → 归档 (carried out): the scribe tells the 执行方 what was decided, and a session that
+        carries it out asks for the archive as soon as it is done. The entry tells the researcher about two
+        kinds of things only: decisions and milestones."""
+        texts = self.generated()
+        texts["org/decisions.md"] = self.read("org/decisions.md")
+        template = texts["templates/decision.md"] = self.read(".claude/solo-lab/templates/decision.md")
+        with open(os.path.join(ROOT, "skills", "packages", "assets", "decision.md"), encoding="utf-8") as f:
+            self.assertEqual(f.read(), template)
+        sources = dict(texts)                     # and what agents and the researcher read straight from the plugin
+        for rel in ("skills/entry/SKILL.md", "skills/entry/references/routing.md", "skills/entry/references/focus.md",
+                    "skills/ledger/SKILL.md", "skills/ledger/references/commands.md", "skills/packages/SKILL.md",
+                    "skills/packages/assets/decision.md", "skills/packages/references/examples.md",
+                    "skills/packages/references/principles.md", "skills/setup/references/mechanisms.md",
+                    "scaffold/hooks/inbox.py", "scripts/route.py"):
+            with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
+                sources[rel] = f.read()
+        with open(os.path.join(REPO, "docs", "使用说明.md"), encoding="utf-8") as f:
+            sources["docs/使用说明.md"] = f.read()
+        with open(os.path.join(REPO, "CHANGELOG.md"), encoding="utf-8") as f:
+            sources["CHANGELOG.md 1.0.3"] = f.read().split("\n## 1.0.3\n", 1)[1].split("\n## ", 1)[0]
+        to_do = "研究员" + "待办"                    # split so a grep for the old term finds none here
+        for name, text in sources.items():
+            for old in (to_do, "动手：", "等研究员：<事项>", "（截止 <时间>）", "带期限", "记成阻塞", "“等研究员：”开头", "已做：",
+                        "只有三类", "要做的事也做完了",
+                        # who carries a decision out follows its header, not the option picked
+                        "选定的做法", "某个选项下", "选的做法",
+                        # ... and its 执行方 line: neither 研究员要做的事 nor being the sender settles it
+                        "由发出方执行", "发出方办完", "不是“无”的，由研究员执行", "不是“无”的由研究员执行", "还要他亲手做",
+                        # 决定 is confirmed as soon as the researcher decides: no early comment, no confirming after the work
+                        "记下选了哪个选项", "选了还没做", "做完才确认", "做完以后才确认", "做完了才确认"):
+                self.assertNotIn(old, text, name)
+        for rel, part in (("skills/entry/SKILL.md", "执行方是研究员的（包头“执行方”写“研究员”，“研究员要做的事”写着要他亲手做什么），"
+                                                    "`query queue` 在它定了以后、归档以前把它列成“待执行”"),
+                          ("skills/entry/SKILL.md", "执行方是会话的，书记员确认“决定”时把决定内容发给它；它照决定执行完，马上请书记员归档，不在待执行里停留"),
+                          ("skills/entry/SKILL.md", "每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接"),
+                          ("skills/entry/references/routing.md", "研究员定了就确认“决定”，到“待执行”，书记员通知执行方；执行方是研究员的，研究员说做完了才归档；"
+                                                                 "执行方是会话的，它照决定执行完马上请书记员归档"),
+                          ("skills/entry/references/routing.md", "写上执行方和要研究员亲手做的事"),
+                          ("skills/ledger/SKILL.md", "输出的最后一行是“执行方：<研究员或会话名>。”"),
+                          ("skills/ledger/references/commands.md", "状态“<状态>”。”。决策确认了“决定”这一步"),
+                          ("skills/ledger/SKILL.md", "执行方是会话的，把决定内容发给它，请它照决定执行，执行完马上请书记员归档"),
+                          ("skills/ledger/SKILL.md", "执行方是研究员的（回执里 `executor` 是“研究员”；没有这一项的旧回执，`researcher_action` 有值的算研究员）"),
+                          ("skills/ledger/references/commands.md", "状态是“已决定”、执行方是研究员的也列，到归档为止。执行方看回执里的 `executor`；"
+                                                                   "没有这一项的旧回执，`researcher_action` 有值的算研究员"),
+                          ("skills/ledger/references/commands.md", "`stage`、`urgency`、`due`、`executor`、`researcher_action`、`doc`"),
+                          ("skills/packages/SKILL.md", "每份决策包都有这一行，没有要研究员亲手做的写“无”"),
+                          ("skills/packages/SKILL.md", "包头还有“执行方”一行：写“研究员”，或者执行这条决策的会话名，多半是发出方"),
+                          ("skills/packages/references/principles.md", "\n- 执行方：<决策定下以后由谁执行：研究员，或者执行它的会话名>\n- 研究员要做的事："),
+                          ("skills/setup/references/mechanisms.md", "决策包包头还多一行“执行方”，写“研究员”或者执行这条决策的会话名"),
+                          ("skills/setup/references/mechanisms.md", "升级前写好、还没登记的决策包草稿，补上这两行再登记"),
+                          ("scaffold/hooks/inbox.py", "每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接"),
+                          ("docs/使用说明.md", "每条一行：状态、事项、紧急程度、回复期限、执行方、要你亲手做的事、链接"),
+                          ("docs/使用说明.md", "补上这两行再登记"),
+                          ("CHANGELOG.md 1.0.3", "决策包包头新加两行：“执行方”写这条决策定下以后由谁执行"),
+                          ("CHANGELOG.md 1.0.3", "补上“执行方”和“研究员要做的事”两行再登记")):
+            self.assertIn(part, sources[rel], rel)
+        for name in ("CLAUDE.md", "pmo-p2.md", "org/org.md", "org/decisions.md", "templates/decision.md", "pmo-scribe.md",
+                     "pmo-router.md", "alg-p2.md"):
+            self.assertIn("研究员要做的事", texts[name], name)
+            self.assertIn("执行方", texts[name], name)
+        entry = texts["pmo-p2.md"]
+        for part in ("你主动给研究员的只有两类：决策（给链接，执行方和要研究员亲手做的事一并写上）、里程碑（研究任务走完一步、出了结论）",
+                     "再把待决定的决策和等研究员执行的决策全部附在末尾，之前提过的也附，每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接",
+                     "**决策的三个阶段。** 每条决策走三步：待决定、待执行、归档（已执行）；空间里的“已决定”就是待执行。"
+                     "研究员定了，照上面马上请书记员确认“决定”这一步，书记员会通知包头写的执行方，各会话就知道选了哪个选项",
+                     "执行方是研究员的：`ledger.py query queue` 在它定了以后、归档以前列成“待执行”",
+                     "登记请求里写“归档：#<决策 ID>，由 研究员 提出”，照抄他的原话，写明他做了什么，书记员记成评论再归档",
+                     "执行方是会话的，书记员把决定内容发给它，它照决定执行完，马上请书记员归档，不在待执行里停留",
+                     "执行方是你自己的（比如第 9 步的决策），你也照决定办完马上请书记员归档",
+                     "被决策卡住的工作项照旧记阻塞，阻塞原因写“等研究员：决策 #<ID>”，决策归档以后由卡住的那个 +2 请书记员清掉",
+                     "补位请求不算决策",
+                     # the table the router is asked for: the same columns as the entry skill and the router's role
+                     "请它汇总成表：每件写状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、选项、建议，“插队”的排最前。"):
+            self.assertIn(part, entry)
+        claude = texts["CLAUDE.md"]
+        for part in ("要研究员亲手做的事（整理数据、挂 API、维护沙箱、开 Docker、调设置这类）也是决策",
+                     "包头“执行方”写“研究员”，“研究员要做的事”写明要他做什么；",
+                     "每份决策包都有“执行方”和“研究员要做的事”这两行：执行方写“研究员”，或者执行这条决策的会话名，多半是发出方；"
+                     "“研究员要做的事”没有要研究员亲手做的写“无”，执行方是研究员时不能是“无”，执行方是会话时写“无”。",
+                     "每条决策走三步：待决定、待执行（空间里的“已决定”）、归档（已执行）。研究员定了，书记员马上确认“决定”这一步，并通知执行方",
+                     "执行方是会话的，照决定执行完，马上请书记员归档，不在待执行里停留；",
+                     "执行方是研究员的，他在入口会话说做完了，入口带着他的原话请书记员归档，书记员在评论里记下他做了什么。",
+                     "决策归档以后，卡住的那个 +2 请书记员清掉阻塞"):
+            self.assertIn(part, claude)
+        alg = texts["alg-p2.md"]
+        for part in ("也写决策包，写在包头“研究员要做的事”。每份决策包都有这一行，没有要研究员亲手做的写“无”。",
+                     "包头还有“执行方”一行，写这条决策定下以后由谁执行：“研究员”，或者执行它的会话名，多半是你自己。",
+                     "执行方是研究员时“研究员要做的事”不能是“无”，执行方是会话时写“无”，对不上包检查会退回。",
+                     "执行方是研究员的，他做完了，入口请书记员归档，再通知你",
+                     "被决策卡住的工作项，登记以后请书记员把阻塞原因写成“等研究员：决策 #<ID>”，这条决策归档以后再请它清掉",
+                     "执行方是你的，书记员把决定内容发给你，你照决定执行完，马上请书记员归档，不在待执行里停留"):
+            self.assertIn(part, alg)
+        self.assertNotIn("研究员要做的事", texts["alg-p1.md"])                    # only a +2 writes decision packages
+        self.assertIn("决策包的执行方写的是你时，书记员确认“决定”以后会把决定内容发给你：照决定执行完，马上请书记员归档，不在待执行里停留",
+                      texts["pmo-router.md"])
+        self.assertIn("状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事", texts["pmo-router.md"])
+        scribe = texts["pmo-scribe.md"]
+        self.assertIn("“决定”照上一条在研究员定了以后就确认，确认完通知执行方：输出的最后一行写着执行方，也就是决策包包头的“执行方”", scribe)
+        self.assertIn("另给执行方发一条 `【通知 #<决策 ID>】PMO-p0-01 → <执行方的会话名>：研究员定了：<决定内容>。"
+                      "照决定执行，执行完马上请书记员归档`", scribe)
+        self.assertIn("执行方是研究员的（包头“研究员要做的事”写着要他亲手做什么），不另发，入口按清单列给研究员；他做完了才归档", scribe)
+        self.assertIn("归档的登记请求要写“由 研究员 提出”，带研究员说做完了的原话", scribe)
+        self.assertIn("归档前先用 `ledger.py comment` 记下研究员做了什么", scribe)
+        decisions = texts["org/decisions.md"]
+        self.assertIn("每条决策走三步：待决定、待执行（空间里的“已决定”）、归档（已执行）。研究员定了，书记员就确认“决定”这一步，并通知执行方", decisions)
+        self.assertIn("决策包包头“执行方”写这条决策定下以后由谁执行，“研究员”或者执行它的会话名，多半是发出方", decisions)
+        self.assertIn("入口主动给研究员的内容只有决策（给链接，执行方和要研究员亲手做的事一并写上）和里程碑两类；补位请求不算决策。依据：研究员 2026-11-16 定。", decisions)
+        self.assertIn("执行方、定下以后研究员要做的事", texts["org/org.md"])        # the package table
+        for part in ("- 需要接收方做的事：拍板（决策队列）／确认记录无误（研究员主动发起）\n"
+                     "- 执行方：<研究员，或者执行这条决策的会话名，多半是发出方的会话名>\n"
+                     "- 研究员要做的事：<这条决策定下以后要研究员亲手做的事，比如整理数据、挂 API、维护沙箱、开 Docker、调设置；没有写“无”>\n",
+                     "每条决策走三步：待决定、待执行、归档（已执行）",
+                     "包检查要求决策包有这一行",
+                     "比如 `Alg-p2-01`，只写名字、不加说明。",
+                     "执行方是研究员时，“研究员要做的事”不能是“无”；执行方是会话时，“研究员要做的事”写“无”。"
+                     "缺了“执行方”这一行，或者两行对不上，包检查会退回。"):
+            self.assertIn(part, template)
+
     def test_a_decision_from_the_queue_is_mentioned_when_it_is_registered(self):
         path = os.path.join(self.tmp, "packages", "drafts", "alg", "q.md")
         with open(path, "w", encoding="utf-8") as f:
@@ -3911,9 +4031,20 @@ class DeliveryTextTest(PoolProjectCase):
         self.assertEqual((out["row"], out["next_hop"]), ("R5", "pmo-scribe"))
         steps = "\n".join(out["steps"])
         self.assertNotIn("每日", steps)
-        self.assertIn("登记回执到的那一轮，在状态里提一次", steps)
+        self.assertIn("登记回执到的那一轮，在状态里提一次：事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）、工作项链接", steps)
         self.assertIn("“插队”的，这一轮可以在收尾里问研究员一次", steps)
-        self.assertIn("研究员主动来谈时，连同其余待决定的决策列给他", steps)
+        self.assertIn("研究员主动来谈时，连同其余待决定的决策和等研究员执行的决策列给他", steps)
+        self.assertIn("研究员定了，书记员确认“决定”这一步，决策到“待执行”；书记员把决定内容发给执行方 Alg-p2-01，"
+                      "它照决定执行完，马上请书记员归档", steps)                    # the package's 执行方
+        with open(path, "w", encoding="utf-8") as f:                              # one the researcher carries out
+            f.write(example_blocks()[9])
+        steps = "\n".join(route.classify_draft(self.spec, self.tmp, path)["steps"])
+        self.assertIn("研究员定了，书记员确认“决定”这一步，决策到“待执行”；执行方是研究员，他说做完了，请书记员归档", steps)
+        with open(path, "w", encoding="utf-8") as f:                              # decided in a talk with Product-p2-01
+            f.write(example_blocks()[8])
+        out = route.classify_draft(self.spec, self.tmp, path)
+        self.assertEqual(out["row"], "R6")
+        self.assertIn("书记员把决定内容发给执行方 Product-p2-01，它照决定执行完，马上请书记员归档", out["steps"])
 
     def test_a_refill_request_waits_for_the_researcher(self):
         self.started_pool()
@@ -3921,7 +4052,7 @@ class DeliveryTextTest(PoolProjectCase):
         self.assertEqual(code, 0)
         self.assertIn("研究员来谈时入口会列出", text)
         inbox = self.read("inbox/PMO-p2-01.jsonl")
-        self.assertIn("研究员来谈时和研究员待办一起列出", inbox)
+        self.assertIn("研究员来谈时跟在决策清单后面列出，补位请求不算决策", inbox)
         self.assertNotIn("每日", inbox + text)
 
     def test_audit_counts_the_questions_hooks_took_out(self):

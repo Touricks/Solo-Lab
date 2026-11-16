@@ -17,7 +17,7 @@ description: 读写智能体组织的台账（飞书项目）和任务包文档�
 ```bash
 python3 -I .claude/solo-lab/bin/ledger.py get <工作项 ID>            # 类型、流程、状态、名称和有值的字段
 python3 -I .claude/solo-lab/bin/ledger.py next <工作项 ID>           # 走到哪一步、这一步谁负责、还缺什么
-python3 -I .claude/solo-lab/bin/ledger.py query queue               # 决策队列：待决定的决策，每行带紧急程度、回复期限和主文档链接
+python3 -I .claude/solo-lab/bin/ledger.py query queue               # 决策队列：待决定的决策，和研究员定了、执行方是研究员、还没归档的（标“待执行”），每行带紧急程度、回复期限、执行方、研究员要做的事和主文档链接
 python3 -I .claude/solo-lab/bin/ledger.py query blocked             # 阻塞原因非空的研究任务和需求，每行带阻塞原因和主文档链接
 python3 -I .claude/solo-lab/bin/ledger.py query verifying           # 待验收的同序列需求
 python3 -I .claude/solo-lab/bin/ledger.py query open --sequence alg # 进行中的同序列需求，只看算法序列
@@ -109,6 +109,7 @@ python3 -I .claude/solo-lab/bin/ledger.py confirm 2101 --by Alg-p2-01 --set 实�
 - 必填字段用 `--set` 传。之前已经用 `update` 或 `reply` 填好的不用再传；还缺什么，脚本问过空间以后列出来。
 - 脚本先做完全部核对，再写字段、确认节点，然后回读：节点要是已完成，并打印现在走到哪一步、什么状态。
 - 最后一步不用 `confirm`，用 `archive`。
+- 决策确认了“决定”这一步，输出的最后一行是“执行方：<研究员或会话名>。”，取自登记回执，也就是决策包包头的“执行方”。书记员接着通知执行方：执行方是会话的，把决定内容发给它，请它照决定执行，执行完马上请书记员归档；它就是这次的请求方的，写进回执，不另发。执行方是研究员的，不另发，入口按清单列给研究员。
 
 ### 回滚
 
@@ -134,6 +135,7 @@ python3 -I .claude/solo-lab/bin/ledger.py archive 2103
 - 脚本先把主文档整棵子树移到“归档文档/<序列>”下，移动的是原节点，文档链接不变；再确认最后一步，回读状态是“归档”。
 - 没有这个序列的归档节点会停下，先跑 `ensure-node archive/<序列标识>`。
 - 文档移好了、节点没确认成的，修好后跑 `archive <ID> --moved`，只确认最后一步。
+- 决策归档表示执行完了。执行方是会话的，它照决定执行完马上来请归档。执行方是研究员的（回执里 `executor` 是“研究员”；没有这一项的旧回执，`researcher_action` 有值的算研究员），归档的登记请求要写“由 研究员 提出”，带他说做完了的原话；归档前先 `comment` 记下他做了什么。
 
 ## 确认之前脚本自己核对什么
 

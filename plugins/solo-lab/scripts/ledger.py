@@ -5,8 +5,11 @@ Read commands, for every session:
     ledger.py get <ID> [--raw]              type, state, flow, name and the fields that have a value
     ledger.py next <ID>                     the step the item is at: who is responsible, what is still to fill in
     ledger.py query <name> [--sequence s]   queue | blocked | verifying | open | cross | tasks | recent | source:<ID>;
-                                            queue also shows 紧急程度, blocked 阻塞原因, both the main document
-                                            and (a decision) 回复期限 kept in the registration receipt
+                                            queue: the decisions waiting on the researcher, each with its stage
+                                            (待决定, or 待执行 while the researcher, its 执行方, has still to
+                                            carry it out) and 紧急程度; blocked with 阻塞原因; both with the
+                                            main document, and a decision's 回复期限, 执行方 and 研究员要做的事,
+                                            kept in the registration receipt
     ledger.py mql <name> [--sequence s]     print the MQL only
     ledger.py trace <ID>                    follow 来源工作项 upwards
     ledger.py status <ID>                   print the 状态包 section of the main document
@@ -74,7 +77,7 @@ import space  # noqa: E402
 
 # name: (type slot, state slots to keep or None, state slots to leave out, extra condition or None, description)
 QUERIES = {
-    "queue": ("decision", ["pending"], [], None, "决策队列：待决定的决策"),
+    "queue": ("decision", ["pending", "decided"], [], None, "决策队列：待决定的决策，和研究员定了、执行方是研究员、还没归档的决策"),
     "verifying": ("same_seq", ["verifying"], [], None, "待验收的同序列需求"),
     "open": ("same_seq", None, ["accepted", "archived"], None, "进行中的同序列需求"),
     "cross": ("cross_request", None, ["accepted", "archived"], None, "进行中的跨序列需求"),
@@ -933,25 +936,48 @@ def receipt_path(lg, path, item_id):
 URGENT = "插队"              # the 紧急程度 of a decision that jumps the queue
 
 
+def researcher_action(d):
+    """A decision package's 研究员要做的事: what the researcher must do by hand once it is decided, as
+    the header wrote it, also when it opens with a bracket (（本周内）…). None when it says 无 (无。 or 无，…
+    too: orgspec.SAYS_NOTHING); the package check sends other ways of writing nothing back."""
+    value = (d.header.get(orgspec.RESEARCHER_ACTION) or "").strip()
+    return None if not value or orgspec.SAYS_NOTHING.match(value) else value
+
+
 def receipt_kind(spec, wid, d):
     """What the receipt says the registration was, for the inbox hook of the session the
     【登记回执】 reaches: the work item type, whether a decision waits in the decision queue and
-    whether it jumps it. A decision's 回复期限 has no field in the space; it is kept here as the
-    package header wrote it, for `query queue`."""
+    whether it jumps it. A decision's 回复期限, 执行方 and 研究员要做的事 have no field in the space;
+    they are kept here as the package header wrote them, for `query queue` and `confirm`. executor is
+    研究员 or the session's name; researcher_action is null when the header says 无, which the package
+    check allows only when a session carries the decision out. A receipt without the keys is older than
+    those header lines: carried_out_by."""
     if wid != "decision":
         return {"type": wid, "queue": False, "urgent": False}
     urgency = (d.header.get("紧急程度") or "").strip()
     return {"type": wid, "queue": (d.header.get("渠道") or "").strip() == spec.term("channel", "queue"),
             "urgent": "/" not in urgency and re.split(r"[\s（(，,。；;]", urgency, 1)[0] == URGENT,
-            "due": (d.header.get("回复期限") or "").strip() or None}
+            "due": (d.header.get("回复期限") or "").strip() or None,
+            "executor": orgspec.executor_of(spec, d.header.get(orgspec.EXECUTOR)), "researcher_action": researcher_action(d)}
 
 
-def save_receipt(lg, path, item_id, status, **extra):
+def carried_out_by(rec, sender=None):
+    """Who carries out the decision a registration receipt is for: the executor it keeps (研究员 or a
+    session's name). A receipt older than the 执行方 line goes by researcher_action: something for the
+    researcher to do by hand makes it 研究员; otherwise the sender carries it out, as it did before
+    (sender: the work item's 发出方, when known)."""
+    if rec.get("executor"):
+        return rec["executor"]
+    return RESEARCHER if rec.get("researcher_action") else sender
+
+
+def save_receipt(lg, path, item_id, status, kind=None, **extra):
     """packages/sent/<ID>.json: written right after the work item exists, updated as steps finish.
 
     Keeps what a --resume needs: the source, the --set pairs, and the document as
     soon as it exists (docx), then its /wiki/ link (doc). register also writes what the
-    registration was (receipt_kind: type, queue, urgent, a decision's due); the inbox hook reads it.
+    registration was (kind, from receipt_kind: type, queue, urgent, a decision's due, executor and
+    researcher_action), nulls included; the inbox hook, `query queue` and `confirm` read it.
     """
     if lg.mode != "apply":
         return
@@ -963,6 +989,7 @@ def save_receipt(lg, path, item_id, status, **extra):
         rec = {}
     rec.update({"draft": rel, "work_item_id": item_id, "status": status, "updated_at": now()})
     rec.update({k: v for k, v in extra.items() if v is not None})
+    rec.update(kind or {})
     save_json(target, rec)
 
 
@@ -1287,13 +1314,13 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
     if rec:
         item_id = rec["work_item_id"]
         print(("给 #%s 换研究任务单。" if swap else "接着上次的 #%s 做。") % item_id)
-        save_receipt(lg, path, item_id, "created", pairs=pairs,               # values given on --resume too
-                     existing=rec.get("existing"), replaced=rec.get("replaced"), **kinds)
+        save_receipt(lg, path, item_id, "created", kinds, pairs=pairs,        # values given on --resume too
+                     existing=rec.get("existing"), replaced=rec.get("replaced"))
     else:
         created = lg.meegle("workitem", "create", "--work-item-type", lg.api(wid), "--fields",
                             json.dumps(fields, ensure_ascii=False), write=True)
         item_id = created_id(created, spec.term("wi", wid)) if created is not None else "<新工作项 ID>"
-        save_receipt(lg, path, item_id, "created", source=source, task=task, pairs=resolved_pairs(lg, pairs), **kinds)
+        save_receipt(lg, path, item_id, "created", kinds, source=source, task=task, pairs=resolved_pairs(lg, pairs))
     title = title.replace("<工作项 ID>", item_id)
 
     state = {}
@@ -1864,6 +1891,10 @@ def confirm(lg, item_id, by=None, pairs=None, node=None, decision=None, wid_hint
             item_id, cur["name"], "、".join(n["name"] for n in doing) or "流程末尾", state))
         for n in doing:                                    # the scribe tells whoever the next step belongs to
             print("“%s”这一步的负责方：%s。" % (n["name"], responsible(lg, wid, it, n)[0]))
+        if wid == "decision" and state == lg.state(wid, "decided"):   # and the decision's 执行方 what was decided
+            who = carried_out_by(receipt_of(lg, item_id), lg.text_of(it, "sender"))
+            if who:
+                print("执行方：%s。" % who)
     else:
         print("预览：会确认 #%s 的“%s”（%s）。" % (item_id, cur["name"], cur["key"]))
 
@@ -2256,9 +2287,18 @@ def _select(lg, wid, cond, extra=()):
 
 
 # Fields a named query shows besides ID, state and name (blocked shows blocked_reason), and how they are
-# labelled. The entry reads them when the researcher comes back: 等研究员： in the reason is a to-do.
+# labelled. The entry lists query queue when the researcher comes back, each decision with who carries
+# it out and what the researcher must do by hand.
 QUERY_FIELDS = {"queue": ("urgency",)}
-SHOWN = (("urgency", "紧急程度"), ("due", "回复期限"), ("blocked_reason", "阻塞原因"), ("doc", "主文档"))
+SHOWN = (("urgency", "紧急程度"), ("due", "回复期限"), ("executor", orgspec.EXECUTOR),
+         ("researcher_action", orgspec.RESEARCHER_ACTION), ("blocked_reason", "阻塞原因"), ("doc", "主文档"))
+# A decision goes through three stages (the researcher, 2026-11-16): 待决定; 待执行, which is the space's
+# 已决定 (the scribe confirms 决定 as soon as the researcher decides and tells the 执行方, so every session
+# knows the choice); 归档, which means it was carried out. The package header's 执行方 carries it out: the
+# researcher, or a session, which asks the scribe to archive it as soon as it is done. query queue shows
+# the stage in place of the state: every decision 待决定, and a decided one only while the researcher has
+# still to carry it out.
+STAGES = {"pending": "待决定", "decided": "待执行"}
 
 
 def receipt_of(lg, item_id):
@@ -2274,7 +2314,11 @@ def receipt_of(lg, item_id):
 
 def shown_fields(lg, name, rows):
     """Rows of the named queries queue and blocked, with their extra cells under the slot's name and
-    what the registration receipt kept: the main document's link, and a decision's 回复期限."""
+    what the registration receipt kept: the main document's link, and a decision's 回复期限; queue
+    also a decision's 执行方 (carried_out_by: on a receipt older than that line, 研究员 when the
+    researcher has something to do, nothing otherwise), its 研究员要做的事 (无 when the receipt says
+    null, nothing on an older receipt) and its stage (STAGES). A decided one that a session carries out
+    is left out of queue."""
     if name not in ("queue", "blocked"):
         return rows
     slots = {}
@@ -2283,6 +2327,8 @@ def shown_fields(lg, name, rows):
             key = lg.key_of(wid, slot)
             if key:
                 slots[key] = slot
+    decided = lg.state("decision", "decided") if name == "queue" else None
+    out = []
     for r in rows:
         for key in [k for k in r if k in slots]:
             r[slots[key]] = r.pop(key)
@@ -2290,7 +2336,17 @@ def shown_fields(lg, name, rows):
         for key in ("due", "doc"):
             if rec.get(key) and key not in r:
                 r[key] = rec[key]
-    return rows
+        if name == "queue":
+            who = carried_out_by(rec)
+            if r.get("work_item_status") == decided and who != RESEARCHER:
+                continue
+            r["stage"] = STAGES["decided" if r.get("work_item_status") == decided else "pending"]
+            if who:
+                r["executor"] = who
+            if "researcher_action" in rec:
+                r["researcher_action"] = rec["researcher_action"] or orgspec.NOTHING
+        out.append(r)
+    return out
 
 
 def query_rows(data):
@@ -2389,7 +2445,7 @@ def query(lg, name, sequence=None, as_json=False):
         for r in rows:
             extra = "".join("  %s：%s" % (label, r[key] if isinstance(r[key], str) else plain(r[key]))
                             for key, label in SHOWN if r.get(key) not in (None, "", [], {}))
-            print("#%s  %s  %s%s" % (r.get("work_item_id"), r.get("work_item_status", ""), r.get("name", ""), extra))
+            print("#%s  %s  %s%s" % (r.get("work_item_id"), r.get("stage") or r.get("work_item_status", ""), r.get("name", ""), extra))
         if lg.mode != "offline":
             print("共 %d 项。" % len(rows))
     return rows

@@ -136,14 +136,19 @@ def classify_draft(spec, root, path):
     to_seq = d.receiver_seq
     notice = spec.term("msg", "notice")
     if d.pid == "decision":
+        who = orgspec.executor_of(spec, d.header.get(orgspec.EXECUTOR))
+        carry = ("执行方是研究员，他说做完了，请书记员归档" if who == orgspec.RESEARCHER
+                 else "书记员把决定内容发给执行方 %s，它照决定执行完，马上请书记员归档" % who)
         if d.header.get("渠道") == spec.term("channel", "researcher"):
             tell = "给“受影响的工作项”的负责会话发消息【%s #ID】；显示“研究员在用”的改用 route.py notify 留言" % notice
             return result(spec, "R6", "研究员主动发起的决策包", next_hop="pmo-scribe",
-                          steps=["书记员 register 后确认“决定”这一步，填决定内容和决定人", tell])
+                          steps=["书记员 register 后确认“决定”这一步，填决定内容和决定人", carry, tell])
         return result(spec, "R5", "决策队列来的决策包", next_hop="pmo-scribe",
                       steps=["书记员 register，停在“待决定”",
-                             "登记回执到的那一轮，在状态里提一次：事项、选项一句话、工作项链接；紧急程度为“插队”的，这一轮可以在收尾里问研究员一次",
-                             "研究员主动来谈时，连同其余待决定的决策列给他"])
+                             "登记回执到的那一轮，在状态里提一次：事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）、工作项链接；"
+                             "紧急程度为“插队”的，这一轮可以在收尾里问研究员一次",
+                             "研究员主动来谈时，连同其余待决定的决策和等研究员执行的决策列给他",
+                             "研究员定了，书记员确认“决定”这一步，决策到“待执行”；" + carry])
     route = next((r for r in spec.rules["package_routes"] if r["pkg"] == d.pid and (r["rel"] or None) == d.rel), None)
     steps, hop = [], None
     if d.pid == "request" and d.rel == "cross":
@@ -868,7 +873,7 @@ def refill_cmd(spec, root, role, count=1):
     pool.log_event(root, {"event": "refill", "role": role, "count": count, "by": by})
     entry = policy["agents"][policy["entry_role"]].get("fixed_session") or "PMO-p2-01"
     append_inbox(root, entry, {"id": uuid.uuid4().hex[:12], "ts": now(), "from": by, "read": False,
-                               "text": "补位请求：%s 再开 %d 个会话。研究员来谈时和研究员待办一起列出，研究员在%s的会话里说“补位”时开。" % (
+                               "text": "补位请求：%s 再开 %d 个会话。研究员来谈时跟在决策清单后面列出，补位请求不算决策；研究员在%s的会话里说“补位”时开。" % (
                                    role, count, opener(policy, role, "那个序列"))})
     print("已记补位请求：%s ×%d，研究员来谈时入口会列出。现在不开会话，也不提卡片。新会话认领后这条请求自动销掉。" % (role, count))
     return 0
