@@ -36,11 +36,26 @@ STATE_OF = {
     ("research_task", "archive"): "已结束",
 }
 DONE = "归档"
+# What template 2.2.0 changed on the decision type: two text fields the view 待定决策 shows, off the new-item page
+# so without an alias (the field keys are made up), and the state 已决定 renamed 待执行, its id kept.
+FIELDS_220 = (("field_d22001", "执行方"), ("field_d22002", "研究员要做的事"))
 
 
 def snapshot():
     with open(os.path.join(V2, "space.json"), encoding="utf-8") as f:
         return json.load(f)
+
+
+def template_220(snap=None):
+    """The structure of a space made from template 2.2.0: the reference template's, with the decision type as
+    2.2.0 changed it."""
+    snap = copy.deepcopy(snap or snapshot())
+    t = next(t for t in snap["types"].values() if t.get("api_name") == "decision")
+    for s in t["states"]:
+        if s["name"] == "已决定":
+            s["name"] = "待执行"
+    t["fields"] += [{"field_key": key, "name": name, "field_type": "text"} for key, name in FIELDS_220]
+    return snap
 
 
 def bound_ids(snap=None, spec=None, space_name=None):
@@ -87,6 +102,12 @@ class FakeSpace:
         self.next_id, self.clock = 7160000001, 1794400000000
         self.lag = 0                       # operation records younger than this many ms are not listed yet
         self.moved = []
+        # STATE_OF names the states of the reference template. A status rule points at a state, not at its name,
+        # so a state this space renamed (its id kept) shows its new name: (type_key, name there) -> name here.
+        base, self.renamed = snapshot(), {}
+        for key, t in self.snap["types"].items():
+            was = {s["id"]: s["name"] for s in (base["types"].get(key) or {}).get("states") or []}
+            self.renamed.update({(key, was[s["id"]]): s["name"] for s in t["states"] if was.get(s["id"]) not in (None, s["name"])})
 
     # ------------------------------------------------------------ helpers
     def tick(self, ms=1000):
@@ -108,8 +129,10 @@ class FakeSpace:
             return "已终止"
         doing = [n for n in item["nodes"] if n["status"] == "doing"]
         if not doing:
-            return DONE if all(n["status"] == "finished" for n in item["nodes"]) else "开始"
-        return STATE_OF.get((t["api_name"], doing[0]["key"]), doing[0]["name"])
+            name = DONE if all(n["status"] == "finished" for n in item["nodes"]) else "开始"
+        else:
+            name = STATE_OF.get((t["api_name"], doing[0]["key"]), doing[0]["name"])
+        return self.renamed.get((item["type_key"], name), name)
 
     def record(self, item, module, kind, obj_type, obj, old=None, new=None, extra=None):
         self.ops.append({"op_record_module": module, "operation_time": self.tick(10), "operation_type": kind,

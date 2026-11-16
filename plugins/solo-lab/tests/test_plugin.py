@@ -48,6 +48,15 @@ def example_blocks():
         return re.findall(r"```markdown\n(.*?)\n```", f.read(), re.S)
 
 
+def repo_walk(skip=()):
+    """os.walk over the repository without .git, __pycache__, the directories named in skip, and checkouts that
+    sit inside it: a directory with a .git of its own (a git worktree has a .git file) is another working tree."""
+    for base, dirs, files in os.walk(REPO):
+        dirs[:] = [d for d in dirs if d not in (".git", "__pycache__") + tuple(skip)
+                   and not os.path.exists(os.path.join(base, d, ".git"))]
+        yield base, dirs, files
+
+
 def fixture(name):
     with open(os.path.join(FIX, name), encoding="utf-8") as f:
         return json.load(f)
@@ -141,9 +150,9 @@ class RulesTest(unittest.TestCase):
         # These files describe what the live space is called today, so old names are expected there.
         allowed = {"terms.zh.json", "rules.json", "structure.md", "test_plugin.py"}
         hits = []
-        for base, _, files in os.walk(REPO):
-            # .git and the recorded Feishu outputs keep the names the live space uses
-            if "/.git" in base or "/fixtures" in base:
+        for base, _, files in repo_walk():
+            # the recorded Feishu outputs keep the names the live space uses
+            if "/fixtures" in base:
                 continue
             for name in files:
                 if name in allowed or not name.endswith((".md", ".json", ".tmpl", ".py")):
@@ -260,6 +269,16 @@ class DecisionsFileTest(ProjectCase):
             ["被其他 agent 会话叫醒的轮次，池会话都不向研究员提问，只有插队决策的登记回执到入口的那一轮，入口可以在收尾里问一次：其余收尾里的提问由 hook 去掉，AskUserQuestion 一律拒绝。依据：研究员 2026-11-15 定。",
              "要研究员亲手做的事（整理数据、挂 API、维护沙箱、开 Docker、调设置这类）也是决策：决策包包头“执行方”写这条决策定下以后由谁执行，“研究员”或者执行它的会话名，多半是发出方；“研究员要做的事”写要研究员亲手做的事，没有写“无”，执行方是研究员时不能是“无”，执行方是会话时写“无”。每条决策走三步：待决定、待执行（空间里的“已决定”）、归档（已执行）。研究员定了，书记员就确认“决定”这一步，并通知执行方；执行方是会话的，照决定执行完马上请书记员归档，执行方是研究员的，他说做完了才归档。入口主动给研究员的内容只有决策（给链接，执行方和要研究员亲手做的事一并写上）和里程碑两类；补位请求不算决策。依据：研究员 2026-11-16 定。"])
 
+    # The section's list as 1.0.4 wrote it: 1.0.3's, then the list of irreversible actions and the expiry time.
+    V104 = V103 + [
+        "不可逆事项清单是插件的 orgspec/irreversible.json，随 org/org.md 生成：每一类都落到能机械检查的对象上，命令、路径或包的类型，落不到的不进清单；"
+        "数据一类收窄到任务文件登记的受保护路径。受保护路径以外的类别，要有研究员批准、在所选选项里列了它的决策才能做，书记员确认“决定”时按研究员选的选项"
+        "写进本地决策状态 `.claude/state/gates.json`；能用命令或路径识别的类别由 hook 按它放行，花钱、付费运行的条件靠包检查和预算规则；受保护路径不走决策放行。"
+        "决策待定期间，包里“冻结的动作”谁都不做。可逆的决策到期没定，书记员按包头的到期默认动作记成决定，决定内容以“到期默认：”开头，到期默认从不放行清单里的类别；"
+        "不可逆的、执行方是研究员的决策一直等研究员，不提醒截止。包头的回复期限只作参考。修订决策用 ledger.py revise 原位换掉主文档开头，版本号加一，不推给研究员。"
+        "依据：研究员 2026-11-16 定。",
+        "可逆决策的到期时长：登记后 24 小时。研究员可以改这一行的数字，台账脚本按这一行算，读不到时按 24 小时算。依据：研究员 2026-11-16 定。"]
+
     def path(self):
         return os.path.join(self.tmp, "org", "decisions.md")
 
@@ -311,6 +330,23 @@ class DecisionsFileTest(ProjectCase):
         new_start, new_end = setup.section_span(after, setup.PLUGIN_SECTION)
         self.assertEqual((after[:new_start], after[new_end:]), (before[:start], before[end:]))
         self.assertEqual(ledger.expiry_hours(self.tmp), (24, "org/decisions.md", None))
+
+    def test_the_section_1_0_4_wrote_is_refreshed_in_place(self):
+        """1.0.5 names the decision's decided state 待执行 (template 2.2.0) and says what spaces made from 2.1.0 or
+        earlier call it: a project from 1.0.4 gets the new wording in place, the researcher's own decisions kept."""
+        old = setup.render(setup.scaffold("org/decisions.md.tmpl"), {"deviations": setup.bullets(self.V104)})
+        self.assertEqual(setup.PLUGIN_SECTIONS.get(setup.sha256(setup.squeeze(self.section(old)))), "1.0.4")
+        before = self.write(self.V104)
+        kind, out = self.init()
+        self.assertEqual(kind, "update")
+        after = self.text()
+        self.assertEqual(self.section(after), self.current_section())
+        self.assertNotIn("空间里的“已决定”", after)
+        self.assertIn("每条决策走三步：待决定、待执行（用 2.1.0 及以前的模板建的空间里叫“已决定”）、归档（已执行）。", after)
+        start, end = setup.section_span(before, setup.PLUGIN_SECTION)
+        new_start, new_end = setup.section_span(after, setup.PLUGIN_SECTION)
+        self.assertEqual((after[:new_start], after[new_end:]), (before[:start], before[end:]))
+        self.assertIn("## 补充决定\n\n" + self.MINE, after)
 
     def test_the_section_an_earlier_init_wrote_is_refreshed_in_place(self):
         before = self.write(self.OLD)
@@ -1208,8 +1244,7 @@ class SpecAndRoutingTest(ProjectCase):
             "τ-" + "bench", "评审" + "会话"]))
         work_item = re.compile("#?715[0-9]{7}")
         hits = []
-        for base, dirs, files in os.walk(REPO):
-            dirs[:] = [d for d in dirs if d not in (".git", "__pycache__")]
+        for base, dirs, files in repo_walk():
             for name in files:
                 path = os.path.join(base, name)
                 if os.path.samefile(path, __file__) or not name.endswith((".md", ".json", ".tmpl", ".py", ".txt")):
@@ -1239,8 +1274,7 @@ class SpecAndRoutingTest(ProjectCase):
         earlier = "(?<!当)" + "前" + "文"         # a pointer to earlier text; “当前文件” is not one
         pattern = re.compile("|".join([earlier] + [re.escape(w) for w in words + sorted(set(keys))]))
         hits = []
-        for base, dirs, files in os.walk(REPO):
-            dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", "tests")]
+        for base, dirs, files in repo_walk(skip=("tests",)):
             for name in files:
                 if not name.endswith((".md", ".json", ".tmpl", ".py", ".txt")):
                     continue
@@ -1343,6 +1377,15 @@ class ReadmeTest(unittest.TestCase):
             version = json.load(f)["version"]
         for name in ("README.md", "README.en.md"):
             self.assertIn("v" + version, self.read(name), "%s 里没有 v%s" % (name, version))
+
+    def test_the_template_readme_names_the_contracts_template(self):
+        """The template's README and the contract name the same template as the current one; the README keeps the
+        older template's link for older plugins after it."""
+        t = orgspec.Contract(orgspec.OrgSpec()).template
+        text = self.read(os.path.join("feishu-template", "README.md"))
+        self.assertIn("| 模板版本 | %s |" % t["version"], text)
+        row = next(line for line in text.splitlines() if line.startswith("| 模板中心链接 |"))
+        self.assertTrue(row.startswith("| 模板中心链接 | <%s>，模板名“%s”" % (t["url"], t["name"])), row)
 
 
 class FeishuDocsTest(ProjectCase):
@@ -3984,7 +4027,9 @@ class DeliveryTextTest(PoolProjectCase):
                         # ... and its 执行方 line: neither 研究员要做的事 nor being the sender settles it
                         "由发出方执行", "发出方办完", "不是“无”的，由研究员执行", "不是“无”的由研究员执行", "还要他亲手做",
                         # 决定 is confirmed as soon as the researcher decides: no early comment, no confirming after the work
-                        "记下选了哪个选项", "选了还没做", "做完才确认", "做完以后才确认", "做完了才确认"):
+                        "记下选了哪个选项", "选了还没做", "做完才确认", "做完以后才确认", "做完了才确认",
+                        # 1.0.5: 待执行 is the state's name (template 2.2.0); only spaces from 2.1.0 or earlier call it 已决定
+                        "空间里的“已决定”", "飞书项目里的“已决定”"):
                 self.assertNotIn(old, text, name)
         for rel, part in (("skills/entry/SKILL.md", "执行方是研究员的（包头“执行方”写“研究员”，“研究员要做的事”写着要他亲手做什么），"
                                                     "`query queue` 在它定了以后、归档以前把它列成“待执行”"),
@@ -3997,7 +4042,7 @@ class DeliveryTextTest(PoolProjectCase):
                           ("skills/ledger/references/commands.md", "状态“<状态>”。”。决策确认了“决定”这一步"),
                           ("skills/ledger/SKILL.md", "执行方是会话的，把决定内容发给它，请它照决定执行，执行完马上请书记员归档"),
                           ("skills/ledger/SKILL.md", "执行方是研究员的（回执里 `executor` 是“研究员”；没有这一项的旧回执，`researcher_action` 有值的算研究员）"),
-                          ("skills/ledger/references/commands.md", "状态是“已决定”、执行方是研究员的也列，到归档为止。执行方看回执里的 `executor`；"
+                          ("skills/ledger/references/commands.md", "状态是“待执行”（用 2.1.0 及以前的模板建的空间里叫“已决定”）、执行方是研究员的也列，到归档为止。执行方看回执里的 `executor`；"
                                                                    "没有这一项的旧回执，`researcher_action` 有值的算研究员"),
                           ("skills/ledger/references/commands.md", "`stage`、`urgency`、`due`、`executor`、`researcher_action`、`doc`"),
                           ("skills/packages/SKILL.md", "每份决策包都有这一行，没有要研究员亲手做的写“无”"),
@@ -4018,7 +4063,7 @@ class DeliveryTextTest(PoolProjectCase):
         entry = texts["pmo-p2.md"]
         for part in ("你主动给研究员的只有两类：决策（给链接，执行方和要研究员亲手做的事一并写上）、里程碑（研究任务走完一步、出了结论）",
                      "再把待决定的决策和等研究员执行的决策全部附在末尾，之前提过的也附，每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接",
-                     "**决策的三个阶段。** 每条决策走三步：待决定、待执行、归档（已执行）；空间里的“已决定”就是待执行。"
+                     "**决策的三个阶段。** 每条决策走三步：待决定、待执行（用 2.1.0 及以前的模板建的空间里叫“已决定”）、归档（已执行）。"
                      "研究员定了，照上面马上请书记员确认“决定”这一步，书记员会通知包头写的执行方，各会话就知道选了哪个选项",
                      "执行方是研究员的：`ledger.py query queue` 在它定了以后、归档以前列成“待执行”",
                      "登记请求里写“归档：#<决策 ID>，由 研究员 提出”，照抄他的原话，写明他做了什么，书记员记成评论再归档",
@@ -4035,7 +4080,7 @@ class DeliveryTextTest(PoolProjectCase):
                      "包头“执行方”写“研究员”，“研究员要做的事”写明要他做什么；",
                      "每份决策包都有“执行方”和“研究员要做的事”这两行：执行方写“研究员”，或者执行这条决策的会话名，多半是发出方；"
                      "“研究员要做的事”没有要研究员亲手做的写“无”，执行方是研究员时不能是“无”，执行方是会话时写“无”。",
-                     "每条决策走三步：待决定、待执行（空间里的“已决定”）、归档（已执行）。研究员定了，书记员马上确认“决定”这一步，并通知执行方",
+                     "每条决策走三步：待决定、待执行（用 2.1.0 及以前的模板建的空间里叫“已决定”）、归档（已执行）。研究员定了，书记员马上确认“决定”这一步，并通知执行方",
                      "执行方是会话的，照决定执行完，马上请书记员归档，不在待执行里停留；",
                      "执行方是研究员的，他在入口会话说做完了，入口带着他的原话请书记员归档，书记员在评论里记下他做了什么。",
                      "决策归档以后，卡住的那个 +2 请书记员清掉阻塞"):
@@ -4060,7 +4105,7 @@ class DeliveryTextTest(PoolProjectCase):
         self.assertIn("归档的登记请求要写“由 研究员 提出”，带研究员说做完了的原话", scribe)
         self.assertIn("归档前先用 `ledger.py comment` 记下研究员做了什么", scribe)
         decisions = texts["org/decisions.md"]
-        self.assertIn("每条决策走三步：待决定、待执行（空间里的“已决定”）、归档（已执行）。研究员定了，书记员就确认“决定”这一步，并通知执行方", decisions)
+        self.assertIn("每条决策走三步：待决定、待执行（用 2.1.0 及以前的模板建的空间里叫“已决定”）、归档（已执行）。研究员定了，书记员就确认“决定”这一步，并通知执行方", decisions)
         self.assertIn("决策包包头“执行方”写这条决策定下以后由谁执行，“研究员”或者执行它的会话名，多半是发出方", decisions)
         self.assertIn("入口主动给研究员的内容只有决策（给链接，执行方和要研究员亲手做的事一并写上）和里程碑两类；补位请求不算决策。依据：研究员 2026-11-16 定。", decisions)
         self.assertIn("执行方、定下以后研究员要做的事", texts["org/org.md"])        # the package table

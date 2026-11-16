@@ -367,7 +367,7 @@ class RegisterTest(LedgerCase):
 
     def test_a_decision_the_researcher_carries_out(self):
         """2026-11-16: what the researcher must do by hand is a decision; its package header says so: 执行方
-        研究员, and the work in 研究员要做的事. It goes 待决定 → 待执行 (the space's 已决定, confirmed as soon as
+        研究员, and the work in 研究员要做的事. It goes 待决定 → 待执行 (已决定 in this space, made from template 2.1.0; confirmed as soon as
         the researcher decides) → 归档 (carried out), and query queue lists it until it is archived. The stuck
         work item names it in its blocked reason."""
         text = example(BY_HAND)
@@ -576,6 +576,76 @@ class RegisterTest(LedgerCase):
         self.assertEqual(len(self.fake.items), 1)
         self.assertTrue(self.value(item_id, "research_task", "main_doc").startswith("https://example.feishu.cn/wiki/"))
         self.assertIn("不要重复登记", self.fails(ledger.register, self.lg(), path))
+
+
+class Template220Test(LedgerCase):
+    """Template 2.2.0 (plugin 1.0.5) gave the decision two text fields, 执行方 and 研究员要做的事, which its view
+    待定决策 shows and picks the researcher's decisions by, and renamed the state 已决定 to 待执行. The two fields are
+    no contract slots: register and revise write the package header's two lines into them by name where the space
+    has them. A space made from 2.1.0 or earlier (the fake space by default) has neither and keeps 已决定."""
+
+    def use_220(self):
+        snap = fake_space.template_220()
+        fake_space.install(self.tmp, snap)
+        self.fake = fake_space.FakeSpace(snap)
+
+    def fields(self, item_id):
+        """(执行方, 研究员要做的事) as the work item holds them; None where it holds nothing."""
+        held = self.fake.item(item_id)["fields"]
+        return tuple(held.get(key) for key, _ in fake_space.FIELDS_220)
+
+    def test_the_two_header_lines_go_into_their_fields(self):
+        self.use_220()
+        task = self.task()
+        hand, out = self.out(ledger.register, self.lg(), self.draft(BY_HAND, "hand.md"))
+        self.assertNotIn("跳过字段", out)
+        self.assertEqual(self.fields(hand), ("研究员", API_KEY))                  # what the view filters by: 执行方 = 研究员
+        named = lambda t: t.replace("- 执行方：Alg-p2-01\n", "- 执行方：算法 +2（Alg-p2-01）\n")
+        other = self.quiet(ledger.register, self.lg(), self.draft(DECISION, "q.md", edit=named))
+        self.assertEqual(self.fields(other), ("Alg-p2-01", "无"))                # the session's name, as the receipt keeps it
+        self.assertEqual(self.receipt(other)["executor"], "Alg-p2-01")
+        lg = self.lg()                                                            # a --set value for one of them wins
+        given = self.quiet(ledger.register, lg, self.draft(DECISION, "s.md"), pairs=["研究员要做的事=无，Alg-p2-01 自己改协议"])
+        created = json.loads(lg.wrote("workitem", "create")[0][lg.wrote("workitem", "create")[0].index("--fields") + 1])
+        self.assertEqual([f["field_value"] for f in created if f["field_key"] == fake_space.FIELDS_220[1][0]], ["无，Alg-p2-01 自己改协议"])
+        self.assertEqual(self.fields(given), ("Alg-p2-01", "无，Alg-p2-01 自己改协议"))
+        # decided: 待执行 is the state's name in this space, and the stages and the signature check go by it
+        self.assertIn("`work_item_status` IN ('待决定', '待执行')", ledger.mql_text(self.lg("offline"), "queue")[0])
+        _, out = self.out(ledger.confirm, self.lg(), hand, "研究员", ["决定内容=每天上限 30 美元", "决定人=研究员"], option="每天 30 美元")
+        self.assertIn("状态“待执行”", out)
+        self.assertEqual(out.splitlines()[-1], "执行方：研究员。")
+        self.assertEqual(self.state(hand), "待执行")
+        rows = self.quiet(ledger.query, self.lg("preview"), "queue")
+        self.assertEqual([(str(r["work_item_id"]), r["stage"], r["work_item_status"]) for r in rows],
+                         [(hand, "待执行", "待执行"), (other, "待决定", "待决定"), (given, "待决定", "待决定")])
+        self.walk(task, 5)                                                        # step 4 signs with a decision at 待执行
+        self.assertEqual(self.state(task), "设计实验方案")
+
+    def test_a_revision_writes_the_two_fields_again(self):
+        self.use_220()
+        self.task()
+        item = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION))
+        self.assertEqual(self.fields(item), ("Infra-p2-01", "无"))
+        mine = lambda t: t.replace("- 执行方：Infra-p2-01\n- 研究员要做的事：无\n",
+                                   "- 执行方：研究员\n- 研究员要做的事：在本机装好 Docker Desktop 并登录\n")
+        _, out = self.out(ledger.revise, self.lg(), item, self.draft(PERMISSION, "v2.md", edit=version(2, "2026-11-22", mine)), "改由研究员执行")
+        self.assertIn("修订：#%s 的主文档开头换成第 2 版" % item, out)
+        self.assertEqual(self.fields(item), ("研究员", "在本机装好 Docker Desktop 并登录"))
+        self.assertEqual((self.receipt(item)["executor"], self.receipt(item)["researcher_action"]), ("研究员", "在本机装好 Docker Desktop 并登录"))
+
+    def test_a_space_without_the_two_fields_registers_as_before(self):
+        """A space made from 2.1.0 or earlier: no field is written for the two lines and nothing is said about it;
+        the rest is registered and revised as before, and its state 已决定 still counts as 待执行."""
+        self.task()
+        item, out = self.out(ledger.register, self.lg(), self.draft(PERMISSION))
+        self.assertNotIn("跳过字段", out)
+        self.assertIn("登记：决策 #%s" % item, out)
+        self.assertEqual(self.state(item), "待决定")
+        self.assertEqual(ledger.header_fields(self.lg(), "decision", ledger.Draft(self.spec, self.draft(PERMISSION, "again.md"))), [])
+        _, out = self.out(ledger.revise, self.lg(), item, self.draft(PERMISSION, "v2.md", edit=version(2, "2026-11-22")), "改日期")
+        self.assertNotIn("跳过字段", out)
+        self.assertEqual(self.receipt(item)["version"], 2)
+        self.assertIn("`work_item_status` IN ('待决定', '已决定')", ledger.mql_text(self.lg("offline"), "queue")[0])
 
 
 class LinkLineTest(unittest.TestCase):

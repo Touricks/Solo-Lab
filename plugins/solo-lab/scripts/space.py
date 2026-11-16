@@ -15,7 +15,8 @@ A snapshot is what a space really has: types, fields with options, roles, the fi
 work item must fill, states and, for every flow that already has a work item, the nodes
 in order with their roles and required form items. Binding says which object of the space
 fills each slot; it matches by --map, then what was bound last time, then the identifier
-(api_name, role id, the field alias shown on the new-item page), then the name. The binding
+(api_name, role id, the field alias shown on the new-item page), then the name (a state also
+by a name it had in an earlier template: terms.zh.json state_former). The binding
 itself (feishu/ids.json) is written by `setup.py feishu --apply` only, which the researcher's
 own session runs: every session can read a space, one place changes what the ledger trusts.
 
@@ -332,17 +333,21 @@ def _bind_roles(contract, wid, t, old, out, problems):
 
 
 def _bind_states(contract, wid, t, old, out, problems):
+    """A state slot by what was bound last time while its id is still there, else by name: the reference
+    template's name first, then the names the state had in earlier templates (Contract.names)."""
     states = t.get("states") or []
     by_id = {s["id"]: s for s in states}
+    named = lambda n: [s for s in states if s.get("name") == n]  # noqa: E731
     for slot in contract.slots(wid, "states"):
-        name = contract.name("states", slot)
+        names = contract.names("states", slot)
         kept = (((old.get("states") or {}).get(wid) or {}).get(slot) or {}).get("id")
-        hits = [by_id[kept]] if kept in by_id else [s for s in states if s.get("name") == name]
+        hits = [by_id[kept]] if kept in by_id else next((named(n) for n in names if named(n)), [])
         if len(hits) != 1:
-            problems.append(["%s的状态“%s”" % (contract.name("types", wid), name),
+            problems.append(["%s的状态“%s”" % (contract.name("types", wid), names[0]),
                              "空间里没有" if not hits else "有 %d 个同名的状态" % len(hits),
-                             "%s：这个类型的流程要有状态“%s”；现有：%s" % (
-                                 MAINTAINER, name, "、".join(s.get("name") or "" for s in states) or "无")])
+                             "%s：这个类型的流程要有状态%s；现有：%s" % (
+                                 MAINTAINER, "或".join("“%s”" % n for n in names),
+                                 "、".join(s.get("name") or "" for s in states) or "无")])
             continue
         out["states"].setdefault(wid, {})[slot] = {"id": hits[0]["id"], "name": hits[0].get("name")}
 

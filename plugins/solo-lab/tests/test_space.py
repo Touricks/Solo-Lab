@@ -210,6 +210,27 @@ class BindTest(SpaceCase):
         self.assertEqual(problems, [])
         self.assertEqual(binding["states"]["decision"]["pending"]["name"], "等拍板")
 
+    def test_the_decided_state_binds_under_either_name(self):
+        """Template 2.2.0 calls the decision's decided state 待执行, 2.1.0 and earlier 已决定 (terms.zh.json
+        state_former): binding by name takes either, 待执行 first; a binding made before keeps going by the id."""
+        decided = next(s for s in self.type("decision")["states"] if s["name"] == "已决定")
+        binding, problems = self.bind()
+        self.assertEqual((problems, binding["states"]["decision"]["decided"]), ([], {"id": decided["id"], "name": "已决定"}))
+        old = binding
+        decided["name"] = "待执行"                                                  # a space made from 2.2.0
+        binding, problems = self.bind()
+        self.assertEqual((problems, binding["states"]["decision"]["decided"]), ([], {"id": decided["id"], "name": "待执行"}))
+        self.assertEqual(self.bind(old=old)[0]["states"]["decision"]["decided"], {"id": decided["id"], "name": "待执行"})
+        self.type("decision")["states"].append({"id": "both", "name": "已决定"})       # both names: the present one wins
+        self.assertEqual(self.bind()[0]["states"]["decision"]["decided"]["id"], decided["id"])
+        self.type("decision")["states"] = [s for s in self.type("decision")["states"] if s["name"] not in ("待执行", "已决定")]
+        _, problems = self.bind()
+        self.assertEqual([p[:2] for p in problems], [["决策的状态“待执行”", "空间里没有"]])
+        self.assertIn("这个类型的流程要有状态“待执行”或“已决定”", problems[0][2])
+        self.assertEqual(self.contract.names("states", "decided"), ["待执行", "已决定"])
+        self.assertEqual(self.contract.names("states", "pending"), ["待决定"])
+        self.assertEqual(self.contract.names("fields", "urgency"), ["紧急程度"])
+
     def test_missing_field_role_and_state_are_listed(self):
         task = self.type("research_task")
         task["fields"] = [f for f in task["fields"] if f["name"] != "假设签字"]
@@ -426,6 +447,23 @@ class CliTest(SpaceCase):
         self.assertIn("没写任何文件", out)
         self.assertEqual(sorted(os.listdir(os.path.join(self.tmp, "feishu"))), before)
 
+    def test_check_passes_a_template_under_either_name_of_the_decided_state(self):
+        """space.py check --space on the template space before and after 2.2.0 renamed 已决定 to 待执行."""
+        def renamed(argv, out):
+            if argv[:2] == ["workitem", "meta-fields"] and argv[5] == self.type_key("decision"):
+                status = [f for f in out.get("list") or [] if f.get("field_key") == "work_item_status"]
+                for o in (status[0].get("option") or []) if status else []:
+                    if o.get("option_name") == "已决定":
+                        o["option_name"] = "待执行"
+            return out
+        for edit, name in ((None, "已决定"), (renamed, "待执行")):
+            with mock.patch.object(space, "call", Replay(edit)):
+                code, out = self.run_cli("check", "--space", "research_template")
+                snap = space.snapshot(space.find_project("research_template"), space.wanted_by(self.contract), workers=1)
+            self.assertEqual(code, 0, out)
+            self.assertIn("约定核对（contract_version 1）：通过", out)
+            self.assertIn(name, [s["name"] for s in self.type("decision", snap)["states"]])
+
     def test_commands_say_what_to_run_first(self):
         code, out = self.run_cli("check", "--target", self.tmp)
         self.assertEqual(code, 2)
@@ -459,6 +497,22 @@ class ContractTest(unittest.TestCase):
         for change, part in cases:
             problems = self.contract(change).validate()
             self.assertTrue(any(part in p for p in problems), (part, problems))
+
+    def test_the_template_is_2_2_0(self):
+        """A space is made from template 2.2.0 (plugin 1.0.5 on): published as a new template with a new link;
+        2.1.0 keeps its own link for plugin 1.0.4 and earlier."""
+        c = orgspec.Contract(orgspec.OrgSpec())
+        self.assertEqual(c.template, {"name": "Solo-Lab 科研模版", "version": "2.2.0",
+                                      "url": "https://project.feishu.cn/templates/detail/67ba9ba510e046fe9bd35be99b883f26"})
+
+    def test_former_state_names_are_checked(self):
+        spec = orgspec.OrgSpec()
+        self.assertEqual(spec.terms["state"]["decided"], "待执行")
+        self.assertEqual(spec.terms["state_former"], {"decided": ["已决定"]})
+        spec.terms["state_former"] = {"nope": ["x"], "decided": "已决定"}
+        problems = orgspec.Contract(spec).validate()
+        self.assertTrue(any("state_former 里的状态槽位 nope 没有定义" in p for p in problems), problems)
+        self.assertTrue(any("state_former 里 decided 的旧名字要写成字符串列表" in p for p in problems), problems)
 
     def test_names_and_options(self):
         c = orgspec.Contract(orgspec.OrgSpec())

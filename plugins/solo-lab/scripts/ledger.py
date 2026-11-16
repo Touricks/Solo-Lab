@@ -970,8 +970,9 @@ def urgency_of(d, pairs=None):
 def receipt_kind(spec, wid, d, pairs=None):
     """What the receipt says the registration was, for the inbox hook of the session the
     【登记回执】 reaches: the work item type, whether a decision waits in the decision queue and
-    whether it jumps it. A decision's 回复期限, 执行方 and 研究员要做的事 have no field in the space;
-    they are kept here as the package header wrote them, for `query queue` and `confirm`. executor is
+    whether it jumps it. A decision's 回复期限 has no field in the space, and 执行方 and 研究员要做的事
+    have one only in a space made from template 2.2.0 on (header_fields); all three are kept here as
+    the package header wrote them, for `query queue` and `confirm`. executor is
     研究员 or the session's name; researcher_action is null when the header says 无, which the package
     check allows only when a session carries the decision out. A receipt without the keys is older than
     those header lines: carried_out_by. From 1.0.4 a package's receipt keeps its version, and a decision's
@@ -990,6 +991,34 @@ def receipt_kind(spec, wid, d, pairs=None):
             "version": version, "title": d.task, "urgency": urgency or None, "sender": d.author,
             "reversible": terms.get("reversible"), "criteria": terms.get("criteria") or [], "default": terms.get("default"),
             "default_option": terms.get("default_option"), "options": terms.get("options"), "frozen": terms.get("frozen") or []}
+
+
+# A decision package's header lines that go into fields of the same name where the space has them: template
+# 2.2.0 added the two fields, and its view 待定决策 lists the researcher's decisions by 执行方 = 研究员. They are no
+# contract slots, so they are found by name, like every field outside the contract; a space made from template
+# 2.1.0 or earlier has neither, and the registration goes on without them.
+HEADER_FIELDS = (orgspec.EXECUTOR, orgspec.RESEARCHER_ACTION)
+
+
+def header_fields(lg, wid, d, given=()):
+    """[{field_key, field_value}] for a decision package's 执行方 (研究员 or the session's name, as the receipt
+    keeps it) and 研究员要做的事 (as the header wrote it), each into the space's field of that name. A field the
+    space lacks is left out without a word; one a --set value fills (given: field_keys) is left to it; a value
+    the field does not take is skipped with a reminder, as register does with its other optional fields."""
+    if wid != "decision":
+        return []
+    values = {orgspec.EXECUTOR: orgspec.executor_of(lg.spec, d.header.get(orgspec.EXECUTOR)),
+              orgspec.RESEARCHER_ACTION: (d.header.get(orgspec.RESEARCHER_ACTION) or "").strip()}
+    out = []
+    for name in HEADER_FIELDS:
+        key = lg.key_of(wid, name)
+        if not key or key in given or not values[name]:
+            continue
+        try:
+            out.append(lg.entry(wid, name, values[name]))
+        except (LedgerError, KeyError, orgspec.OrgSpecError) as e:
+            print("提醒：跳过字段 %s（之后可以用 update 补）：%s" % (name, e))
+    return out
 
 
 def carried_out_by(rec, sender=None):
@@ -1539,7 +1568,8 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
     Everything that can fail is checked before the work item exists: the header, the
     fields the new-item page requires, the parent node. The item is created with a
     link to the space as its main document, since the page requires one; the document
-    is created next, with the item's ID in its title and header, and written back.
+    is created next, with the item's ID in its title and header, and written back. A decision's
+    执行方 and 研究员要做的事 go into the fields of those names where the space has them (header_fields).
     existing=<ID>: a revised research-task sheet becomes the main document of that task;
     no item is created, the old document stays where it is.
     """
@@ -1627,6 +1657,7 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
     sets = parse_sets(lg, wid, pairs)                 # on --resume, all values are written again with the main document
     if any("upload" in v for _, v in sets):
         raise LedgerError("登记时还没有主文档，产出文档没处挂：先登记，再用 ledger.py update <工作项 ID> --set <字段>=@<文件> 上传")
+    fields += header_fields(lg, wid, d, {v["field_key"] for _, v in sets})
     if not rec:
         fields += [v for _, v in sets]
     doc_key = lg.field(wid, "main_doc")["field_key"]
@@ -2506,7 +2537,8 @@ def revise(lg, item_id, path, note):
     the document's history. Checked first: the draft passes the package check, its type is the item's, its
     version is the previous one plus one, a decision is still 待决定 and any other item is not closed; the
     item's 紧急程度 (a request's 截止时间) is read too, and one the space has no option for is skipped with a
-    reminder, as register does. Then the document is written, and the field, the receipt and the local
+    reminder, as register does, and so are a decision's 执行方 and 研究员要做的事 where the space has those
+    fields (header_fields). Then the document is written, and the fields, the receipt and the local
     decision state follow the new version. Nothing is sent to the researcher: the queue shows the new version
     when they come."""
     spec = lg.spec
@@ -2553,6 +2585,7 @@ def revise(lg, item_id, path, note):
             updates.append(lg.entry(wid, *wanted))
         except (LedgerError, KeyError, orgspec.OrgSpecError) as e:
             print("提醒：跳过字段 %s（之后可以用 update 补）：%s" % (wanted[0], e))
+    updates += header_fields(lg, wid, d)
     body = revision_body(d, item_id, lg.item_url(wid, item_id))
     url = lg.doc_url(item_id, it)
     heads = heading_ids(lg, url)
@@ -2860,12 +2893,12 @@ def _select(lg, wid, cond, extra=()):
 QUERY_FIELDS = {"queue": ("urgency",)}
 SHOWN = (("urgency", "紧急程度"), ("due", "回复期限"), ("executor", orgspec.EXECUTOR),
          ("researcher_action", orgspec.RESEARCHER_ACTION), ("blocked_reason", "阻塞原因"), ("doc", "主文档"))
-# A decision goes through three stages (the researcher, 2026-11-16): 待决定; 待执行, which is the space's
-# 已决定 (the scribe confirms 决定 as soon as the researcher decides and tells the 执行方, so every session
-# knows the choice); 归档, which means it was carried out. The package header's 执行方 carries it out: the
-# researcher, or a session, which asks the scribe to archive it as soon as it is done. query queue shows
-# the stage in place of the state: every decision 待决定, and a decided one only while the researcher has
-# still to carry it out.
+# A decision goes through three stages (the researcher, 2026-11-16): 待决定; 待执行, called 已决定 in a space
+# made from template 2.1.0 or earlier (the scribe confirms 决定 as soon as the researcher decides and tells
+# the 执行方, so every session knows the choice); 归档, which means it was carried out. The package header's
+# 执行方 carries it out: the researcher, or a session, which asks the scribe to archive it as soon as it is
+# done. query queue shows the stage in place of the state: every decision 待决定, and a decided one only
+# while the researcher has still to carry it out.
 STAGES = {"pending": "待决定", "decided": "待执行"}
 PAST_DUE = "待决定（已到期，继续等研究员）"     # past its expiry time and no 到期默认 for it: first in the list
 

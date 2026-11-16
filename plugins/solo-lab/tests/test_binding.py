@@ -28,6 +28,16 @@ HERE = {"name": "research_template", "simple_name": SNAP["simple_name"], "projec
 OLD = {"name": "旧空间", "simple_name": "oldspace", "project_key": "pk_old"}
 
 
+def made_from_2_2_0(argv, out):
+    """meta-fields as a space made from template 2.2.0 answers: the decision's state 已决定 is called 待执行."""
+    if argv[:2] == ["workitem", "meta-fields"]:
+        for f in out.get("list") or []:
+            for o in (f.get("option") or []) if f.get("field_key") == "work_item_status" else []:
+                if o.get("option_name") == "已决定":
+                    o["option_name"] = "待执行"
+    return out
+
+
 class BindingCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="solo-lab-binding-")
@@ -167,6 +177,7 @@ class FeishuTest(BindingCase):
             self.feishu([], True, True)
         self.assertIn("没有叫“research_template”的飞书项目空间", str(e.exception))
         self.assertIn(orgspec.Contract(orgspec.OrgSpec()).template["url"], str(e.exception))
+        self.assertIn("“实例数据”勾选“视图”", str(e.exception))                   # the view 待定决策 comes with the template
         self.assertEqual(os.listdir(os.path.join(self.tmp, "feishu")), [])
         self.put("spec/task.json", {"name": "t", "feishu": {"meegle_space": "research_template",
                                                            "template_url": "https://example.com/templates/detail/abc"}})
@@ -248,6 +259,16 @@ class FeishuTest(BindingCase):
         m = json.loads(self.read("feishu/ids.json"))["meegle"]
         self.assertEqual((m["project_key"], m["previous_spaces"][0]["project_key"]), (SNAP["project_key"], "pk_old"))
 
+    def test_a_space_made_from_2_2_0_binds_its_decided_state(self):
+        code, text = self.feishu([], True, True, edit=made_from_2_2_0)
+        self.assertEqual(code, 0)
+        self.assertIn("约定核对（contract_version 1）：通过", text)
+        state = json.loads(self.read("feishu/ids.json"))["meegle"]["states"]["decision"]["decided"]
+        self.assertEqual(state["name"], "待执行")
+        self.feishu([], True, True)                                     # a space from 2.1.0 binds the same slot to 已决定
+        self.assertEqual(json.loads(self.read("feishu/ids.json"))["meegle"]["states"]["decision"]["decided"],
+                         dict(state, name="已决定"))
+
     def test_without_a_snapshot_there_is_nothing_to_bind(self):
         code, text = self.feishu([], False, False)
         self.assertIn("还没读过空间，绑定不了：加 --live 从空间读", text)
@@ -268,6 +289,12 @@ class TemplateTest(BindingCase):
         self.assertIn("只读了飞书，没写任何文件", text)
         self.assertIn("这个空间符合约定", text)
         self.assertEqual(os.listdir(os.path.join(self.tmp, "feishu")), [])
+
+    def test_the_template_passes_before_and_after_2_2_0_renamed_a_state(self):
+        for edit in (None, made_from_2_2_0):
+            code, text = self.template("research_template", edit)
+            self.assertEqual(code, 0, text)
+            self.assertIn("这个空间符合约定", text)
 
     def test_work_items_in_a_template_are_named_not_refused(self):
         self.rows = {"data": {"1": [{"moql_field_list": [{"key": "work_item_id", "value": {"long_value": 2101}}]}]}, "list": None}

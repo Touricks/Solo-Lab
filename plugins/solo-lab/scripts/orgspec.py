@@ -521,6 +521,15 @@ class Contract:
         who = (self.data["roles"].get(slot) or {}).get("who")
         return self.spec.term("seq" if who == "sequence" else "role", slot)
 
+    def names(self, kind, slot):
+        """Every name binding by name accepts for a slot, in the order it tries them: the reference template's,
+        then, for a state, the names it had in earlier templates (terms.zh.json state_former), so that a space
+        made from one of those still binds."""
+        out = [self.name(kind, slot)]
+        if kind == "states":
+            out += [n for n in self.spec.terms.get("state_former", {}).get(slot, []) if n not in out]
+        return out
+
     def option_names(self, slot):
         """The option names scripts write or compare for a select slot; [] when they use none."""
         opt = self.field(slot).get("options")
@@ -584,6 +593,11 @@ class Contract:
         for state in flow.get("closed", []):
             if state not in terms.get("state", {}):
                 problems.append("closed 里的状态槽位 %s 没有定义" % state)
+        for state, former in (terms.get("state_former") or {}).items():
+            if state not in terms.get("state", {}):
+                problems.append("术语表 state_former 里的状态槽位 %s 没有定义" % state)
+            elif not isinstance(former, list) or not all(isinstance(n, str) and n for n in former):
+                problems.append("术语表 state_former 里 %s 的旧名字要写成字符串列表" % state)
         if sorted(d["types"]) != sorted(w["id"] for w in self.spec.work_items()):
             problems.append("类型槽位和规则文件 feishu.work_items 的类型对不上")
         return ["约定文件：" + x for x in problems]
