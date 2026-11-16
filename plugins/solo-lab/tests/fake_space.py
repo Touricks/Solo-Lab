@@ -104,6 +104,8 @@ class FakeSpace:
 
     def state_of(self, item):
         t = self.snap["types"][item["type_key"]]
+        if item.get("terminated"):                     # terminated on the web page: the system state
+            return "已终止"
         doing = [n for n in item["nodes"] if n["status"] == "doing"]
         if not doing:
             return DONE if all(n["status"] == "finished" for n in item["nodes"]) else "开始"
@@ -359,6 +361,97 @@ class FakeSpace:
     def doc_by(self, token):
         return next((d for d in self.docs.values() if token in (d["document_id"], d["node_token"])), None)
 
+    # A document as blocks, for docs +fetch --scope outline|range and docs +update block_replace|append:
+    # every heading, list item, paragraph line and table is a block with an id; lists come back as <ul>
+    # around their <li> blocks, as recorded (tests/fixtures/feishu/docs-fetch-range-status.json).
+    def blocks(self, doc):
+        if "blocks" not in doc:
+            doc["blocks"] = self.parse_blocks(doc["body"] or "")
+        return doc["blocks"]
+
+    def parse_blocks(self, text):
+        out, lines, i = [], text.split("\n"), 0
+        while i < len(lines):
+            line = lines[i]
+            i += 1
+            if not line.strip():
+                continue
+            if line.startswith("|"):
+                rows = [line]
+                while i < len(lines) and lines[i].startswith("|"):
+                    rows.append(lines[i])
+                    i += 1
+                kind, level, body = "table", 0, "\n".join(rows)
+            elif re.match(r"^#{1,6} ", line):
+                kind, level, body = "h", len(line.split(" ", 1)[0]), line.split(" ", 1)[1].strip()
+            elif re.match(r"^\s*[-*] ", line):
+                kind, level, body = "li", 0, re.sub(r"^\s*[-*] ", "", line)
+            else:
+                kind, level, body = "p", 0, line
+            self.block_no = getattr(self, "block_no", 0) + 1
+            out.append({"id": "blk%05d" % self.block_no, "kind": kind, "level": level, "text": body})
+        return out
+
+    def render(self, doc):
+        """The document's text again, after an update: what a test reads back."""
+        prefix = {"h": lambda b: "#" * b["level"] + " ", "li": lambda b: "- "}
+        doc["body"] = "\n".join(prefix.get(b["kind"], lambda b: "")(b) + b["text"] for b in doc["blocks"]) + "\n"
+
+    def xml(self, blocks):
+        from xml.sax.saxutils import escape
+        parts, in_list = [], False
+        for b in blocks:
+            if b["kind"] == "li":
+                parts += [] if in_list else ["<ul>"]
+                parts.append('<li id="%s">%s</li>' % (b["id"], escape(b["text"])))
+                in_list = True
+                continue
+            if in_list:
+                parts.append("</ul>")
+                in_list = False
+            tag = "h%d" % b["level"] if b["kind"] == "h" else {"table": "table", "p": "p"}[b["kind"]]
+            parts.append('<%s id="%s">%s</%s>' % (tag, b["id"], escape(b["text"]), tag))
+        return "".join(parts) + ("</ul>" if in_list else "")
+
+    def doc_of_link(self, link):
+        doc = self.doc_by((link or "").rstrip("/").rsplit("/", 1)[-1])
+        if not doc:
+            raise ledger.LedgerError("命令失败（退出码 1）：lark-cli docs\ndocument not found: %s" % link)
+        return doc
+
+    def fetch(self, flags):
+        doc = self.doc_of_link(flags.get("--doc"))
+        blocks = self.blocks(doc)
+        if flags.get("--scope") == "outline":
+            depth = int(flags.get("--max-depth", 9))
+            heads = [b for b in blocks if b["kind"] == "h" and b["level"] <= depth]
+            content = '<fragment mode="outline"><outline>%s</outline></fragment>' % self.xml(heads)
+        elif flags.get("--scope") == "range":
+            ids = [b["id"] for b in blocks]
+            start = ids.index(flags["--start-block-id"]) if flags.get("--start-block-id") else 0
+            end = ids.index(flags["--end-block-id"]) if flags.get("--end-block-id") not in (None, "-1") else len(ids) - 1
+            content = '<fragment mode="range">%s</fragment>' % self.xml(blocks[start:end + 1])
+        else:
+            content = "<title>%s</title>%s" % (doc["title"], self.xml(blocks))
+        return {"ok": True, "data": {"document": {"content": content, "document_id": doc["document_id"], "revision_id": 1}}}
+
+    def doc_update(self, flags, stdin):
+        doc = self.doc_of_link(flags.get("--doc"))
+        blocks = self.blocks(doc)
+        new = self.parse_blocks(stdin or "")
+        if flags.get("--command") == "append":
+            blocks.extend(new)
+        elif flags.get("--command") == "block_replace":
+            ids = [b["id"] for b in blocks]
+            start, end = ids.index(flags["--start-block-id"]), ids.index(flags["--end-block-id"])
+            if end < start:
+                raise ledger.LedgerError("命令失败（退出码 1）：lark-cli docs +update\nreverse range")
+            blocks[start:end + 1] = new
+        else:
+            raise AssertionError("假空间不认识这条文档命令：%s" % flags.get("--command"))
+        self.render(doc)
+        return {"ok": True, "data": {"result": "success", "updated_blocks_count": len(new)}}
+
     def node_get(self, token):
         doc = self.doc_by(token)
         if not doc:
@@ -409,6 +502,10 @@ class FakeSpace:
                 return self.create_doc(flags.get("--parent-token"), flags.get("--title"), stdin)
             if cmd == ("wiki", "+node-get"):
                 return self.node_get(flags["--node-token"])
+            if cmd == ("docs", "+fetch"):
+                return self.fetch(flags)
+            if cmd == ("docs", "+update"):
+                return self.doc_update(flags, stdin)
             if cmd == ("wiki", "+move"):
                 doc = self.doc_by(flags["--node-token"])
                 if doc:

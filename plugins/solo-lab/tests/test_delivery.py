@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Tests for when the pool reaches the researcher (1.0.3): who started a turn, what the inbox
 hook adds for it, and the guard's gate on the wrap-up tool and AskUserQuestion in a turn another
-agent session started. Standard library only, no Feishu access.
+agent session started; and what the inbox hook says of the local decision state (1.0.4): the
+frozen actions, the decisions past their expiry time. Standard library only, no Feishu access.
 
     python3 -I -B tests/test_delivery.py
 """
 import ast
+import contextlib
 import datetime
+import io
 import json
 import os
 import re
@@ -18,14 +21,17 @@ ROOT = os.path.dirname(TESTS)
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 sys.path.insert(0, TESTS)
 import pool as pool_lib  # noqa: E402
-from test_plugin import PoolProjectCase  # noqa: E402
+from test_plugin import PoolProjectCase, example_blocks  # noqa: E402
+import fake_space  # noqa: E402
+import ledger  # noqa: E402
+import setup  # noqa: E402
 
 WRAPUP = "mcp__ccd_turn__wrap_up"
 WOKEN = "本轮由其他 agent 会话叫醒"
 QUEUED = "本轮登记了待定决策"
 LIST_DUE = ("先回答研究员，再跑 python3 -I .claude/solo-lab/bin/ledger.py query queue，把待决定的决策和等研究员执行的决策附在末尾，"
-            "每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接；route.py pool 里还没处理的补位请求一起列，"
-            "补位请求不算决策。都没有就不附。")
+            "每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接，改过版的在事项后面写版本号；"
+            "route.py pool 里还没处理的补位请求一起列，补位请求不算决策。都没有就不附。")
 QUEUED_TEXT = ("本轮登记了待定决策 #%s：在这一行状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和工作项链接，"
                "不超过 3 行。")
 DENIED = ("这一轮是其他 agent 会话叫醒的，研究员多半不在：不用 AskUserQuestion。要研究员拍板的事写决策包或发【需拍板】给入口；"
@@ -506,6 +512,161 @@ class ReplayTest(DeliveryCase):
             self.assertNotIn(WOKEN, c)
         self.assertNotIn("ask_ok", self.session("s-entry"))
 
+
+
+# ----------------------------------------------------------------- 1.0.4
+FROZEN_HEAD = "待定决策冻结的动作，决策定下以前谁都不做（能用命令认出的会被 hook 拦下），选项中立的准备照常做："
+WAITS = "#%s 已到期，继续等，研究员来谈时排在最前；不推给研究员，不提醒截止。"
+DELIVERED = wrap("【交付 #2101】Alg-p2-01 → PMO-p2-01：交付包 y.md", "[示例] Alg-p2-01")
+
+
+def default_due(item, option, executor="RnD-p2-01"):
+    return "#%s 已到期：请书记员按到期默认确认（ledger.py confirm %s --by 到期默认），书记员确认后通知执行方 %s 照到期默认动作办（%s）；已经请过的不再请。" % (
+        item, item, executor, option)
+
+
+class GatesInboxTest(DeliveryCase):
+    """1.0.4: the inbox hook reads the local decision state (.claude/state/gates.json) and never writes it. Every
+    pool session is told each turn what the decisions still waiting freeze. The entry is told each turn about
+    those past their expiry time (B8): a reversible one is for the scribe to confirm by its default; any other
+    keeps waiting, comes first when the researcher talks, and is not pushed to the researcher. A revision is
+    never announced."""
+
+    def pending(self, item, hours, **fields):
+        since = pool_lib.now() - datetime.timedelta(hours=hours)
+        return dict({"id": item, "title": "事项 %s" % item, "registered_at": pool_lib.stamp(since),
+                     "expires_at": pool_lib.stamp(since + datetime.timedelta(hours=24)), "frozen": []}, **fields)
+
+    def gates(self, *entries):
+        with open(os.path.join(self.tmp, ".claude", "state", "gates.json"), "w", encoding="utf-8") as f:
+            json.dump({"version": 1, "pending": {e["id"]: e for e in entries}, "releases": []}, f, ensure_ascii=False)
+
+    def test_what_has_expired_reaches_the_entry_only(self):
+        reversible = self.pending("2701", 25, reversible=True, default="按轮次分目录", default_option="按轮次分目录", default_applies=True,
+                                  executor="RnD-p2-01")
+        self.gates(reversible,
+                   self.pending("2702", 30, reversible=False, default="等研究员", default_option=None, default_applies=False),
+                   self.pending("2703", 26, reversible=True, default="等研究员", default_option=None, default_applies=False,
+                                executor="研究员", researcher_action="把旧记录拷到 NAS"),
+                   self.pending("2704", 2, reversible=True, default="按变体分目录", default_option="按变体分目录", default_applies=True))
+        woken = self.context("s-entry", DELIVERED)
+        self.assertIn(WOKEN, woken)
+        self.assertIn(default_due("2701", "按轮次分目录"), woken)
+        for item in ("2702", "2703"):
+            self.assertIn(WAITS % item, woken)
+        self.assertNotIn("#2704", woken)                                          # registered 2 hours ago
+        for sid, text in (("s-alg2", wrap("【交付 #2101】Alg-p1-01 → Alg-p2-01：交付包 y.md", "[示例] Alg-p1-01")), ("s-q1", "继续")):
+            self.assertNotIn("已到期", self.context(sid, text), sid)              # the entry's alone
+        talk = self.context("s-entry", "早")
+        self.assertIn(FIRST_TALK + LIST_DUE + "已经到期、继续等研究员的决策（#2702、#2703）排在清单最前，不提截止。", talk)
+        self.assertIn(default_due("2701", "按轮次分目录"), talk)                   # every turn, until the scribe confirms it
+        self.assertNotIn(WOKEN, talk)
+        self.assertIn(WAITS % "2702", self.context("s-entry", NOTIFIED))          # the app's turns too
+        self.gates(self.pending("2702", 30, reversible=False, default="等研究员", default_applies=False))
+        text = self.context("s-entry", DELIVERED)
+        self.assertNotIn("#2701", text)                                           # confirmed: gone from the local state
+        self.assertIn(WAITS % "2702", text)
+        self.gates()
+        self.assertNotIn("已到期", self.context("s-entry", DELIVERED))
+        with open(os.path.join(self.tmp, ".claude", "state", "gates.json"), "w", encoding="utf-8") as f:
+            f.write("{broken")
+        code, out = self.prompt("s-entry", DELIVERED)                               # never blocks the prompt
+        self.assertEqual(code, 0)
+        self.assertIn(WOKEN, out.get("additionalContext", ""))
+
+    def test_every_pool_session_sees_what_is_frozen(self):
+        self.gates(self.pending("2711", 2, title="实验平台用什么隔离候选代码", frozen=[
+            {"kind": "category", "category": "privileged_app", "name": "特权应用", "qualifier": "Docker", "text": "特权应用：Docker"},
+            {"kind": "command", "prefix": "docker build", "words": ["docker", "build"], "text": "`docker build`"},
+            {"kind": "text", "text": "照某个选项改实验平台的计量和内存闸"}]),
+                   self.pending("2712", 1, title="运行记录怎么分目录", frozen=[{"kind": "text", "text": "把已有的运行记录挪到新的目录结构下"}]),
+                   self.pending("2713", 1, title="不冻结什么"))
+        line = (FROZEN_HEAD + "#2711（实验平台用什么隔离候选代码）：“特权应用：Docker”“`docker build`”“照某个选项改实验平台的计量和内存闸”；"
+                "#2712（运行记录怎么分目录）：“把已有的运行记录挪到新的目录结构下”。")
+        for sid, text in (("s-entry", "早"), ("s-alg1", wrap("【委托 #2101】Alg-p2-01 → Alg-p1-01：需求包 x.md", "[示例] Alg-p2-01")),
+                          ("s-alg0", NOTIFIED), ("s-scribe", "继续"), ("s-q1", "继续")):
+            self.assertEqual(self.context(sid, text).count(line), 1, sid)
+        self.assertNotIn("#2713", self.context("s-alg2", "继续"))                 # nothing frozen, nothing said
+        self.assertEqual(self.context("s-mine", "看看"), "")                       # the researcher's own session
+        self.gates(self.pending("2714", 1, title="很长", frozen=[{"kind": "text", "text": "第 %d 件谁都不做的事，写得很长很长很长" % k}
+                                                                  for k in range(40)]))
+        text = [p for p in self.context("s-alg1", "继续").split("\n\n") if p.startswith(FROZEN_HEAD)][0]
+        self.assertLessEqual(len(text), 700)
+        self.assertTrue(text.endswith("……（全文看 python3 -I .claude/solo-lab/bin/ledger.py query queue 列的决策包）"), text[-80:])
+
+    def test_a_revised_decision_is_not_announced_again(self):
+        """The scribe's 【登记回执】 for a revision mentions nothing, even when the decision now jumps the queue and was
+        registered before the entry kept track of what it mentioned."""
+        self.receipt("2721", type="decision", queue=True, urgent=True, version=2,
+                     revisions=[{"version": 2, "date": "2026-11-22", "note": "改成插队", "draft": "packages/drafts/alg/v2.md"}])
+        text = self.context("s-entry", self.registered("2721"))
+        self.assertIn(WOKEN, text)
+        self.assertNotIn(QUEUED, text)
+        self.assertNotIn("它是插队的", text)
+        self.assertNotIn("ask_ok", self.session("s-entry"))
+        self.assertEqual(self.announced(), [])
+        self.assertEqual(self.wrap_up("s-entry", **self.ASK).get("updatedInput"), {"recap": "做完了"})
+
+
+class ExpiryTest(DeliveryCase):
+    """1.0.4, B8 with the ledger. A reversible decision registered more than 24 hours ago: the entry is told, the
+    scribe's confirm --by 到期默认 writes a decision that starts with 到期默认： and is the option the package names,
+    and the entry hears no more of it. An irreversible one past its expiry: confirm --by 到期默认 is refused, what it
+    would release stays blocked, and the researcher gets no reminder; it comes first when they talk."""
+
+    def setUp(self):
+        super().setUp()
+        self.fake = fake_space.FakeSpace()
+        self.quiet(ledger.register, self.lg(), os.path.join(self.tmp, setup.FIRST_TASK))
+
+    def lg(self):
+        return fake_space.SimLedger(self.tmp, "apply", self.fake, ())
+
+    def quiet(self, fn, *args, **kw):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return fn(*args, **kw)
+
+    def register(self, block, name):
+        text = re.sub(r"^- 关联工作项：#\d+[^；\n]*", "- 关联工作项：待建", example_blocks()[block], flags=re.M)
+        path = os.path.join(self.tmp, "packages", "drafts", "pmo", name)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(re.sub(r"^- 所属研究任务：.*\n", "", text, flags=re.M))
+        return self.quiet(ledger.register, self.lg(), path)
+
+    def age(self, item, hours):
+        """The decision as if it had been registered that many hours ago (expires_at as ledger.py works it out)."""
+        with open(ledger.gates_path(self.tmp), encoding="utf-8") as f:
+            data = json.load(f)
+        since = ledger.now_at() - datetime.timedelta(hours=hours)
+        data["pending"][item].update(registered_at=since.isoformat(timespec="seconds"),
+                                     expires_at=(since + datetime.timedelta(hours=24)).isoformat(timespec="seconds"))
+        with open(ledger.gates_path(self.tmp), "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+
+    def test_an_expired_decision_takes_its_default_only_when_reversible(self):
+        rev, perm = self.register(11, "rev.md"), self.register(10, "perm.md")
+        self.assertNotIn("已到期", self.context("s-entry", DELIVERED))
+        self.age(rev, 25)
+        self.age(perm, 100)
+        woken = self.context("s-entry", DELIVERED)
+        self.assertIn(default_due(rev, "按轮次分目录"), woken)
+        self.assertIn(WAITS % perm, woken)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            ledger.confirm(self.lg(), rev, ledger.BY_DEFAULT)
+        self.assertIn("到期默认：照选项“按轮次分目录”办，执行完请书记员归档；没有放行任何不可逆动作。", out.getvalue())
+        content = self.fake.item(rev)["fields"][self.lg().field("decision", "决定内容")["field_key"]]
+        self.assertEqual(content, "到期默认：按轮次分目录：runs/rnd/<轮次>/<变体>/（登记后 24 小时内研究员没有决定）")
+        with self.assertRaises(ledger.LedgerError), contextlib.redirect_stdout(io.StringIO()):
+            ledger.confirm(self.lg(), perm, ledger.BY_DEFAULT)
+        woken = self.context("s-entry", DELIVERED)
+        self.assertNotIn("#%s 已到期" % rev, woken)
+        self.assertIn(WAITS % perm, woken)
+        out = self.bash("s-alg2", "open -a Docker")[1]                                 # what it would release stays blocked
+        self.assertEqual(out.get("permissionDecision"), "deny")
+        self.assertIn("待定决策 #%s（实验平台用什么隔离候选代码）冻结了“特权应用：Docker”" % perm, out["permissionDecisionReason"])
+        talk = self.context("s-entry", "早")
+        self.assertIn("已经到期、继续等研究员的决策（#%s）排在清单最前，不提截止。" % perm, talk)
 
 if __name__ == "__main__":
     unittest.main()

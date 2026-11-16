@@ -32,7 +32,19 @@ The hook also:
   to list after its answer the decisions waiting on the researcher (`ledger.py
   query queue`: to be decided, or decided and carried out by the researcher, not
   archived yet), each with who carries it out and what the researcher must do by
-  hand, and the refill requests after them (they are no decisions);
+  hand, a revised one with its version, those past their expiry that keep waiting
+  first, and the refill requests after them (they are no decisions). A register
+  receipt for a decision that was revised (its receipt has revisions) is no
+  registration: a revision is never mentioned to the researcher;
+- reads the local decision state .claude/state/gates.json (ledger.py writes it,
+  this hook only reads it): every pool session gets one line a turn with what the
+  decisions still waiting freeze (1.0.4); the entry, in every turn, gets a line for
+  each one past its expiry time (expires_at): a reversible one that may take its
+  default (default_applies) is to be confirmed by the scribe with `ledger.py
+  confirm <ID> --by 到期默认`, who then tells the decision's 执行方 to act on the
+  default; any other one keeps waiting, comes first when the researcher next talks,
+  and is not pushed to the researcher. At most MAX_DUE such lines a turn; in the
+  turn that opens a session they count against the role text's budget;
 - turns the researcher's opening line in a new top-level session
   ("认领 <+2 角色>（会话名 …）", also after <system-reminder> blocks) into a claim
   and injects the role text;
@@ -174,9 +186,19 @@ SIDE_REPORT = "回报里说它在等研究员、带着提问的，不转告研�
 FIRST_TALK = "研究员来谈了。"           # no earlier message of theirs on record, in a new session or one from before 1.0.3
 BACK_AFTER = "研究员隔了 %d 分钟回来。"
 LIST_DUE = ("先回答研究员，再跑 python3 -I .claude/solo-lab/bin/ledger.py query queue，"
-            "把待决定的决策和等研究员执行的决策附在末尾，每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接；"
-            "route.py pool 里还没处理的补位请求一起列，补位请求不算决策。都没有就不附。")
+            "把待决定的决策和等研究员执行的决策附在末尾，每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接，"
+            "改过版的在事项后面写版本号；route.py pool 里还没处理的补位请求一起列，补位请求不算决策。都没有就不附。")
 SOURCE_SHOWN = 80                     # characters of the sender's title shown
+# The local decision state ledger.py keeps (1.0.4): what the decisions still waiting freeze, and when they expire.
+GATES_FILE = "gates.json"
+FROZEN = "待定决策冻结的动作，决策定下以前谁都不做（能用命令认出的会被 hook 拦下），选项中立的准备照常做：%s。"
+FROZEN_SHOWN = 700                    # characters of the frozen line at most
+MORE_FROZEN = "……（全文看 python3 -I .claude/solo-lab/bin/ledger.py query queue 列的决策包）"
+DUE_DEFAULT = "#%s 已到期：请书记员按到期默认确认（ledger.py confirm %s --by 到期默认），书记员确认后通知执行方 %s 照到期默认动作办（%s）；已经请过的不再请。"
+MAX_DUE = 5                           # lines about decisions past their expiry, at most, a turn
+MORE_DUE = "另有 %d 条已到期的待定决策，见 python3 -I .claude/solo-lab/bin/ledger.py query queue。"
+DUE_WAIT = "#%s 已到期，继续等，研究员来谈时排在最前；不推给研究员，不提醒截止。"
+WAITING_FIRST = "已经到期、继续等研究员的决策（%s）排在清单最前，不提截止。"
 
 
 def queued_decision(root, item_id):
@@ -220,19 +242,89 @@ def woken_text(source, entry, item=None, receipt=None):
     return text
 
 
-def back_text(prev, at):
+def back_text(prev, at, waiting=()):
     """The entry, in a turn the researcher started: their first message on record in this session, or
-    the first after pool.FOCUS_IDLE or more, asks for what waits on them. None for any other message.
+    the first after pool.FOCUS_IDLE or more, asks for what waits on them, the decisions past their expiry
+    that keep waiting (waiting: IDs) first. None for any other message.
     A session from before 1.0.3 has no researcher_at either, so the text does not say it is the first."""
+    first = WAITING_FIRST % "、".join("#%s" % i for i in waiting) if waiting else ""
     last = pool.parse_time(prev.get("researcher_at"))
     if last is None:
-        return FIRST_TALK + LIST_DUE
+        return FIRST_TALK + LIST_DUE + first
     if last.tzinfo is None:
         last = last.astimezone()
     gap = at - last
     if gap < pool.FOCUS_IDLE:
         return None
-    return BACK_AFTER % int(gap.total_seconds() // 60) + LIST_DUE
+    return BACK_AFTER % int(gap.total_seconds() // 60) + LIST_DUE + first
+
+
+def load_pending(root):
+    """The decisions still waiting in the local decision state (.claude/state/gates.json, which only
+    ledger.py writes), by ID, in the order they were registered; {} when there is none or it cannot be read."""
+    try:
+        with open(os.path.join(pool.state_dir(root), GATES_FILE), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    pending = data.get("pending") if isinstance(data, dict) else None
+    if not isinstance(pending, dict):
+        return {}
+    rows = [(str(k), v) for k, v in pending.items() if isinstance(v, dict)]
+    return dict(sorted(rows, key=lambda kv: (str(kv[1].get("registered_at") or ""), kv[0])))
+
+
+def frozen_text(pending):
+    """One line: what each decision still waiting freezes (categories, command prefixes, sentences). None
+    when nothing is frozen."""
+    rows = []
+    for item_id, entry in pending.items():
+        texts = []
+        for f in entry.get("frozen") if isinstance(entry.get("frozen"), list) else []:
+            text = str(f.get("text") or f.get("prefix") or "").strip() if isinstance(f, dict) else ""
+            if text and text not in texts:
+                texts.append(text)
+        if texts:
+            rows.append("#%s%s：%s" % (item_id, "（%s）" % entry["title"] if entry.get("title") else "",
+                                       "".join("“%s”" % t for t in texts)))
+    if not rows:
+        return None
+    text = FROZEN % "；".join(rows)
+    if len(text) > FROZEN_SHOWN:
+        text = text[:FROZEN_SHOWN - len(MORE_FROZEN)] + MORE_FROZEN
+    return text
+
+
+def expired(pending, at):
+    """The decisions still waiting whose expiry time (expires_at, which ledger.py works out from the
+    registration and the expiry time in org/decisions.md) has come."""
+    out = []
+    for item_id, entry in pending.items():
+        due = pool.parse_time(entry.get("expires_at"))
+        if due is None:
+            continue
+        if due.tzinfo is None:
+            due = due.astimezone()
+        if at >= due:
+            out.append((item_id, entry))
+    return out
+
+
+def due_text(item_id, entry):
+    """What the entry does about a decision past its expiry time: a reversible one that may take its
+    default is confirmed by the scribe with it; any other one keeps waiting for the researcher."""
+    if entry.get("default_applies") is True:
+        return DUE_DEFAULT % (item_id, item_id, entry.get("executor") or "（包头写的执行方）",
+                              entry.get("default_option") or entry.get("default") or "包头写的选项")
+    return DUE_WAIT % item_id
+
+
+def due_lines(due):
+    """The lines about the decisions past their expiry, MAX_DUE at most, then how many more there are."""
+    lines = [due_text(i, e) for i, e in due[:MAX_DUE]]
+    if len(due) > MAX_DUE:
+        lines.append(MORE_DUE % (len(due) - MAX_DUE))
+    return "\n".join(lines)
 
 
 def pool_prompt(data, policy, root):
@@ -245,15 +337,26 @@ def pool_prompt(data, policy, root):
     body, wrapper = pool.unwrap(pool.strip_reminders(prompt))     # without the app's reminders and wrapper
     parts = []
     prev = pool.load_session(root, sid)
-    opened = False
+    opened, opening = False, None
     if not prev.get("prompts") and origin == "researcher":  # only the researcher's own words open a session
         claim, note = pool.opening_permit(root, policy, sid, desk, body)
         if claim:
             pl, _ = pool.load(root)
-            parts.append(pool.injection(root, policy, claim, "已按开局句认领。", owners=pl.get("owners")))
+            opening = (claim, pl.get("owners"))
+            parts.append(None)                       # the role text: filled in last, with what the rest leaves of the budget
             opened = True
         if note:
             parts.append("认领：" + note)
+
+    def finish(out):
+        """The parts with the role text of a session this turn opened, cut to what the other parts leave of
+        pool.INJECT_LIMIT (they are joined with blank lines)."""
+        if not opening:
+            return out
+        others = [x for x in out if x is not None]
+        room = pool.INJECT_LIMIT - sum(len(x) + 2 for x in others)
+        text = pool.injection(root, policy, opening[0], "已按开局句认领。", limit=max(room, 2000), owners=opening[1])
+        return [text if x is None else x for x in out]
     who = pool.identify(data, policy, root)
     msg = pool.parse_message(policy, body) if who.origin == "claim" else None
     entry = who.origin == "claim" and who.role == policy.get("entry_role")
@@ -262,8 +365,8 @@ def pool_prompt(data, policy, root):
     if entry and ok and origin == "agent" and msg and msg["kind"] == "register_receipt" \
             and pool.addressed_to(policy, pl, msg, who.claim):
         receipt = queued_decision(root, msg.get("id"))
-        if receipt and announced(root, msg["id"]):     # a later receipt for it: nothing new for the researcher
-            receipt = None
+        if receipt and (announced(root, msg["id"]) or receipt.get("revisions")):
+            receipt = None                              # a later receipt for it, or a revision: nothing new for the researcher
     ask_ok = msg["id"] if receipt and receipt.get("urgent") is True else None
     at = pool.now()
     stamp = pool.stamp(at)
@@ -284,17 +387,19 @@ def pool_prompt(data, policy, root):
             st["work_item"] = msg["id"]
     pool.update_session(root, sid, change)
     if who.origin in ("permit", "pending"):
-        return parts + ["本会话有 %s 的认领许可，还没转正：照开局的说明运行 route.py claim。" % who.role], {}
+        return finish(parts + ["本会话有 %s 的认领许可，还没转正：照开局的说明运行 route.py claim。" % who.role]), {}
     if who.origin != "claim":
-        return parts, {}
+        return finish(parts), {}
     me = who.claim
+    pending = load_pending(root)
+    due = expired(pending, at) if entry else []
     if origin == "agent":
         parts.append(woken_text(source, entry, msg and msg.get("id"), receipt))
         if receipt:
             pool.log_event(root, {"event": "decision_announced", "id": msg["id"], "urgent": receipt.get("urgent") is True,
                                   "seen_by": me["name"], "session_id": sid})
     elif origin == "researcher" and entry and not opened:
-        text = back_text(prev, at)
+        text = back_text(prev, at, [i for i, e in due if e.get("default_applies") is not True])
         if text:
             parts.append(text)
     back = origin == "researcher"                   # the researcher typed this prompt
@@ -323,6 +428,11 @@ def pool_prompt(data, policy, root):
                 locked_pool["owners"][msg["id"]] = me["name"]
         if hits:
             parts.append("这条消息有几处和规范对不上（只提醒，不拦）：\n" + "\n".join("- " + h for h in hits))
+    if due:                                         # the entry, every turn: decisions past their expiry time
+        parts.append(due_lines(due))
+    frozen = frozen_text(pending)
+    if frozen:                                      # every pool session, every turn
+        parts.append(frozen)
     inbox = os.path.join(root, "inbox")
     sources = [(os.path.join(inbox, me["name"] + ".jsonl"), "收件箱里", INBOX)]
     if pool.role_limit(policy, me["role"]) == 1:
@@ -330,9 +440,9 @@ def pool_prompt(data, policy, root):
     if me["role"] == policy.get("entry_role"):
         sources.append((os.path.join(inbox, "feishu.jsonl"), "研究员的飞书私聊里", FEISHU))
     reminder = pool.reminder_line(policy, me)
-    used = sum(len(p) for p in parts) + len(reminder)
+    used = sum(len(p) for p in parts if p) + len(reminder)
     more, marks = inbox_text(sources, used, counts_only=opened)
-    return parts + more + [reminder], marks
+    return finish(parts + more + [reminder]), marks
 
 
 def main():

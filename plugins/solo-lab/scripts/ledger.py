@@ -18,8 +18,13 @@ Write commands, for the scribe only (the guard hook enforces this). They print t
 commands first; nothing is written without --apply:
     ledger.py register <draft> [--task ID] [--source ID] [--set f=v ...] [--resume] [--existing ID]
                                             需求包 / 决策包 / 研究任务单 / 反馈: work item + main document
+    ledger.py revise <ID> <draft> --note N  the next version of a 需求包 or 决策包: the main document's
+                                            opening up to 状态包 replaced in place, a line in 交接记录
     ledger.py reply <draft>                 交付包: document under the request it answers, 交付包 field
-    ledger.py confirm <ID> --by <会话名> [--set f=v ...]     finish the step the item is at
+    ledger.py confirm <ID> --by <会话名> [--set f=v ...] [--option 选项]
+                                            finish the step the item is at; on a decision's 决定 step,
+                                            --option is the option picked, whose releases are written
+    ledger.py confirm <ID> --by 到期默认    a reversible decision past its expiry time takes its default
     ledger.py rollback <ID> --to <节点> --reason R (--by <会话名> | --decision <ID>)
     ledger.py archive <ID>                  move the main document subtree to 归档文档/<序列>, then finish the last step
     ledger.py update <ID> --set f=v [...]   blocked_reason=<原因> also sets the date; an empty value clears a field
@@ -46,6 +51,10 @@ decision that is decided, approved and made for this task. Before the step that 
 the conclusion, the operation records are read: a frozen field changed after the signing
 step stops the command. A roll-back on the main line needs an approved decision and
 clears the required fields of the steps it undoes.
+
+Decisions from the decision queue are mirrored in a local decision state, .claude/state/gates.json
+(shape and timing above save_gates): what each pending decision freezes, how it may end, and what
+decided decisions released. Only the scribe's --apply writes it; the guard and inbox hooks read it.
 
 Document bodies go to lark-cli on stdin (`--content -`): lark-cli only reads @files
 under the working directory, /tmp or ~/files. The shapes parsed here are the ones
@@ -810,6 +819,8 @@ class Draft:
         ref = re.search(r"#?(\d{3,})", self.header.get("所属研究任务", ""))
         self.task_ref = ref.group(1) if ref else None
         self.flow = None
+        self.version = orgspec.version_of(self.header.get(orgspec.VERSION))
+        self.terms = orgspec.decision_parts(spec, self.text, self.header)[0] if self.pid == "decision" else None
 
     def section(self, name):
         m = re.search(r"\n## %s\n(.*?)(?:\n## |\Z)" % re.escape(name), self.text, re.S)
@@ -845,6 +856,7 @@ class Sheet(Draft):
         if missing:
             raise LedgerError("%s的开头缺这几行：%s" % (word, "、".join("“- %s：…”" % k for k in missing)))
         self.pid, self.rel, self.receiver, self.receiver_seq, self.linked = None, None, None, None, []
+        self.version, self.terms = None, None
         self.task = re.split(r"[：:]", title_of(self.text), 1)[-1].strip()
         if not self.task:
             raise LedgerError("%s的标题要写成“# %s：<名字>”" % (word, word))
@@ -944,21 +956,40 @@ def researcher_action(d):
     return None if not value or orgspec.SAYS_NOTHING.match(value) else value
 
 
-def receipt_kind(spec, wid, d):
+def urgency_of(d, pairs=None):
+    """The 紧急程度 a decision was registered with: the header's, or the --set value when the header
+    still reads like the template (插队 / 今天 / ...); None when neither says."""
+    value = (d.header.get("紧急程度") or "").strip()
+    for pair in pairs or []:
+        key, _, raw = pair.partition("=")
+        if key.strip() in ("紧急程度", "urgency") and raw.strip():
+            value = value if value and "/" not in value else raw.strip()
+    return value if value and "/" not in value else None
+
+
+def receipt_kind(spec, wid, d, pairs=None):
     """What the receipt says the registration was, for the inbox hook of the session the
     【登记回执】 reaches: the work item type, whether a decision waits in the decision queue and
     whether it jumps it. A decision's 回复期限, 执行方 and 研究员要做的事 have no field in the space;
     they are kept here as the package header wrote them, for `query queue` and `confirm`. executor is
     研究员 or the session's name; researcher_action is null when the header says 无, which the package
     check allows only when a session carries the decision out. A receipt without the keys is older than
-    those header lines: carried_out_by."""
+    those header lines: carried_out_by. From 1.0.4 a package's receipt keeps its version, and a decision's
+    also what decision_parts read (reversible, criteria, default, default_option, options, frozen) with its
+    title, urgency and sender: `confirm --option` checks the option against them, and a decision rolled
+    back to 待决定 is put back into the local decision state from them."""
+    version = getattr(d, "version", None)
     if wid != "decision":
-        return {"type": wid, "queue": False, "urgent": False}
-    urgency = (d.header.get("紧急程度") or "").strip()
+        return dict({"type": wid, "queue": False, "urgent": False}, **({"version": version} if version else {}))
+    urgency = urgency_of(d, pairs) or ""
+    terms = getattr(d, "terms", None) or {}
     return {"type": wid, "queue": (d.header.get("渠道") or "").strip() == spec.term("channel", "queue"),
-            "urgent": "/" not in urgency and re.split(r"[\s（(，,。；;]", urgency, 1)[0] == URGENT,
+            "urgent": re.split(r"[\s（(，,。；;]", urgency, 1)[0] == URGENT,
             "due": (d.header.get("回复期限") or "").strip() or None,
-            "executor": orgspec.executor_of(spec, d.header.get(orgspec.EXECUTOR)), "researcher_action": researcher_action(d)}
+            "executor": orgspec.executor_of(spec, d.header.get(orgspec.EXECUTOR)), "researcher_action": researcher_action(d),
+            "version": version, "title": d.task, "urgency": urgency or None, "sender": d.author,
+            "reversible": terms.get("reversible"), "criteria": terms.get("criteria") or [], "default": terms.get("default"),
+            "default_option": terms.get("default_option"), "options": terms.get("options"), "frozen": terms.get("frozen") or []}
 
 
 def carried_out_by(rec, sender=None):
@@ -1012,6 +1043,279 @@ def check_receipt(lg, path, resume, again=""):
         raise LedgerError("回执里的工作项 #%s 读不到了（%s）。如果它已经被删掉，删掉回执 %s 再重新登记" % (
             item_id, str(e)[:120], rec["_file"]))
     return rec
+
+
+def receipt_file_of(lg, item_id):
+    """(path, receipt) of a work item's registration receipt; (None, {}) when there is none."""
+    num = str(item_id)
+    folder = glob.escape(sent_dir(lg))
+    for path in sorted(glob.glob(os.path.join(folder, num + ".json"))) + sorted(glob.glob(os.path.join(folder, num + "-*.json"))):
+        rec = load_json(path, {})
+        if isinstance(rec, dict) and str(rec.get("work_item_id")) == num:
+            return path, rec
+    return None, {}
+
+
+def update_receipt(lg, item_id, **values):
+    """Merge values into a work item's registration receipt (apply only); False when it has none."""
+    if lg.mode != "apply":
+        return False
+    path, rec = receipt_file_of(lg, item_id)
+    if not path:
+        return False
+    rec.update(values, updated_at=now())
+    save_json(path, rec)
+    return True
+
+
+# ---------------------------------------------------- local decision state
+# .claude/state/gates.json (.agent-org/state/gates.json in a Codex project), next to the claims table and
+# guarded like it: only ledger.py run by the scribe with --apply writes it (atomically, under the ledger's
+# write lock); the guard and inbox hooks only read it. Shape (GATES_VERSION 1):
+#   {"version": 1, "updated_at": ISO, "expiry_hours": 24, "expiry_from": "org/decisions.md" | "默认",
+#    "pending": {"<ID>": {
+#        "id", "title" (事项), "urgency" (紧急程度), "registered_at" (ISO, the registration; a revision keeps it),
+#        "reopened_at" (ISO, when a decision rolled back to 待决定 began to wait again: its expiry counts from then),
+#        "expires_at" (reopened_at or registered_at + expiry_hours, refreshed on every write), "version" (int),
+#        "reversible" (true/false/null), "criteria" [int], "default" (到期默认动作 as written),
+#        "default_option" (the option it names, null unless reversible), "default_applies" (true when
+#        confirm --by 到期默认 may take it once expired: reversible, a session carries it out, nothing by hand),
+#        "executor" (研究员 or a session), "researcher_action" (null for 无), "due" (回复期限, reference only),
+#        "sender", "options" [{"name", "approach", "releases": [release]}],
+#        "frozen" [{"kind": "category", "category" (id in orgspec/irreversible.json), "name", "qualifier", "text"}
+#                  | {"kind": "command", "prefix", "words" [the words before any wildcard, at least two], "text"}
+#                  | {"kind": "text", "text"}]}},
+#    "releases": [{"category", "name", "qualifier" ("" = the whole category), "text", "decision" (ID),
+#                  "option", "at" (ISO)}]}
+# pending: decisions from the decision queue while 待决定. Written when one is registered (from the moment
+# its work item exists) and revised; removed when 决定 is confirmed (by the researcher or by 到期默认), when
+# it is archived or found terminated, and when another write finds it no longer waiting in the space.
+# releases: written when the researcher's decision is confirmed with --option, from that option's
+# 要放行的不可逆动作; a later decision whose options name an overlapping category (same category, and the
+# same qualifier, the same application, or either one empty: overlaps) takes the earlier release back when the
+# option picked does not keep it. Archiving or terminating a decision leaves its releases; a decision rolled
+# back to 待决定 loses its own, and waits the expiry time again from the rollback (the researcher has just
+# decided it: 到期默认 does not take it at once). Confirming by 到期默认 never writes a release.
+GATES_VERSION = 1
+EXPIRY_HOURS = 24
+EXPIRY_KEY = "可逆决策的到期时长"
+EXPIRY_LINE = re.compile(r"%s[^0-9\n]{0,16}?(\d+(?:\.\d+)?)\s*(小时|天)" % EXPIRY_KEY)
+BY_DEFAULT = "到期默认"
+PRUNE_AFTER = datetime.timedelta(minutes=10)
+
+
+def gates_path(root):
+    base = ".agent-org" if os.path.isfile(os.path.join(root, ".agent-org", "manifest.json")) else ".claude"
+    return os.path.join(root, base, "state", "gates.json")
+
+
+def load_gates(root):
+    """The local decision state; an empty one when the file is missing or unreadable."""
+    data = load_json(gates_path(root), {})
+    data = data if isinstance(data, dict) else {}
+    pending = data.get("pending") if isinstance(data.get("pending"), dict) else {}
+    releases = [r for r in data.get("releases") or [] if isinstance(r, dict)] if isinstance(data.get("releases"), list) else []
+    return dict(data, version=GATES_VERSION, pending=pending, releases=releases)
+
+
+def expiry_hours(root):
+    """(hours, where from, reminder or None): how long a reversible decision waits before 到期默认 may
+    take it, counted from its registration. The last line in org/decisions.md that reads like
+    “可逆决策的到期时长：登记后 24 小时” (小时 or 天) decides; without one, 24 hours."""
+    try:
+        with open(os.path.join(root, "org", "decisions.md"), encoding="utf-8") as f:
+            text = f.read()
+    except (OSError, UnicodeDecodeError):
+        return EXPIRY_HOURS, "默认", None
+    hits = [(float(n), unit) for n, unit in EXPIRY_LINE.findall(text)]
+    if hits and hits[-1][0] > 0:
+        n, unit = hits[-1]
+        return n * (24 if unit == "天" else 1), "org/decisions.md", None
+    if EXPIRY_KEY in text:
+        return EXPIRY_HOURS, "默认", "提醒：org/decisions.md 里“%s”一行读不出时长（写成“登记后 24 小时”或“登记后 2 天”），按 %d 小时算" % (
+            EXPIRY_KEY, EXPIRY_HOURS)
+    return EXPIRY_HOURS, "默认", None
+
+
+def hours_text(hours):
+    hours = round(float(hours), 1)
+    return "%s 小时" % (int(hours) if hours.is_integer() else hours)
+
+
+def now_at():
+    return datetime.datetime.now().astimezone()
+
+
+def parse_stamp(text):
+    try:
+        at = datetime.datetime.fromisoformat(str(text))
+    except (TypeError, ValueError):
+        return None
+    return at if at.tzinfo else at.astimezone()
+
+
+def pending_entry(item_id, kinds, registered_at):
+    """The local decision state's record of a decision waiting for the researcher, from its receipt kinds."""
+    default_applies = (kinds.get("reversible") is True and bool(kinds.get("default_option"))
+                       and kinds.get("executor") not in (None, RESEARCHER) and not kinds.get("researcher_action"))
+    return {"id": str(item_id), "title": kinds.get("title"), "urgency": kinds.get("urgency"), "registered_at": registered_at,
+            "version": kinds.get("version"), "reversible": kinds.get("reversible"), "criteria": kinds.get("criteria") or [],
+            "default": kinds.get("default"), "default_option": kinds.get("default_option"), "default_applies": default_applies,
+            "executor": kinds.get("executor"), "researcher_action": kinds.get("researcher_action"), "due": kinds.get("due"),
+            "sender": kinds.get("sender"), "options": kinds.get("options") or [], "frozen": kinds.get("frozen") or []}
+
+
+def prune_pending(lg, gates, keep=None):
+    """Drop pending decisions the space no longer has waiting (terminated, or decided on the web page).
+    One query; entries younger than PRUNE_AFTER and the item being written are left alone, and nothing
+    is dropped when the query fails."""
+    old = now_at() - PRUNE_AFTER
+    stale = [i for i, e in gates["pending"].items()
+             if i != str(keep) and (parse_stamp(e.get("registered_at")) or now_at()) < old]
+    if not stale or "decision" not in lg.types:
+        return
+    try:
+        rows = query_all(lg, _select(lg, "decision", "`work_item_status` = '%s'" % lg.state("decision", "pending")))
+    except (LedgerError, orgspec.OrgSpecError, KeyError) as e:
+        print("提醒：没能核对本地决策状态里的待定决策还在不在待决定（%s），先都留着" % str(e)[:160])
+        return
+    waiting = {str(r.get("work_item_id")) for r in rows}
+    for i in stale:
+        if i not in waiting:
+            del gates["pending"][i]
+            print("本地决策状态：#%s 在空间里已经不在待决定（终止了，或者在网页上处理了），它的冻结解除。" % i)
+
+
+def save_gates(lg, change, keep=None):
+    """Apply change(gates) to the local decision state and write it: only with --apply, which only the
+    scribe can run. Pending decisions get their expires_at from the expiry time in org/decisions.md."""
+    if lg.mode != "apply":
+        return None
+    gates = load_gates(lg.root)
+    change(gates)
+    prune_pending(lg, gates, keep)
+    hours, source, note = expiry_hours(lg.root)
+    if note:
+        print(note)
+    gates.update(expiry_hours=hours, expiry_from=source, updated_at=now())
+    for entry in gates["pending"].values():
+        since = waiting_since(entry)
+        entry["expires_at"] = (since + datetime.timedelta(hours=hours)).isoformat(timespec="seconds") if since else None
+    path = gates_path(lg.root)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    save_json(path, gates)
+    return gates
+
+
+def overlaps(a, b, spec=None):
+    """Do two releases (or a release and an option's entry) cover the same actions: the same category, and
+    the same qualifier or either one the whole category? For a category with an apps list, two qualifiers that
+    name the same application overlap (Docker and Docker Desktop), as guard.overlaps reads them."""
+    if a.get("category") != b.get("category"):
+        return False
+    qa, qb = (a.get("qualifier") or "").strip().lower(), (b.get("qualifier") or "").strip().lower()
+    if not qa or not qb or qa == qb:
+        return True
+    cat = next((c for c in spec.irreversible_categories() if c.get("id") == a.get("category")), None) if spec else None
+    if cat and cat.get("apps"):
+        found_a, found_b = set(orgspec.qualifier_apps(cat, qa)), set(orgspec.qualifier_apps(cat, qb))
+        return bool(found_a & found_b)
+    return False
+
+
+def decision_options(lg, item_id):
+    """A decision's options as registered or revised: the local decision state first, then the receipt.
+    None when neither has them (registered before 1.0.4)."""
+    entry = load_gates(lg.root)["pending"].get(str(item_id))
+    if entry and entry.get("options") is not None:
+        return entry["options"]
+    return receipt_of(lg, item_id).get("options")
+
+
+def chosen_option(options, option, item_id):
+    """The option --option names, checked against the decision's options; {"name": "无"} when the
+    researcher picked none of them; None when --option is left out, which only a decision none of whose
+    options releases anything allows."""
+    releasing = [o for o in options or [] if o.get("releases")]
+    if option is None:
+        if releasing:
+            raise LedgerError("#%s 的选项里有要放行的不可逆动作（%s）：研究员选了哪个选项，加 --option <选项>；研究员没有选表里的任何一个，加 --option 无" % (
+                item_id, "；".join("%s：%s" % (o["name"], "、".join(r.get("text") or r.get("name") for r in o["releases"])) for o in releasing)))
+        return None
+    option = option.strip()
+    if option == orgspec.NOTHING:
+        return {"name": orgspec.NOTHING, "approach": "", "releases": []}
+    hit = next((o for o in options or [] if o.get("name") == option), None)
+    if hit:
+        return hit
+    if options is None:
+        raise LedgerError("#%s 没有记下选项表（包里的选项写的是“无”，或者是 1.0.4 以前登记的）：不加 --option；要按选项放行，"
+                          "请发出方写下一版，书记员 revise 以后再确认" % item_id)
+    raise LedgerError("#%s 的选项里没有“%s”，有：%s；研究员没有选表里的任何一个，写 --option 无" % (
+        item_id, option, "、".join(o.get("name", "") for o in options)))
+
+
+def settle(lg, item_id, choice, by_default=None):
+    """After 决定 is confirmed: the decision leaves the pending decisions. By the researcher with an option,
+    that option's releases are written and earlier releases its options name are taken back; by 到期默认,
+    nothing is released. Returns (added, taken back)."""
+    added, revoked = [], []
+    stamp = now()
+
+    def change(gates):
+        entry = gates["pending"].pop(str(item_id), None)
+        if by_default or not choice or not choice.get("releases") and choice.get("name") == orgspec.NOTHING:
+            return
+        options = (entry or {}).get("options") or receipt_of(lg, item_id).get("options") or [choice]
+        named = [r for o in options for r in o.get("releases") or []]
+        kept = []
+        for rel in gates["releases"]:
+            if str(rel.get("decision")) != str(item_id) and any(overlaps(rel, n, lg.spec) for n in named):
+                revoked.append(rel)
+            else:
+                kept.append(rel)
+        gates["releases"] = kept + [dict(category=r["category"], name=r.get("name"), qualifier=r.get("qualifier") or "",
+                                         text=r.get("text"), decision=str(item_id), option=choice["name"], at=stamp)
+                                    for r in choice.get("releases") or []]
+        added.extend(gates["releases"][len(kept):])
+
+    save_gates(lg, change, keep=item_id)
+    if lg.mode == "apply":
+        update_receipt(lg, item_id, option=(choice or {}).get("name"), decided_by=BY_DEFAULT if by_default else RESEARCHER,
+                       decided_at=stamp)
+        for rel in revoked:
+            print("收回：%s（原来由决策 #%s 放行）。" % (rel.get("text") or rel.get("name"), rel.get("decision")))
+        for rel in added:
+            print("放行：%s（决策 #%s，选项“%s”）。" % (rel["text"] or rel["name"], item_id, choice["name"]))
+    elif choice and choice.get("releases") and not by_default:
+        print("预览：会放行%s（决策 #%s，选项“%s”）。" % ("、".join(r.get("text") or r["name"] for r in choice["releases"]), item_id, choice["name"]))
+    return added, revoked
+
+
+def waiting_since(entry):
+    """When a pending decision began to wait, which its expiry counts from: the rollback that put it back to
+    待决定, or its registration."""
+    return parse_stamp(entry.get("reopened_at") or entry.get("registered_at"))
+
+
+def hold(lg, item_id, kinds, registered_at=None, reopened_at=None):
+    """Put a decision from the decision queue into the local decision state (or refresh it), keeping the
+    registration time it already has, and the time it was rolled back to 待决定."""
+    def change(gates):
+        old = gates["pending"].get(str(item_id)) or {}
+        entry = pending_entry(item_id, kinds, old.get("registered_at") or registered_at or now())
+        if old.get("reopened_at") or reopened_at:
+            entry["reopened_at"] = old.get("reopened_at") or reopened_at
+        gates["pending"][str(item_id)] = entry
+    return save_gates(lg, change, keep=item_id)
+
+
+def release_pending(lg, item_id):
+    """Take a decision out of the pending decisions (archived, terminated); True when it was there."""
+    if lg.mode != "apply" or str(item_id) not in load_gates(lg.root)["pending"]:
+        return False
+    save_gates(lg, lambda gates: gates["pending"].pop(str(item_id), None), keep=item_id)
+    return True
 
 
 def doc_from_link(lg, link, given=False):
@@ -1206,6 +1510,28 @@ def revisable(lg, item_id, d, kind):
     return plain(it["fields"].get(lg.field(wid, "main_doc")["field_key"]))
 
 
+# A research task sheet's 资源上限 names the conditions a paid run depends on: 执行环境 and 计算资源 say
+# 待研究员确认, or name the decision that set them. Choosing them meets criterion 4 of the list of
+# irreversible actions, so they go into the decision queue, exploratory tasks included.
+RUN_CONDITIONS = ("执行环境", "计算资源")
+NOT_YET = re.compile(r"(?:待研究员确认|待确认|待定|未定|无)(?:$|[\s（(，,。；;：:])")
+DECISION_REF = re.compile(r"(?:决策\s*#?\s*|#)(\d{3,})")
+
+
+def run_conditions_hints(d):
+    """Lines to print when a research task sheet writes 执行环境 or 计算资源 without the decision that set them."""
+    section = d.section("资源上限")
+    hints = []
+    for row in RUN_CONDITIONS:
+        m = re.search(r"^\s*[-*]\s*%s\s*[：:][ \t]*(.*)$" % row, section, re.M)
+        value = m.group(1).strip() if m else ""
+        if not value or orgspec.placeholder(value) or NOT_YET.match(value) or DECISION_REF.search(value):
+            continue
+        hints.append("提示：研究任务单“资源上限”里的%s写了“%s”，没有定下它的决策 ID：%s要进决策队列。请发出方写决策包交研究员定，"
+                     "试探任务也一样；定了以后把决策 ID 写进这一行，比如“%s（决策 #<ID>）”，没定之前写“待研究员确认”。" % (row, value, row, value))
+    return hints
+
+
 def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=None, existing=None):
     """Register a draft: a work item with the draft as its main document.
 
@@ -1223,6 +1549,11 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
     wid = kind or work_item_type(d)
     if not d.author:
         raise LedgerError("发出方要带会话名，比如“算法 +2（Alg-p2-01）”")
+    if not kind and d.version != 1:
+        raise LedgerError("登记的是新工作项，包头“版本”写第 1 版，现在是第 %s 版：已经登记过的包改了内容，用 ledger.py revise <工作项 ID> <新草稿> 换主文档" % d.version)
+    if kind == "research_task":
+        for line in run_conditions_hints(d):
+            print(line)
     rec = check_receipt(lg, path, resume or bool(doc) and bool(find_receipt(lg, path))) if lg.mode != "offline" else None
     if existing and not rec:
         if lg.mode == "offline":
@@ -1310,7 +1641,7 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
         fields.append(owners)
     parent = parent_node(lg, wid, seq, d.rel, source)
 
-    kinds = receipt_kind(spec, wid, d)
+    kinds = receipt_kind(spec, wid, d, pairs)
     if rec:
         item_id = rec["work_item_id"]
         print(("给 #%s 换研究任务单。" if swap else "接着上次的 #%s 做。") % item_id)
@@ -1320,7 +1651,10 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
         created = lg.meegle("workitem", "create", "--work-item-type", lg.api(wid), "--fields",
                             json.dumps(fields, ensure_ascii=False), write=True)
         item_id = created_id(created, spec.term("wi", wid)) if created is not None else "<新工作项 ID>"
-        save_receipt(lg, path, item_id, "created", kinds, source=source, task=task, pairs=resolved_pairs(lg, pairs))
+        save_receipt(lg, path, item_id, "created", kinds, source=source, task=task, pairs=resolved_pairs(lg, pairs),
+                     registered_at=now())
+    if wid == "decision" and kinds.get("queue"):      # frozen from the moment the work item exists
+        hold(lg, item_id, kinds, (rec or {}).get("registered_at") or receipt_of(lg, item_id).get("registered_at"))
     title = title.replace("<工作项 ID>", item_id)
 
     state = {}
@@ -1391,8 +1725,12 @@ def after_register(lg, wid, d, item_id):
         content = re.search(r"决定内容[：:]\s*(.+)", sec)
         decider = re.search(r"决定人[：:]\s*(.+)", sec)
         if content and decider:
-            print("研究员主动发起的决策，接着确认：ledger.py confirm %s --by 研究员 --set 决定内容='%s' --set 决定人=研究员"
-                  % (item_id, content.group(1).strip()))
+            options, picked = (d.terms or {}).get("options") or [], ""
+            if any(o["releases"] for o in options):        # confirm takes the option, to release what it lists
+                hits = orgspec.match_option(content.group(1), options)
+                picked = " --option '%s'" % (hits[0] if len(hits) == 1 else "<研究员选的选项；表里的都没选，写 无>")
+            print("研究员主动发起的决策，接着确认：ledger.py confirm %s --by 研究员%s --set 决定内容='%s' --set 决定人=研究员"
+                  % (item_id, picked, content.group(1).strip()))
         else:
             print("研究员主动发起的决策，但“决定”一节没写全决定内容和决定人：退回作者补上，再确认“决定”这一步。")
     elif wid == "same_seq":
@@ -1824,17 +2162,81 @@ def next_step(lg, item_id):
     return "\n".join(lines)
 
 
-def confirm(lg, item_id, by=None, pairs=None, node=None, decision=None, wid_hint=None):
+def confirm(lg, item_id, by=None, pairs=None, node=None, decision=None, wid_hint=None, option=None):
     """Finish the step a work item is at.
 
     The space says what the step still lacks; --set values are written first. The
     scripts' own checks come before anything is written: who asks, the signature a
     required field refers to, and, before the step that requires the conclusion,
     whether a frozen field was changed after it was signed.
+    On a decision's 决定 step, option is the option the researcher picked: its 要放行的不可逆动作
+    are released once the step is confirmed (none for 无). by=到期默认 confirms a reversible decision
+    that waited the expiry time with the option its package names (confirm_by_default).
     """
+    if by == BY_DEFAULT:
+        if pairs or option or decision:
+            raise LedgerError("--by 到期默认 的决定内容和决定人由脚本照包里写的到期默认动作写：去掉 --set、--option 和 --decision")
+        return confirm_by_default(lg, item_id, node)
+    return confirm_step(lg, item_id, by, pairs, node, decision, wid_hint, option)
+
+
+def confirm_by_default(lg, item_id, node=None):
+    """`confirm <ID> --by 到期默认`: record the decision a reversible decision's package names as its
+    default once it has waited the expiry time since registration. Only when all of these hold: it is
+    still 待决定, it is in the local decision state, a session carries it out with nothing for the
+    researcher to do by hand, it is reversible, the expiry time has passed, and its 到期默认动作 names an
+    option. 决定人 is the researcher (the field takes a person); 决定内容 starts with 到期默认：. Nothing
+    is released."""
+    it, wid = typed_item(lg, item_id, "decision")
+    if it is None:
+        raise LedgerError("到期默认要先读这条决策现在的状态，离线做不了")
+    if wid != "decision":
+        raise LedgerError("--by 到期默认 只用在决策上：#%s 是%s" % (item_id, lg.spec.term("wi", wid)))
+    pending = lg.state("decision", "pending")
+    if it["state"] != pending:
+        raise LedgerError("#%s 现在是“%s”，不在“%s”：到期默认只给还没定的决策" % (item_id, it["state"], pending))
+    entry = load_gates(lg.root)["pending"].get(str(item_id))
+    if not entry:
+        raise LedgerError("本地决策状态里没有 #%s：它不是决策队列来的，或者是 1.0.4 以前登记的。到期默认要照登记时写下的可逆性和到期默认动作办："
+                          "请发出方按新模板写下一版，书记员 revise 以后再看" % item_id)
+    if entry.get("executor") == RESEARCHER or entry.get("researcher_action"):
+        raise LedgerError("#%s 的执行方是研究员（或者要研究员亲手做事），到期继续等研究员，不走到期默认" % item_id)
+    if entry.get("reversible") is not True:
+        raise LedgerError("#%s 是不可逆的决策（判据 %s），到期只能等研究员，不走到期默认" % (
+            item_id, "、".join(str(n) for n in entry.get("criteria") or []) or "?"))
+    hours, source, note = expiry_hours(lg.root)
+    if note:
+        print(note)
+    since, start = waiting_since(entry), "回到待决定" if entry.get("reopened_at") else "登记"
+    if not since:
+        raise LedgerError("本地决策状态里 #%s 的登记时间读不出来，没法算到期：请书记员 revise 一次重新记下" % item_id)
+    due = since + datetime.timedelta(hours=hours)
+    if now_at() < due:
+        raise LedgerError("#%s %s了 %s，还没满到期时长 %s（%s）：%s 以后才能按到期默认确认" % (
+            item_id, start, hours_text((now_at() - since).total_seconds() / 3600), hours_text(hours),
+            "org/decisions.md" if source != "默认" else "默认值", due.strftime("%Y-%m-%d %H:%M")))
+    option = entry.get("default_option")
+    picked = next((o for o in entry.get("options") or [] if o.get("name") == option), None)
+    if not picked:
+        raise LedgerError("#%s 的到期默认动作是“%s”，没有指向选项表里的选项：到期继续等研究员" % (item_id, entry.get("default") or "空的"))
+    content = "到期默认：%s%s（%s后 %s内研究员没有决定）" % (option, "：" + picked["approach"] if picked.get("approach") else "", start,
+                                                   hours_text(hours))
+    confirm_step(lg, item_id, RESEARCHER, ["决定内容=" + content, "决定人=" + RESEARCHER], node, None, "decision",
+                 by_default=(content, picked))
+    lg.meegle("comment", "add", "--work-item-id", str(item_id), "--content", "%s %s" % (lg.tag, content), write=True)
+
+
+def confirm_step(lg, item_id, by=None, pairs=None, node=None, decision=None, wid_hint=None, option=None, by_default=None):
     it, wid = typed_item(lg, item_id, wid_hint)
     spec = lg.spec
     sets = parse_sets(lg, wid, pairs)
+    pending = ((lg.states.get("decision") or {}).get("pending") or {}).get("name")
+    deciding = wid == "decision" and it is not None and bool(pending) and it.get("state") == pending
+    if option is not None and not deciding and it is not None:       # offline nothing can be read: commands only
+        raise LedgerError("--option 只用在确认决策的“决定”这一步：#%s 是%s，现在是“%s”" % (item_id, spec.term("wi", wid), it["state"]))
+    choice = chosen_option(decision_options(lg, item_id), option, item_id) if deciding and not by_default else None
+    if by_default:
+        choice = by_default[1]
     if (lg.field_keys.get(wid) or {}).get("blocked_reason") in [v["field_key"] for _, v in sets]:
         raise LedgerError("阻塞原因用 update 写，不随确认节点写")
     nodes = lg.flow_nodes(item_id)
@@ -1891,12 +2293,18 @@ def confirm(lg, item_id, by=None, pairs=None, node=None, decision=None, wid_hint
             item_id, cur["name"], "、".join(n["name"] for n in doing) or "流程末尾", state))
         for n in doing:                                    # the scribe tells whoever the next step belongs to
             print("“%s”这一步的负责方：%s。" % (n["name"], responsible(lg, wid, it, n)[0]))
+        if deciding:
+            settle(lg, item_id, choice, by_default and by_default[0])
+            if by_default:
+                print("到期默认：照选项“%s”办，执行完请书记员归档；没有放行任何不可逆动作。" % choice["name"])
         if wid == "decision" and state == lg.state(wid, "decided"):   # and the decision's 执行方 what was decided
             who = carried_out_by(receipt_of(lg, item_id), lg.text_of(it, "sender"))
             if who:
                 print("执行方：%s。" % who)
     else:
         print("预览：会确认 #%s 的“%s”（%s）。" % (item_id, cur["name"], cur["key"]))
+        if deciding:
+            settle(lg, item_id, choice, by_default and by_default[0])
 
 
 def rollback(lg, item_id, to, reason, by=None, decision=None, wid_hint=None):
@@ -1957,7 +2365,32 @@ def rollback(lg, item_id, to, reason, by=None, decision=None, wid_hint=None):
         after = lg.flow_nodes(item_id)
         if next(n for n in after if n["key"] == target["key"])["status"] != "doing":
             raise LedgerError("回滚后回读，“%s”不在进行中" % target["name"])
-        print("现在状态“%s”。被退回的各步重做后再确认。" % (lg.item(item_id) or {}).get("state"))
+        state = (lg.item(item_id) or {}).get("state")
+        print("现在状态“%s”。被退回的各步重做后再确认。" % state)
+        if wid == "decision" and state == ((lg.states.get("decision") or {}).get("pending") or {}).get("name"):
+            reopen(lg, item_id)
+
+
+def reopen(lg, item_id):
+    """A decision back at 待决定: the releases it made are taken back, and one from the decision queue
+    waits again in the local decision state (its options and frozen actions from the receipt)."""
+    rec = receipt_of(lg, item_id)
+    dropped, stamp = [], now()
+
+    def change(gates):
+        dropped.extend(r for r in gates["releases"] if str(r.get("decision")) == str(item_id))
+        gates["releases"] = [r for r in gates["releases"] if str(r.get("decision")) != str(item_id)]
+        if rec.get("queue") and rec.get("options") is not None:
+            old = gates["pending"].get(str(item_id)) or {}
+            entry = pending_entry(item_id, rec, old.get("registered_at") or rec.get("registered_at") or stamp)
+            entry["reopened_at"] = stamp                  # the researcher has just decided it: the wait starts again
+            gates["pending"][str(item_id)] = entry
+    save_gates(lg, change, keep=item_id)
+    for rel in dropped:
+        print("收回：%s（决策 #%s 回到待决定）。" % (rel.get("text") or rel.get("name"), item_id))
+    if rec.get("queue") and rec.get("options") is not None:
+        update_receipt(lg, item_id, reopened_at=stamp)
+        print("本地决策状态：#%s 回到待决定，冻结的动作重新生效，到期从现在重新算。" % item_id)
 
 
 def update(lg, item_id, pairs, wid_hint=None):
@@ -2042,6 +2475,133 @@ def status_block(lg, item_id, path):
             "--end-block-id", end, "--doc-format", "markdown", "--content", "-", write=True, stdin=content)
 
 
+def opening_blocks(xml, end_id):
+    """(first block, last block before end_id) of a range fragment that starts at the top of a document:
+    the blocks `ledger.py revise` replaces. A list is its <li> blocks; an <excerpt> stands for its top block."""
+    root = ET.fromstring(xml)
+    children = [c for c in root if c.tag != "title"]
+    if not children or children[0].get("id") == end_id or children[0].get("top-block-id") == end_id:
+        raise LedgerError("主文档在“状态包”标题之前没有内容块")
+    head = children[0]
+    first = head.get("top-block-id") or head.get("id")
+    if not first and head.tag in ("ul", "ol"):
+        first = next((c.get("id") for c in head if c.get("id")), None)
+    if not first:
+        raise LedgerError("主文档开头那一块（<%s>）没有 block id；请在网页上替换主文档开头" % head.tag)
+    return first, last_block_before(xml, end_id)
+
+
+def revision_body(d, item_id, link):
+    """The new opening of a main document: the draft without its title, its 关联工作项 naming the item, and
+    nothing from 状态包 on (the document keeps its own 状态包 and 交接记录)."""
+    body = link_line(d.body_without_title(), "[#%s](%s)" % (item_id, link) if link else "#%s" % item_id, item_id)
+    m = re.search(r"^## (?:状态包|交接记录)\s*$", body, re.M)
+    return (body[:m.start()] if m else body).rstrip("\n") + "\n"
+
+
+def revise(lg, item_id, path, note):
+    """Put the next version of a package in place: the main document's opening, up to its 状态包 heading,
+    becomes the draft (block_replace, the same write as status-block), and 交接记录 gets a line
+    “<标签> 第 N 版（日期）：<改了什么>”. The document keeps its link and identity; earlier versions stay in
+    the document's history. Checked first: the draft passes the package check, its type is the item's, its
+    version is the previous one plus one, a decision is still 待决定 and any other item is not closed; the
+    item's 紧急程度 (a request's 截止时间) is read too, and one the space has no option for is skipped with a
+    reminder, as register does. Then the document is written, and the field, the receipt and the local
+    decision state follow the new version. Nothing is sent to the researcher: the queue shows the new version
+    when they come."""
+    spec = lg.spec
+    if not (note or "").strip():
+        raise LedgerError("修订要写改了什么：--note '<改了什么>'，它会记进交接记录")
+    item_id = item_id_of(item_id)
+    if sheet_kind(path):
+        raise LedgerError("研究任务单不用 revise：还在第一步时，用 ledger.py register <修订稿> --existing <工作项 ID> 换主文档")
+    d = Draft(spec, path)
+    if d.pid == "delivery":
+        raise LedgerError("交付包不是主文档，不用 revise：改好后用 reply 重新交，版本号加 1")
+    wid = work_item_type(d)
+    head = d.text.split("\n## ", 1)[0]
+    m = LINK_LINE.search(head)
+    value = m.group(2).strip() if m else ""
+    if m and value.strip("（）()〔〕[] ") not in PLACEHOLDERS and not re.fullmatch(r"#?%s|\[#?%s\]\(\S+\)" % (item_id, item_id), value):
+        raise LedgerError("修订稿的“关联工作项”写的是“%s”，要修订的是 #%s：写“#%s”，或者照新草稿写“待建”" % (value, item_id, item_id))
+    it = lg.item(item_id)
+    rec = receipt_of(lg, item_id)
+    if it is not None:
+        if it.get("type") != wid:
+            raise LedgerError("#%s 是%s，修订稿是%s：包类型不变才能修订；要换成别的包，另写一份登记" % (
+                item_id, spec.term("wi", it["type"]) if it.get("type") else "别的类型", spec.pkg(d.pid)))
+        if wid == "decision":
+            pending = lg.state("decision", "pending")
+            if it["state"] != pending:
+                raise LedgerError("#%s 现在是“%s”：决策只在“%s”时能修订；研究员已经定了的，要改另写一条决策" % (item_id, it["state"], pending))
+        elif it["state"] in closed_states(lg):
+            raise LedgerError("#%s 已经是“%s”：工作项关闭以后不再修订" % (item_id, it["state"]))
+    previous = int(rec.get("version") or 1)
+    if d.version != previous + 1:
+        raise LedgerError("修订稿是第 %s 版，#%s 现在是第 %d 版：修订稿的“版本”写第 %d 版" % (d.version, item_id, previous, previous + 1))
+    date = orgspec.read_version(d.header.get(orgspec.VERSION))[1]
+    kinds = receipt_kind(spec, wid, d)
+    updates = []                                  # field values are read before anything is written
+    if wid == "decision" and kinds.get("urgency"):
+        wanted = ("urgency", kinds["urgency"])
+    elif wid != "decision" and "due" in lg.contract.slots(wid, "fields") and utc_noon_ms(d.header.get("回复期限", "")):
+        wanted = ("due", d.header["回复期限"])
+    else:
+        wanted = None
+    if wanted:
+        try:
+            updates.append(lg.entry(wid, *wanted))
+        except (LedgerError, KeyError, orgspec.OrgSpecError) as e:
+            print("提醒：跳过字段 %s（之后可以用 update 补）：%s" % (wanted[0], e))
+    body = revision_body(d, item_id, lg.item_url(wid, item_id))
+    url = lg.doc_url(item_id, it)
+    heads = heading_ids(lg, url)
+    status = next((b for b, t in heads if t == "状态包"), None)
+    if lg.mode == "offline":
+        status = status or "<状态包标题的 block_id>"
+        first, last = "<主文档第一块的 block_id>", "<状态包前一块的 block_id>"
+    else:
+        if not status:
+            raise LedgerError("#%s 的主文档里找不到“状态包”标题：revise 只换带状态包的主文档" % item_id)
+        rng = lg.lark("docs", "+fetch", "--doc", url, "--scope", "range", "--end-block-id", status, "--detail", "with-ids")
+        first, last = opening_blocks(doc_content(rng), status) if rng is not None else (
+            "<主文档第一块的 block_id>", "<状态包前一块的 block_id>")
+    lg.lark("docs", "+update", "--doc", url, "--command", "block_replace", "--start-block-id", first, "--end-block-id", last,
+            "--doc-format", "markdown", "--content", "-", write=True, stdin=body)
+    lg.lark("docs", "+update", "--doc", url, "--command", "append", "--doc-format", "markdown", "--content", "-", write=True,
+            stdin="%s 第 %d 版（%s）：%s\n" % (lg.tag, d.version, date, note.strip()))
+    if updates:
+        lg.meegle("workitem", "update", "--work-item-id", item_id, "--fields", json.dumps(updates, ensure_ascii=False), write=True)
+    if lg.mode == "apply":
+        rel = os.path.relpath(path, lg.root)
+        revisions = list(rec.get("revisions") or []) + [{"version": d.version, "date": date, "note": note.strip(), "draft": rel, "at": now()}]
+        queue = rec["queue"] if "queue" in rec else kinds.get("queue")
+        values = dict(kinds, queue=queue, revisions=revisions)
+        values.pop("type", None)
+        if not update_receipt(lg, item_id, **values):          # registered elsewhere: this draft's receipt holds it now
+            save_receipt(lg, path, item_id, "registered", dict(kinds, revisions=revisions), doc=url)
+        if wid == "decision" and queue:
+            first_seen = rec.get("registered_at") or started_at(lg, item_id)
+            hold(lg, item_id, dict(kinds, queue=queue), first_seen, rec.get("reopened_at"))
+        with open(path, "w", encoding="utf-8") as f:            # the draft now names its item: it is not registered again
+            f.write(link_line(d.text, "#%s" % item_id, item_id))
+        print("修订：#%s 的主文档开头换成第 %d 版（文档链接不变），交接记录追加了一行。%s" % (
+            item_id, d.version, "本地决策状态已按新版本更新。" if wid == "decision" and queue else ""))
+    else:
+        print("预览：会把 #%s 的主文档开头换成第 %d 版，交接记录追加一行。" % (item_id, d.version))
+    return d.version
+
+
+def started_at(lg, item_id):
+    """When a work item's first step began, as an ISO time: when it was created. None when unknown."""
+    try:
+        nodes = lg.flow_nodes(item_id) or []
+    except LedgerError:
+        return None
+    ms = nodes[0].get("started_at") if nodes else None
+    return datetime.datetime.fromtimestamp(ms / 1000).astimezone().isoformat(timespec="seconds") if ms else None
+
+
 def append(lg, item_id, path):
     with open(path, encoding="utf-8") as f:
         content = f.read()
@@ -2068,7 +2628,13 @@ def archive(lg, item_id, moved=False):
         if not wid:
             raise LedgerError("认不出 #%s 的类型（type_key %s）；先跑 setup.py feishu --live --apply 重读类型" % (item_id, it.get("type_key")))
         archived = lg.state(wid, lg.contract.flow["archive_node"]["state"])
+        if wid == "decision" and it["state"] in system_states(lg.spec):     # terminated on the web page
+            gone = release_pending(lg, item_id)
+            print("#%s 是“%s”，不用归档。%s" % (item_id, it["state"], "本地决策状态里移除了它：冻结解除，它放行过的动作不动。" if gone else ""))
+            return
         if it["state"] == archived:
+            if wid == "decision" and release_pending(lg, item_id):
+                print("本地决策状态里移除了 #%s：冻结解除。" % item_id)
             print("#%s 已经是“%s”，不用再归档。" % (item_id, archived))
             return
         nodes = lg.flow_nodes(item_id)
@@ -2103,6 +2669,8 @@ def archive(lg, item_id, moved=False):
         print("归档：#%s 的最后一步已确认（主文档此前已移到 %s 下）。" % (item_id, key))
     else:
         print("归档：#%s 的主文档整棵子树移到 %s 下（移动的是原节点，文档链接不变），最后一步已确认。" % (item_id, key))
+    if wid == "decision" and release_pending(lg, item_id):
+        print("本地决策状态里移除了 #%s：冻结解除，它放行过的动作不动。" % item_id)
 
 
 LIST_ITEM = re.compile(r'<li\b[^>]*?\bid="([^"]+)"[^>]*>(.*?)</li>', re.S)
@@ -2299,6 +2867,18 @@ SHOWN = (("urgency", "紧急程度"), ("due", "回复期限"), ("executor", orgs
 # the stage in place of the state: every decision 待决定, and a decided one only while the researcher has
 # still to carry it out.
 STAGES = {"pending": "待决定", "decided": "待执行"}
+PAST_DUE = "待决定（已到期，继续等研究员）"     # past its expiry time and no 到期默认 for it: first in the list
+
+
+def past_due_waiting(lg):
+    """IDs of the pending decisions past their expiry time (expires_at in the local decision state) that keep
+    waiting for the researcher: irreversible, or carried out by the researcher."""
+    at, out = now_at(), set()
+    for item_id, entry in load_gates(lg.root)["pending"].items():
+        due = parse_stamp(entry.get("expires_at"))
+        if due and at >= due and entry.get("default_applies") is not True:
+            out.add(str(item_id))
+    return out
 
 
 def receipt_of(lg, item_id):
@@ -2318,7 +2898,8 @@ def shown_fields(lg, name, rows):
     also a decision's 执行方 (carried_out_by: on a receipt older than that line, 研究员 when the
     researcher has something to do, nothing otherwise), its 研究员要做的事 (无 when the receipt says
     null, nothing on an older receipt) and its stage (STAGES). A decided one that a session carries out
-    is left out of queue."""
+    is left out of queue; one past its expiry time that keeps waiting for the researcher comes first, its stage
+    PAST_DUE."""
     if name not in ("queue", "blocked"):
         return rows
     slots = {}
@@ -2328,6 +2909,7 @@ def shown_fields(lg, name, rows):
             if key:
                 slots[key] = slot
     decided = lg.state("decision", "decided") if name == "queue" else None
+    late = past_due_waiting(lg) if name == "queue" else set()
     out = []
     for r in rows:
         for key in [k for k in r if k in slots]:
@@ -2341,12 +2923,16 @@ def shown_fields(lg, name, rows):
             if r.get("work_item_status") == decided and who != RESEARCHER:
                 continue
             r["stage"] = STAGES["decided" if r.get("work_item_status") == decided else "pending"]
+            if r["stage"] == STAGES["pending"] and str(r.get("work_item_id")) in late:
+                r["stage"] = PAST_DUE
+            if rec.get("version"):                         # a revision is not pushed: the list shows its number
+                r["version"] = rec["version"]
             if who:
                 r["executor"] = who
             if "researcher_action" in rec:
                 r["researcher_action"] = rec["researcher_action"] or orgspec.NOTHING
         out.append(r)
-    return out
+    return sorted(out, key=lambda r: r.get("stage") != PAST_DUE)          # stable: the space's order otherwise
 
 
 def query_rows(data):
@@ -2443,8 +3029,9 @@ def query(lg, name, sequence=None, as_json=False):
         print(json.dumps(rows, ensure_ascii=False, indent=2))
     else:
         for r in rows:
-            extra = "".join("  %s：%s" % (label, r[key] if isinstance(r[key], str) else plain(r[key]))
-                            for key, label in SHOWN if r.get(key) not in (None, "", [], {}))
+            extra = "  版本：第 %s 版" % r["version"] if r.get("version") else ""
+            extra += "".join("  %s：%s" % (label, r[key] if isinstance(r[key], str) else plain(r[key]))
+                             for key, label in SHOWN if r.get(key) not in (None, "", [], {}))
             print("#%s  %s  %s%s" % (r.get("work_item_id"), r.get("stage") or r.get("work_item_status", ""), r.get("name", ""), extra))
         if lg.mode != "offline":
             print("共 %d 项。" % len(rows))
@@ -2527,10 +3114,14 @@ def main(argv=None):
             p.add_argument("--existing", metavar="ID",
                            help="研究任务单的修订稿：换成这条研究任务的主文档，工作项不变；它还在第一步时才能换")
     p = sub.add_parser("confirm"); p.add_argument("id")
-    p.add_argument("--by", help="请书记员确认这一步的会话名；研究员交代的写 研究员")
+    p.add_argument("--by", help="请书记员确认这一步的会话名；研究员交代的写 研究员；到期默认 表示照决策包的到期默认动作确认")
     p.add_argument("--set", action="append"); p.add_argument("--node", help="有几个节点同时进行时指明哪一个")
     p.add_argument("--decision", help="冻结的字段在签字后改过时：研究员认可这些改动的决策工作项 ID")
+    p.add_argument("--option", help="决策的“决定”这一步：研究员选的选项名；表里的都没选写 无")
     p.add_argument("--type"); p.add_argument("--apply", action="store_true")
+    p = sub.add_parser("revise"); p.add_argument("id"); p.add_argument("draft")
+    p.add_argument("--note", required=True, help="这一版改了什么，记进交接记录")
+    p.add_argument("--apply", action="store_true")
     p = sub.add_parser("rollback"); p.add_argument("id")
     p.add_argument("--to", required=True, help="退回到哪个已完成的节点：节点 ID 或名字")
     p.add_argument("--reason", required=True)
@@ -2606,7 +3197,9 @@ def run_command(lg, args):
     elif args.cmd == "reply":
         reply(lg, args.draft, args.doc)
     elif args.cmd == "confirm":
-        confirm(lg, args.id, args.by, args.set, args.node, args.decision, args.type)
+        confirm(lg, args.id, args.by, args.set, args.node, args.decision, args.type, args.option)
+    elif args.cmd == "revise":
+        revise(lg, args.id, args.draft, args.note)
     elif args.cmd == "rollback":
         rollback(lg, args.id, args.to, args.reason, args.by, args.decision, args.type)
     elif args.cmd == "update":

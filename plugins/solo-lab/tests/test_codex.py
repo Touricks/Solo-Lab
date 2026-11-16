@@ -177,7 +177,7 @@ class CodexTest(unittest.TestCase):
     def test_layout_rules_and_eight_project_entrypoints(self):
         self.assertFalse((self.root / ".claude").exists())
         self.assertFalse((self.root / "CLAUDE.md").exists())
-        self.assertEqual(self.plan.manifest["upstream_version"], "1.0.3")
+        self.assertEqual(self.plan.manifest["upstream_version"], "1.0.4")
         self.assertEqual(len(self.pool.slots), 21)
         priority = [s["role"] for s in self.pool.config["slots"] if s["priority"]]
         self.assertEqual(priority, list(codex_setup.PRIORITY_ROLES))
@@ -552,6 +552,18 @@ class CodexTest(unittest.TestCase):
                 self.assertNotIn(old, p.read_text(), (p, old))
         self.assertIn("普通角色先准备草稿", (self.root / "AGENTS.md").read_text())
         self.assertIn("同一请求只有一个执行者", (self.root / "AGENTS.md").read_text())
+
+    def test_the_irreversible_list_says_codex_hooks_do_not_check_it(self):
+        """The shared org/org.md has the irreversible list, but a Codex project's hooks do not check it: the section says
+        so instead of the Claude hook's release rules, and the local decision state is the Codex project's."""
+        org = (self.root / "org/org.md").read_text()
+        section = org.split("## 不可逆事项", 1)[1].split("\n## ", 1)[0]
+        self.assertIn(orgspec.OrgSpec.UNENFORCED, section)
+        for claim in ("池会话里没有这样的决策就拒绝", "研究员自己的会话里弹窗确认", "限定怎么认"):
+            self.assertNotIn(claim, section)
+        decisions = (self.root / "org/decisions.md").read_text()
+        self.assertIn(".agent-org/state/gates.json", decisions)
+        self.assertNotIn(".claude/", decisions)
 
     def test_context_refreshes_instructions_without_rebinding(self):
         self.bind("PMO-p1-01", "router")
