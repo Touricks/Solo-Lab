@@ -17,8 +17,8 @@ description: 读写智能体组织的台账（飞书项目）和任务包文档�
 ```bash
 python3 -I .claude/solo-lab/bin/ledger.py get <工作项 ID>            # 类型、流程、状态、名称和有值的字段
 python3 -I .claude/solo-lab/bin/ledger.py next <工作项 ID>           # 走到哪一步、这一步谁负责、还缺什么
-python3 -I .claude/solo-lab/bin/ledger.py query queue               # 决策队列：待决定的决策
-python3 -I .claude/solo-lab/bin/ledger.py query blocked             # 阻塞原因非空的研究任务和需求
+python3 -I .claude/solo-lab/bin/ledger.py query queue               # 决策队列：待决定的决策，每行带紧急程度、回复期限和主文档链接
+python3 -I .claude/solo-lab/bin/ledger.py query blocked             # 阻塞原因非空的研究任务和需求，每行带阻塞原因和主文档链接
 python3 -I .claude/solo-lab/bin/ledger.py query verifying           # 待验收的同序列需求
 python3 -I .claude/solo-lab/bin/ledger.py query open --sequence alg # 进行中的同序列需求，只看算法序列
 python3 -I .claude/solo-lab/bin/ledger.py query cross               # 进行中的跨序列需求

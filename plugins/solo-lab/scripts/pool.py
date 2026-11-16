@@ -16,13 +16,23 @@ it needs no move. Any other process that shows the same desktop ID, such as a cl
 started (or resumed) from that session's shell, is a desk conflict: it holds no role and
 no write right.
 
+Every prompt starts a turn, and turn_origin says who started it: another agent session
+(agent: its message, the report of a session this one opened, or the first turn the session
+that opened this one wrote), the researcher (researcher: what they typed, also when the app
+puts <system-reminder> blocks in front of it), or the app itself (system: a background
+task's report, a prompt that is nothing but the app's reminders, and the like). The inbox
+hook writes it into the session's status file with researcher_at (when the researcher last
+started a turn) and ask_ok (the decision the entry may ask the researcher about in this
+turn); the guard hook reads them.
+
 setup.py copies this file to .claude/hooks/ (for the hooks) and .claude/solo-lab/bin/
 (for route.py and ledger.py).
 
     .claude/state/pool.json            claims, permits, pending, tombstones, work item
                                        owners, refill requests, focus flags, re-attach notes
     .claude/state/sessions/<id>.json   one session's status, written by its own hooks
-    .claude/logs/dispatch.jsonl        messages seen, claims, releases, refills
+    .claude/logs/dispatch.jsonl        messages seen, claims, releases, refills, queued decisions
+                                       the entry was told about
 
 Writers lock .claude/state/pool.lock and replace pool.json atomically; readers do not
 lock. None of this is a security boundary: a shell can still write the files. The guard
@@ -33,6 +43,7 @@ import contextlib
 import datetime
 import fcntl
 import glob
+import html
 import json
 import os
 import re
@@ -668,6 +679,73 @@ def parse_message(policy, text):
                 "from": canonical(policy, m.group(3)) or m.group(3), "to": canonical(policy, m.group(4)) or m.group(4),
                 "p0_name": canonical(policy, p0.group(1)) if p0 else None, "line": line.strip()[:200]}
     return None
+
+
+# ----------------------------------------------------------------- turns
+REMINDER_RE = re.compile(r"\s*<system-reminder(?:\s[^>]*)?>.*?</system-reminder>", re.S)
+WRAPPER_RE = re.compile(r"\s*(?:Another Claude session sent a message:\s*)?"
+                        r"<cross-session-message\b([^>]*)>(.*?)(?:</cross-session-message>|\Z)", re.S)
+ATTR_RE = re.compile(r"""([\w-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+SIDE_EVENT_RE = re.compile(r"<side-sessions-event[\s>]")
+STARTED_BY = "Background (from the session that started this one):"
+GENERATED = re.compile(r"\s*<[a-z]+(?:-[a-z]+)+[\s>]")     # <task-notification> and other text the app writes
+FROM_MY_SESSIONS = "本会话开出的会话"
+FROM_MY_OPENER = "开出本会话的会话"
+
+
+def strip_reminders(text):
+    """text without the <system-reminder> blocks the app may put in front of it, and without the
+    white space before what is left."""
+    text = text or ""
+    while True:
+        m = REMINDER_RE.match(text)
+        if not m:
+            return text.lstrip()
+        text = text[m.end():]
+
+
+def unwrap(text):
+    """(body, sender) for a message another session sent: the text inside <cross-session-message>
+    (the model sees the line "Another Claude session sent a message:" before it, so that is taken
+    too) and {"from": its session ID, "from_name": its title}; (text, None) for anything else."""
+    m = WRAPPER_RE.match(text or "")
+    if not m:
+        return text, None
+    attrs = {k: html.unescape(dq or sq) for k, dq, sq in ATTR_RE.findall(m.group(1))}
+    return m.group(2).strip(), {"from": attrs.get("from"), "from_name": attrs.get("from-name")}
+
+
+def turn_origin(policy, prompt):
+    """(origin, source) for the turn a prompt starts; origin is agent, researcher or system.
+
+    After the <system-reminder> blocks in front:
+    - a <cross-session-message> (after "Another Claude session sent a message:" or not): agent,
+      from the sender's title (from-name), or its session ID (from) when it has none;
+    - <side-sessions-event>: agent, a session this one opened finished a turn;
+    - "Background (from the session that started this one):": agent, the first turn the session
+      that opened this one wrote;
+    - a message header (parse_message) at the start of one of the first lines: agent, from the
+      sender in the header;
+    - any other tag the app writes (<task-notification> ...): system, no source;
+    - nothing (the app's reminders alone): system, no source;
+    - anything else: researcher, no source. A header quoted inside a sentence is the researcher's.
+    """
+    text = strip_reminders(prompt)
+    if not text:
+        return "system", None
+    _, sender = unwrap(text)
+    if sender is not None:
+        return "agent", sender.get("from_name") or sender.get("from") or None
+    if SIDE_EVENT_RE.match(text):
+        return "agent", FROM_MY_SESSIONS
+    if text.startswith(STARTED_BY):
+        return "agent", FROM_MY_OPENER
+    msg = parse_message(policy, text)
+    if msg:
+        return "agent", msg.get("from")
+    if GENERATED.match(text):
+        return "system", None
+    return "researcher", None
 
 
 def addressed_to(policy, pool, msg, me):

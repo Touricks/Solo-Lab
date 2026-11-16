@@ -4,7 +4,9 @@
 Read commands, for every session:
     ledger.py get <ID> [--raw]              type, state, flow, name and the fields that have a value
     ledger.py next <ID>                     the step the item is at: who is responsible, what is still to fill in
-    ledger.py query <name> [--sequence s]   queue | blocked | verifying | open | cross | tasks | recent | source:<ID>
+    ledger.py query <name> [--sequence s]   queue | blocked | verifying | open | cross | tasks | recent | source:<ID>;
+                                            queue also shows 紧急程度, blocked 阻塞原因, both the main document
+                                            and (a decision) 回复期限 kept in the registration receipt
     ledger.py mql <name> [--sequence s]     print the MQL only
     ledger.py trace <ID>                    follow 来源工作项 upwards
     ledger.py status <ID>                   print the 状态包 section of the main document
@@ -54,6 +56,7 @@ import argparse
 import contextlib
 import datetime
 import fcntl
+import glob
 import hashlib
 import json
 import os
@@ -235,6 +238,9 @@ def moql_value(v):
     labels = v.get("key_label_value_list")
     if labels:
         return "、".join(str(x.get("label") or x.get("key")) for x in labels)
+    one = v.get("key_label_value")
+    if isinstance(one, dict):
+        return one.get("label") or one.get("key")
     return v.get("value", v)
 
 
@@ -924,11 +930,28 @@ def receipt_path(lg, path, item_id):
     return receipt_file(lg, [str(item_id), "%s-%s" % (item_id, safe_name(path))], path)
 
 
+URGENT = "插队"              # the 紧急程度 of a decision that jumps the queue
+
+
+def receipt_kind(spec, wid, d):
+    """What the receipt says the registration was, for the inbox hook of the session the
+    【登记回执】 reaches: the work item type, whether a decision waits in the decision queue and
+    whether it jumps it. A decision's 回复期限 has no field in the space; it is kept here as the
+    package header wrote it, for `query queue`."""
+    if wid != "decision":
+        return {"type": wid, "queue": False, "urgent": False}
+    urgency = (d.header.get("紧急程度") or "").strip()
+    return {"type": wid, "queue": (d.header.get("渠道") or "").strip() == spec.term("channel", "queue"),
+            "urgent": "/" not in urgency and re.split(r"[\s（(，,。；;]", urgency, 1)[0] == URGENT,
+            "due": (d.header.get("回复期限") or "").strip() or None}
+
+
 def save_receipt(lg, path, item_id, status, **extra):
     """packages/sent/<ID>.json: written right after the work item exists, updated as steps finish.
 
     Keeps what a --resume needs: the source, the --set pairs, and the document as
-    soon as it exists (docx), then its /wiki/ link (doc).
+    soon as it exists (docx), then its /wiki/ link (doc). register also writes what the
+    registration was (receipt_kind: type, queue, urgent, a decision's due); the inbox hook reads it.
     """
     if lg.mode != "apply":
         return
@@ -1260,16 +1283,17 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
         fields.append(owners)
     parent = parent_node(lg, wid, seq, d.rel, source)
 
+    kinds = receipt_kind(spec, wid, d)
     if rec:
         item_id = rec["work_item_id"]
         print(("给 #%s 换研究任务单。" if swap else "接着上次的 #%s 做。") % item_id)
         save_receipt(lg, path, item_id, "created", pairs=pairs,               # values given on --resume too
-                     existing=rec.get("existing"), replaced=rec.get("replaced"))
+                     existing=rec.get("existing"), replaced=rec.get("replaced"), **kinds)
     else:
         created = lg.meegle("workitem", "create", "--work-item-type", lg.api(wid), "--fields",
                             json.dumps(fields, ensure_ascii=False), write=True)
         item_id = created_id(created, spec.term("wi", wid)) if created is not None else "<新工作项 ID>"
-        save_receipt(lg, path, item_id, "created", source=source, task=task, pairs=resolved_pairs(lg, pairs))
+        save_receipt(lg, path, item_id, "created", source=source, task=task, pairs=resolved_pairs(lg, pairs), **kinds)
     title = title.replace("<工作项 ID>", item_id)
 
     state = {}
@@ -2208,9 +2232,9 @@ def mql_text(lg, name, sequence=None):
         out = []
         for w in lg.contract.types_with("fields", "blocked_reason"):
             if w in lg.types:
-                parts = ["`%s` IS NOT NULL" % lg.field(w, "blocked_reason")["field_key"],
-                         _not_in([lg.state(w, "archived")] + terminated)]
-                out.append(_select(lg, w, " AND ".join(parts + ([of_sequence(w)] if sequence else []))))
+                reason = lg.field(w, "blocked_reason")["field_key"]
+                parts = ["`%s` IS NOT NULL" % reason, _not_in([lg.state(w, "archived")] + terminated)]
+                out.append(_select(lg, w, " AND ".join(parts + ([of_sequence(w)] if sequence else [])), [reason]))
         return out
     if name not in QUERIES:
         raise LedgerError("没有查询 %s；可选：%s、source:<ID>" % (name, "、".join(QUERY_NAMES)))
@@ -2223,11 +2247,50 @@ def mql_text(lg, name, sequence=None):
         parts.append(_not_in([lg.state(wid, s) for s in leave] + terminated))
     if sequence:
         parts.append(of_sequence(wid))
-    return [_select(lg, wid, " AND ".join(parts))]
+    return [_select(lg, wid, " AND ".join(parts), [k for k in [lg.key_of(wid, s) for s in QUERY_FIELDS.get(name, ())] if k])]
 
 
-def _select(lg, wid, cond):
-    return "SELECT `work_item_id`, `name`, `work_item_status` FROM `%s`.`%s` WHERE %s" % (lg.key, lg.type_ref(wid), cond)
+def _select(lg, wid, cond, extra=()):
+    return "SELECT `work_item_id`, `name`, `work_item_status`%s FROM `%s`.`%s` WHERE %s" % (
+        "".join(", `%s`" % k for k in extra), lg.key, lg.type_ref(wid), cond)
+
+
+# Fields a named query shows besides ID, state and name (blocked shows blocked_reason), and how they are
+# labelled. The entry reads them when the researcher comes back: 等研究员： in the reason is a to-do.
+QUERY_FIELDS = {"queue": ("urgency",)}
+SHOWN = (("urgency", "紧急程度"), ("due", "回复期限"), ("blocked_reason", "阻塞原因"), ("doc", "主文档"))
+
+
+def receipt_of(lg, item_id):
+    """The registration receipt of a work item: packages/sent/<ID>.json, or <ID>-<draft file>.json; {} when none."""
+    num = str(item_id)
+    folder = glob.escape(sent_dir(lg))
+    for path in sorted(glob.glob(os.path.join(folder, num + ".json"))) + sorted(glob.glob(os.path.join(folder, num + "-*.json"))):
+        rec = load_json(path, {})
+        if isinstance(rec, dict) and str(rec.get("work_item_id")) == num:
+            return rec
+    return {}
+
+
+def shown_fields(lg, name, rows):
+    """Rows of the named queries queue and blocked, with their extra cells under the slot's name and
+    what the registration receipt kept: the main document's link, and a decision's 回复期限."""
+    if name not in ("queue", "blocked"):
+        return rows
+    slots = {}
+    for wid in lg.types:
+        for slot in ("urgency", "blocked_reason"):
+            key = lg.key_of(wid, slot)
+            if key:
+                slots[key] = slot
+    for r in rows:
+        for key in [k for k in r if k in slots]:
+            r[slots[key]] = r.pop(key)
+        rec = receipt_of(lg, r.get("work_item_id"))
+        for key in ("due", "doc"):
+            if rec.get(key) and key not in r:
+                r[key] = rec[key]
+    return rows
 
 
 def query_rows(data):
@@ -2319,11 +2382,14 @@ def query(lg, name, sequence=None, as_json=False):
     rows = []
     for mql in mql_text(lg, name, sequence):
         rows += query_all(lg, mql)
+    rows = shown_fields(lg, name, rows)
     if as_json:
         print(json.dumps(rows, ensure_ascii=False, indent=2))
     else:
         for r in rows:
-            print("#%s  %s  %s" % (r.get("work_item_id"), r.get("work_item_status", ""), r.get("name", "")))
+            extra = "".join("  %s：%s" % (label, r[key] if isinstance(r[key], str) else plain(r[key]))
+                            for key, label in SHOWN if r.get(key) not in (None, "", [], {}))
+            print("#%s  %s  %s%s" % (r.get("work_item_id"), r.get("work_item_status", ""), r.get("name", ""), extra))
         if lg.mode != "offline":
             print("共 %d 项。" % len(rows))
     return rows

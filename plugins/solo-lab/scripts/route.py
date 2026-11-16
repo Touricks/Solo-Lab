@@ -12,8 +12,11 @@ The session pool (see pool.py):
     route.py expect NAME --role R (--desk ID | --session ID)   pre-register a session you opened
     route.py release NAME                     the researcher frees a claim (it becomes a tombstone)
     route.py pool [--role R] [--item ID] [--queue NAME] [--recover] [--watch [--once]]
-    route.py refill <role> [--count N]        ask for more sessions of a role; the entry's daily queue
-    route.py audit                            the soft-rule hits, stale work and claim anomalies
+    route.py refill <role> [--count N]        ask for more sessions of a role: a refill request in pool.json and the entry's inbox
+    route.py audit                            the soft-rule hits, questions the hooks took out of turns
+                                              other sessions woke, wrap-ups that asked by who started the
+                                              turn, headers without the app's wrapper, stale work and
+                                              claim anomalies
 
 classify walks the routing table in orgspec/rules.json and stops at the first row
 it can decide without judgement. Matching a message to work by the work item's
@@ -43,6 +46,8 @@ import pool  # noqa: E402
 ID_RE = re.compile(r"#(\d{3,})|(?<![\d-])(\d{9,12})(?!\d)")
 SESSION_RE = re.compile(r"(?<![\w-])([A-Za-z]+-[pP][0-2]-\d+)(?![\w-])")
 CLAIM_WAIT = 60
+# guard.jsonl's agent_turn_gate: what guard.py did to a question in a turn another session woke
+AGENT_TURN_GATES = ("stripped", "denied", "allowed_urgent")
 
 
 def now():
@@ -136,7 +141,9 @@ def classify_draft(spec, root, path):
             return result(spec, "R6", "研究员主动发起的决策包", next_hop="pmo-scribe",
                           steps=["书记员 register 后确认“决定”这一步，填决定内容和决定人", tell])
         return result(spec, "R5", "决策队列来的决策包", next_hop="pmo-scribe",
-                      steps=["书记员 register，停在“待决定”", "紧急程度为“插队”的马上交研究员，其余进每日队列"])
+                      steps=["书记员 register，停在“待决定”",
+                             "登记回执到的那一轮，在状态里提一次：事项、选项一句话、工作项链接；紧急程度为“插队”的，这一轮可以在收尾里问研究员一次",
+                             "研究员主动来谈时，连同其余待决定的决策列给他"])
     route = next((r for r in spec.rules["package_routes"] if r["pkg"] == d.pid and (r["rel"] or None) == d.rel), None)
     steps, hop = [], None
     if d.pid == "request" and d.rel == "cross":
@@ -861,9 +868,9 @@ def refill_cmd(spec, root, role, count=1):
     pool.log_event(root, {"event": "refill", "role": role, "count": count, "by": by})
     entry = policy["agents"][policy["entry_role"]].get("fixed_session") or "PMO-p2-01"
     append_inbox(root, entry, {"id": uuid.uuid4().hex[:12], "ts": now(), "from": by, "read": False,
-                               "text": "补位请求：%s 再开 %d 个会话。放进每日决策队列，研究员在%s的会话里说“补位”时开。" % (
+                               "text": "补位请求：%s 再开 %d 个会话。研究员来谈时和研究员待办一起列出，研究员在%s的会话里说“补位”时开。" % (
                                    role, count, opener(policy, role, "那个序列"))})
-    print("已记补位请求：%s ×%d，进入口的每日队列。现在不开会话，也不提卡片。新会话认领后这条请求自动销掉。" % (role, count))
+    print("已记补位请求：%s ×%d，研究员来谈时入口会列出。现在不开会话，也不提卡片。新会话认领后这条请求自动销掉。" % (role, count))
     return 0
 
 
@@ -875,7 +882,7 @@ def audit_cmd(spec, root, hours=24):
     if not ok:
         print("出错：读不出 .claude/state/pool.json")
         return 1
-    hits = {}
+    hits, gates, asked = {}, {}, {}
     try:
         with open(os.path.join(root, ".claude", "logs", "guard.jsonl"), encoding="utf-8") as f:
             for line in f:
@@ -884,8 +891,21 @@ def audit_cmd(spec, root, hours=24):
                 except ValueError:
                     continue
                 if isinstance(rec, dict):
+                    who = rec.get("session_name") or rec.get("role") or "?"
                     for h in rec.get("soft_hits") or []:
-                        hits.setdefault(rec.get("session_name") or rec.get("role") or "?", []).append(h)
+                        hits.setdefault(who, []).append(h)
+                    if rec.get("agent_turn_gate") in AGENT_TURN_GATES:
+                        gates.setdefault(who, dict.fromkeys(AGENT_TURN_GATES, 0))[rec["agent_turn_gate"]] += 1
+                    if rec.get("asked") is True and rec.get("origin") == "claim":     # a pool session's wrap-up asked
+                        n = asked.setdefault(who, dict.fromkeys(("agent", "left", "urgent", "researcher", "system", "unknown"), 0))
+                        origin = rec.get("turn_origin")
+                        if origin == "agent":
+                            n["agent"] += 1
+                            gate = rec.get("agent_turn_gate")
+                            n["left"] += gate != "stripped"
+                            n["urgent"] += gate == "allowed_urgent"
+                        else:
+                            n[origin if origin in ("researcher", "system") else "unknown"] += 1
     except OSError:
         pass
     events = pool.read_events(root)
@@ -896,6 +916,28 @@ def audit_cmd(spec, root, hours=24):
     for who, hs in sorted(hits.items()):
         print("- %s：%d 次；最近一次：%s" % (who, len(hs), hs[-1][:100]))
     if not hits:
+        print("- 无")
+    print("其他 agent 会话叫醒的轮次里向研究员的提问（hook 处理）：")
+    for who, n in sorted(gates.items()):
+        print("- %s：收尾提问去掉 %d 次，AskUserQuestion 拒绝 %d 次，插队决策放行 %d 次" % (
+            who, n["stripped"], n["denied"], n["allowed_urgent"]))
+    if not gates:
+        print("- 无")
+    print("池会话带提问的收尾，按这一轮是谁开的（研究员不在时也有“研究员开的”，可能是桌面应用改了消息外壳）：")
+    for who, n in sorted(asked.items()):
+        print("- %s：其他 agent 叫醒的轮次 %d 次，提问留下 %d 次（其中插队决策放行 %d 次）；研究员开的轮次 %d 次；应用的轮次 %d 次%s" % (
+            who, n["agent"], n["left"], n["urgent"], n["researcher"], n["system"],
+            "；轮次不明 %d 次" % n["unknown"] if n["unknown"] else ""))
+    if not asked:
+        print("- 无")
+    bare = {}
+    for rec in events:
+        if rec.get("event") in ("message", "message_misaddressed") and rec.get("wrapped") is False:
+            bare.setdefault(rec.get("seen_by") or "?", []).append(str(rec.get("line") or ""))
+    print("有插件抬头、没有桌面应用外壳的消息（多了就可能是外壳变了，这些消息仍按抬头认作其他 agent 会话叫醒的）：")
+    for who, lines in sorted(bare.items()):
+        print("- %s：%d 次；最近一次：%s" % (who, len(lines), lines[-1][:100]))
+    if not bare:
         print("- 无")
     claimed = {r.get("name") for r in events if r.get("event") in ("claim", "reattach")}
     odd = [n for n in pl["claims"] if n not in claimed]

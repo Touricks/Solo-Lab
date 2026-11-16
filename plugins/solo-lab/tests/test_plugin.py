@@ -201,6 +201,139 @@ class SetupTest(ProjectCase):
         self.assertEqual(acts["CLAUDE.md"], "new")
         self.assertEqual(acts["org/decisions.md"], "same")
 
+    def test_hook_scripts_are_updated_together(self):
+        """The hooks import pool.py: one held back for a merge holds back the others it would run with."""
+        with open(os.path.join(self.hooks, "pool.py"), "a", encoding="utf-8") as f:
+            f.write("\n# local change\n")
+        with open(os.path.join(self.hooks, "inbox.py"), "a", encoding="utf-8") as f:
+            f.write("\n# an older version\n")
+        manifest = os.path.join(self.tmp, ".claude", "solo-lab", "manifest.json")
+        with open(manifest, encoding="utf-8") as f:
+            m = json.load(f)
+        with open(os.path.join(self.hooks, "inbox.py"), encoding="utf-8") as f:
+            m["files"][".claude/hooks/inbox.py"] = setup.sha256(f.read())      # as if the last init wrote it
+        with open(manifest, "w", encoding="utf-8") as f:
+            json.dump(m, f)
+        plan = setup.build_plan(self.tmp, TASK, None)
+        acts = setup.actions_for(self.tmp, plan)
+        kinds = dict((rel, k) for k, rel, _ in acts)
+        self.assertEqual((kinds[".claude/hooks/pool.py"], kinds[".claude/hooks/inbox.py"]), ("new", "paired"))
+        self.assertEqual(kinds[".claude/hooks/guard.py"], "same")
+        self.assertEqual(kinds[".claude/solo-lab/bin/pool.py"], "same")                # the scripts' own copy is apart
+        _, out = self.run_quiet(setup.report, self.tmp, plan, acts, False)
+        self.assertIn("[和改过的那个文件配套，新版本也写 .new] .claude/hooks/inbox.py", out)
+        self.assertIn("提醒：.claude/hooks/ 下的 hook 脚本共用 pool.py，要换就一起换", out)
+        self.assertNotIn("guard.py 和 policy.json 要成对更新", out)
+        self.run_quiet(setup.apply_plan, self.tmp, plan, acts)
+        self.assertTrue(os.path.isfile(os.path.join(self.hooks, "inbox.py.new")))
+        with open(os.path.join(self.hooks, "inbox.py"), encoding="utf-8") as f:
+            self.assertIn("# an older version", f.read())                          # still runs with the old pool.py
+        with open(os.path.join(self.hooks, "pool.py.new"), encoding="utf-8") as f:
+            merged = f.read()
+        with open(os.path.join(self.hooks, "pool.py"), "w", encoding="utf-8") as f:
+            f.write(merged)                                                        # the researcher takes the new one
+        plan = setup.build_plan(self.tmp, TASK, None)
+        kinds = dict((rel, k) for k, rel, _ in setup.actions_for(self.tmp, plan))
+        self.assertEqual((kinds[".claude/hooks/pool.py"], kinds[".claude/hooks/inbox.py"]), ("same", "update"))
+
+
+class DecisionsFileTest(ProjectCase):
+    """org/decisions.md is the researcher's, but init keeps the section the plugin wrote current."""
+
+    # The section's list as 1.0.0 to 1.0.2 wrote it (rules.json plugin_decisions did not change in between).
+    OLD = ["项目管理 +2 是入口，" + "每" + "日决策队列由它交给研究员。依据：研究员 2026-11-01 定下的入口方向。",
+           "书记员除了接项目管理 +1 的需求包，也接各序列 +2、+1 的登记请求，只登记请求方自己写的草稿。原因：委托 +1、+0 之前要先有工作项 ID，请求方直接找书记员登记最快。",
+           "各会话可以自己加带会话标签的评论（只追加）；工作项、字段、状态和文档仍只由书记员写。",
+           "研究员可以直接找其余序列的 +2 交代，不必都经过入口；谈定的事仍写成决策包交给入口登记。依据：研究员 2026-11-02 定。",
+           "会话池（研究员 2026-11-03 起采用）：各角色是研究员看得见的桌面会话，委托、交付、登记都发消息；书记员的写权只认唯一的那条认领；"
+           "派发时带 name、在共享工作区里切分支或 stash 按硬规则拒绝，其余派发规则是规范加审计。",
+           "同序列需求用“关系”字段区分下发和执行；反馈的主文档是导师或研究员原话所在的文档。",
+           "决策包包头有“紧急程度”和“渠道”两行：决策队列按紧急程度排序；渠道写“研究员主动发起”的，登记后直接确认“决定”节点。",
+           "取消送审，改由测量把关：先冻结 Eval Set 和阈值，正式分数只由质量序列跑出，结论对照签过字的阈值。依据：研究员 2026-11-11 定。",
+           "五类工作项都用节点流程，退回一律是回滚节点并写原因；“阻塞”是工作项上的两个字段，不是状态。依据：研究员 2026-11-11 定。",
+           "七个序列都保留；外联只写给研究员以外的读者看的材料，导师意见的登记和解析归项目管理。周报、月报由研究员对入口说一句触发，不设定时任务。依据：研究员 2026-11-12 定。",
+           "流程、表单和字段清单不写在规则里，运行时读空间；脚本按含义处理的槽位写在 orgspec/contract.json，每个项目的对应关系记在 feishu/ids.json。"]
+    MINE = "- 2026-11-14：评测集只用公开数据。理由：真实数据的授权还没到。决策 #7001。"
+
+    def path(self):
+        return os.path.join(self.tmp, "org", "decisions.md")
+
+    def text(self, path=None):
+        with open(path or self.path(), encoding="utf-8") as f:
+            return f.read()
+
+    def write(self, items):
+        """decisions.md as an earlier init wrote it with these plugin arrangements, plus a decision of the researcher's own."""
+        text = setup.render(setup.scaffold("org/decisions.md.tmpl"), {"deviations": setup.bullets(items)})
+        with open(self.path(), "w", encoding="utf-8") as f:
+            f.write(text.replace("（暂无）", self.MINE))
+        return self.text()
+
+    def section(self, text):
+        start, end = setup.section_span(text, setup.PLUGIN_SECTION)
+        return text[start:end]
+
+    def init(self):
+        plan = setup.build_plan(self.tmp, TASK, None)
+        acts = setup.actions_for(self.tmp, plan)
+        _, out = self.run_quiet(setup.report, self.tmp, plan, acts, True)
+        self.run_quiet(setup.apply_plan, self.tmp, plan, acts)
+        return dict((rel, k) for k, rel, _ in acts)["org/decisions.md"], out
+
+    def current_section(self):
+        return self.section(setup.render(setup.scaffold("org/decisions.md.tmpl"), {"deviations": setup.deviations_text(self.spec)}))
+
+    def test_every_plugin_section_is_known(self):
+        old = setup.render(setup.scaffold("org/decisions.md.tmpl"), {"deviations": setup.bullets(self.OLD)})
+        self.assertEqual(setup.PLUGIN_SECTIONS.get(setup.sha256(setup.squeeze(self.section(old)))), "1.0.0 至 1.0.2")
+        digest = setup.sha256(setup.squeeze(self.current_section()))
+        self.assertIn(digest, setup.PLUGIN_SECTIONS, "plugin_decisions 改了：把 %s 加进 setup.PLUGIN_SECTIONS，"
+                      "下一版才认得出这一版写的那一节" % digest)
+
+    def test_the_section_an_earlier_init_wrote_is_refreshed_in_place(self):
+        before = self.write(self.OLD)
+        kind, out = self.init()
+        self.assertEqual(kind, "update")
+        self.assertIn("[更新（上次生成后没人改过）] org/decisions.md", out)
+        after = self.text()
+        self.assertEqual(self.section(after), self.current_section())
+        start, end = setup.section_span(before, setup.PLUGIN_SECTION)
+        new_start, new_end = setup.section_span(after, setup.PLUGIN_SECTION)
+        self.assertEqual((after[:new_start], after[new_end:]), (before[:start], before[end:]))   # the rest kept byte for byte
+        self.assertIn("## 补充决定\n\n" + self.MINE, after)
+        self.assertFalse(os.path.exists(self.path() + ".new"))
+        self.assertEqual(self.init()[0], "same")
+
+    def test_an_edited_section_goes_to_new(self):
+        items = list(self.OLD)
+        items[2] += "研究员 11-14 补：评论也只由书记员写。"
+        before = self.write(items)
+        kind, out = self.init()
+        self.assertEqual(kind, "new")
+        self.assertIn("[本地改过，新版本写 .new] org/decisions.md", out)
+        self.assertEqual(self.text(), before)                                       # the file is as the researcher left it
+        new = self.text(self.path() + ".new")
+        self.assertEqual(self.section(new), self.current_section())
+        self.assertIn("## 补充决定\n\n" + self.MINE, new)
+        with open(os.path.join(self.tmp, ".claude", "solo-lab", "manifest.json"), encoding="utf-8") as f:
+            self.assertIn("org/decisions.md", json.load(f)["pending_new"])
+        _, out = self.run_quiet(setup.check, self.tmp)
+        self.assertIn("待合并：org/decisions.md.new", out)
+        self.assertEqual(self.init()[0], "pending")
+
+    def test_a_current_section_is_left_alone(self):
+        text = self.text().replace("（暂无）", self.MINE)
+        start, end = setup.section_span(text, setup.PLUGIN_SECTION)
+        text = text[:start] + self.section(text).replace("\n- ", "\n\n- ") + text[end:]     # spaced out by hand
+        with open(self.path(), "w", encoding="utf-8") as f:
+            f.write(text)
+        self.assertEqual(self.init()[0], "same")
+        self.assertEqual(self.text(), text)
+        with open(self.path(), "w", encoding="utf-8") as f:
+            f.write("# 研究员的补充决定\n\n" + self.MINE + "\n")                    # no plugin section at all
+        self.assertEqual(self.init()[0], "kept")
+        self.assertEqual(self.text(), "# 研究员的补充决定\n\n" + self.MINE + "\n")
+
     def test_deployed_scripts_find_their_files(self):
         """The copies under .claude/solo-lab run on their own: scripts, rules, terms and the contract."""
         for name in ("rules.json", "terms.zh.json", "contract.json"):
@@ -2587,10 +2720,12 @@ class PoolGuardTest(PoolProjectCase):
     def test_a_question_in_a_turn_a_message_started(self):
         self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p1-01：需求包 packages/drafts/alg/x.md")
         _, out = self.guard("s-alg1", "AskUserQuestion", {"questions": []})
-        self.assertIn("交给上一级的交付包", out.get("additionalContext", ""))          # a +1 goes up the chain
+        self.assertEqual(out.get("permissionDecision"), "deny")                       # nobody is there to answer
+        self.assertIn("交给上一级的交付包", out.get("permissionDecisionReason", ""))   # a +1 goes up the chain
         self.prompt("s-alg2", "【委托 #2105】PMO-p2-01 → Alg-p2-01：需求包 x.md")
         _, out = self.guard("s-alg2", "AskUserQuestion", {"questions": []})
-        self.assertIn("【需拍板】", out.get("additionalContext", ""))                  # a +2 asks the entry
+        self.assertEqual(out.get("permissionDecision"), "deny")
+        self.assertIn("【需拍板】", out.get("permissionDecisionReason", ""))          # a +2 asks the entry
         self.prompt("s-alg1", "研究员：先停一下")
         _, out = self.guard("s-alg1", "AskUserQuestion", {"questions": []})
         self.assertEqual(out, {})
@@ -2798,7 +2933,7 @@ class PoolRouteTest(PoolProjectCase):
         self.assertIn("补位请求", self.read("inbox/PMO-p2-01.jsonl"))
         self.guard("s-alg1", "Write", {"file_path": os.path.join(self.tmp, "packages", "drafts", "quality", "x.md")})
         code, text = self.route("audit", sid="s-entry")
-        self.assertIn("Alg-p1-01：", text)
+        self.assertIn("- Alg-p1-01：", text.split("软规则命中", 1)[1].split("其他 agent 会话叫醒的轮次", 1)[0])
 
     def test_session_names_in_classify(self):
         sys.path.insert(0, os.path.join(self.tmp, ".claude", "solo-lab", "bin"))
@@ -3048,7 +3183,7 @@ class PoolReviewStateTest(PoolProjectCase):
         self.assertEqual(self.pool()["owners"]["2101"], "Alg-p1-01")
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-alg2", "source": "compact"})
         self.assertIn("未了事项：无", out.get("additionalContext", ""))
-        self.assertEqual(self.session("s-alg2")["turn_origin"], "other")
+        self.assertEqual(self.session("s-alg2")["turn_origin"], "researcher")
 
     def test_a_message_addressed_to_another_session_takes_no_lease(self):
         _, out = self.prompt("s-alg2", "【委托 #2103】PMO-p2-01 → Infra-p2-01：需求包 x.md")
@@ -3702,6 +3837,118 @@ class BracketPathTest(PoolProjectCase):
         with contextlib.redirect_stdout(out):
             setup.check(self.tmp)
         self.assertNotIn("还停在旧版插件规则上", out.getvalue())
+
+
+class DeliveryTextTest(PoolProjectCase):
+    """1.0.3: decisions reach the researcher at two moments; a turn another session woke asks nobody."""
+
+    GATES = "其他 agent 会话叫醒的轮次里向研究员的提问（hook 处理）："
+
+    def generated(self):
+        texts = {"CLAUDE.md": self.read("CLAUDE.md"), "org/org.md": self.read("org/org.md")}
+        for name in sorted(os.listdir(os.path.join(self.tmp, ".claude", "agents"))):
+            texts[name] = self.read(os.path.join(".claude", "agents", name))
+        return texts
+
+    def test_settings_hook_the_wrap_up_tool(self):
+        self.assertEqual(setup.WRAPUP_TOOL, "^mcp__.+__wrap_up$")
+        groups = json.loads(self.read(".claude/settings.json"))["hooks"]["PreToolUse"]
+        wrap = [g for g in groups if g["matcher"] == setup.WRAPUP_TOOL]
+        self.assertEqual(len(wrap), 1)
+        self.assertEqual(wrap[0]["hooks"], groups[0]["hooks"])                    # written like the other guard groups
+        self.assertTrue(wrap[0]["hooks"][0]["command"].endswith('/.claude/hooks/guard.py"'))
+        self.assertTrue(re.search(setup.WRAPUP_TOOL, "mcp__ccd_turn__wrap_up"))
+        for other in ("mcp__ccd_turn__update_plan", "wrap_up", "AskUserQuestion", "Bash"):
+            self.assertFalse(re.search(setup.WRAPUP_TOOL, other), other)
+
+    def test_texts_say_when_decisions_reach_the_researcher(self):
+        texts = self.generated()
+        daily, day = "每" + "日", "每" + "天"                  # split so a grep for the old wording finds none here
+        for name, text in texts.items():
+            for old in (daily + "决策队列", day + "交一次", day + "把待决定的决策", daily + "队列", "随时" + "交",
+                        day + "的决策队列", "被消息叫起来的轮次不停下来问人"):
+                self.assertNotIn(old, text, name)
+        entry = texts["pmo-p2.md"]
+        for part in ("**决策队列。** 待决定的决策只在两个时刻推给研究员，到时 hook 会在上下文里提示你",
+                     "在状态里提一次，写事项、选项一句话和工作项链接，不超过 3 行",
+                     "紧急程度为“插队”的，这一轮可以在收尾里问研究员一次",
+                     "距他上一条消息 30 分钟以上，或者第一次", "之前提过的也附", "改版、截止前、每日汇总都不推",
+                     "**面向研究员的内容。** 你主动给研究员的只有三类：新决策（给链接）、研究员待办（带期限）、里程碑",
+                     "收到【需拍板】，请发来的 +2 写成决策包，不直接转问研究员",
+                     "面向研究员最多写一行状态，不提问，不标“等研究员回答”，不复述已经登记过的决策",
+                     "“等研究员：<事项>（截止 <时间>）”", "补位请求（`route.py refill`）记在 `route.py pool` 里，研究员来谈时和研究员待办一起列出"):
+            self.assertIn(part, entry)
+        self.assertIn("研究员在本会话里拍板后，请书记员确认决策的“决定”这一步", entry)     # what follows the decision stays
+        self.assertIn("入口要时汇总决策队列", texts["pmo-router.md"])
+        claude = texts["CLAUDE.md"]
+        for part in ("被其他 agent 会话叫醒的轮次，研究员多半不在，不向研究员提问",
+                     "其他会话发来的消息、本会话开出的会话结束一轮的回报、开会话时上级写的首轮",
+                     "hook 会去掉收尾里的提问、拒绝 AskUserQuestion", "唯一的例外是插队决策的登记回执到入口的那一轮",
+                     "研究员待办（要研究员动手的事）记成阻塞", "再给入口 `PMO-p2-01` 发【通知】",
+                     "hook 只拦两类事：会损坏数据的，和研究员多半不在时向他提的问题",
+                     "池会话被其他 agent 会话叫醒的轮次：拒绝 AskUserQuestion，去掉收尾工具里的提问"):
+            self.assertIn(part, claude)
+        self.assertNotIn("收尾时不留等研究员回答的问题", claude)                  # the exception above would contradict it
+        self.assertIn("等研究员：<事项>（截止 <时间>）", texts["alg-p2.md"])
+        for name in ("alg-p2.md", "alg-p1.md", "alg-p0.md"):
+            self.assertIn("被其他 agent 会话叫醒的轮次", texts[name], name)
+            self.assertIn("收尾里的提问 hook 会去掉", texts[name], name)
+        self.assertNotIn("研究员每天", texts["org/org.md"])
+        decisions = self.read("org/decisions.md")
+        self.assertIn("紧急程度为“插队”的，登记那一轮可以问研究员一次", decisions)
+        self.assertIn("2026-11-15 定下推送时机", decisions)
+        self.assertIn("被其他 agent 会话叫醒的轮次，池会话都不向研究员提问，只有插队决策的登记回执到入口的那一轮，入口可以在收尾里问一次", decisions)
+        policy = json.loads(self.read(".claude/hooks/policy.json"))
+        text = pool_lib.injection(self.tmp, policy, {"name": "PMO-p2-01", "role": "pmo-p2"}, "规则已更新。")
+        self.assertNotIn("下文略", text)                                         # the entry's role text is injected whole
+        self.assertIn("**面向研究员的内容。**", text)
+
+    def test_a_decision_from_the_queue_is_mentioned_when_it_is_registered(self):
+        path = os.path.join(self.tmp, "packages", "drafts", "alg", "q.md")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(example_blocks()[7])
+        out = route.classify_draft(self.spec, self.tmp, path)
+        self.assertEqual((out["row"], out["next_hop"]), ("R5", "pmo-scribe"))
+        steps = "\n".join(out["steps"])
+        self.assertNotIn("每日", steps)
+        self.assertIn("登记回执到的那一轮，在状态里提一次", steps)
+        self.assertIn("“插队”的，这一轮可以在收尾里问研究员一次", steps)
+        self.assertIn("研究员主动来谈时，连同其余待决定的决策列给他", steps)
+
+    def test_a_refill_request_waits_for_the_researcher(self):
+        self.started_pool()
+        code, text = self.route("refill", "alg-p0", sid="s-alg2")
+        self.assertEqual(code, 0)
+        self.assertIn("研究员来谈时入口会列出", text)
+        inbox = self.read("inbox/PMO-p2-01.jsonl")
+        self.assertIn("研究员来谈时和研究员待办一起列出", inbox)
+        self.assertNotIn("每日", inbox + text)
+
+    def test_audit_counts_the_questions_hooks_took_out(self):
+        self.started_pool()
+        code, text = self.route("audit", sid="s-entry")
+        self.assertEqual(code, 0)
+        self.assertIn(self.GATES + "\n- 无", text)
+        wrap, ask = "mcp__ccd_turn__wrap_up", "AskUserQuestion"
+        rows = [{"session_name": "PMO-p2-01", "role": "pmo-p2", "tool": wrap, "agent_turn_gate": "stripped"}] * 3 + [
+            {"session_name": "PMO-p2-01", "role": "pmo-p2", "tool": wrap, "agent_turn_gate": "allowed_urgent"},
+            {"session_name": "Alg-p1-01", "role": "alg-p1", "tool": ask, "agent_turn_gate": "denied"},
+            {"session_name": "Alg-p1-01", "role": "alg-p1", "tool": wrap, "agent_turn_gate": "stripped"},
+            {"session_name": "Alg-p2-01", "role": "alg-p2", "tool": wrap},                        # nothing was asked
+            {"session_name": "Alg-p2-01", "role": "alg-p2", "tool": "Bash", "agent_turn_gate": "unknown"}]
+        path = os.path.join(self.tmp, ".claude", "logs", "guard.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            f.write("{broken\n")
+        code, text = self.route("audit", sid="s-entry")
+        self.assertEqual(code, 0)
+        section = text.split(self.GATES, 1)[1]
+        self.assertIn("\n- PMO-p2-01：收尾提问去掉 3 次，AskUserQuestion 拒绝 0 次，插队决策放行 1 次", section)
+        self.assertIn("\n- Alg-p1-01：收尾提问去掉 1 次，AskUserQuestion 拒绝 1 次，插队决策放行 0 次", section)
+        self.assertNotIn("Alg-p2-01：收尾", section)
+        self.assertNotIn(self.GATES + "\n- 无", text)
 
 
 if __name__ == "__main__":

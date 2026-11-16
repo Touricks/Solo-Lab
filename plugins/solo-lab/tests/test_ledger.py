@@ -302,6 +302,30 @@ class RegisterTest(LedgerCase):
         item_id, text = self.out(ledger.register, self.lg(), self.draft(DECIDED, "d2.md"))
         self.assertIn("confirm %s --by 研究员 --set 决定内容='停止条件的“四周”从搜索开始计时，试点期另设两周观察。' --set 决定人=研究员" % item_id, text)
 
+    def test_the_receipt_says_what_was_registered(self):
+        """The inbox hook of the session the 【登记回执】 reaches reads type, queue and urgent off the receipt."""
+        def receipt(item_id):
+            with open(os.path.join(self.tmp, "packages", "sent", "%s.json" % item_id), encoding="utf-8") as f:
+                return json.load(f)
+        task = self.task()
+        self.assertEqual((receipt(task)["type"], receipt(task)["queue"]), ("research_task", False))
+        urgent = self.draft(DECISION, "u.md", edit=lambda t: t.replace("- 紧急程度：今天\n", "- 紧急程度：插队\n"))
+        rec = receipt(self.quiet(ledger.register, self.lg(), urgent))
+        self.assertEqual((rec["type"], rec["status"], rec["due"]), ("decision", "registered", "两天"))
+        self.assertIs(rec["queue"], True)
+        self.assertIs(rec["urgent"], True)
+        rec = receipt(self.quiet(ledger.register, self.lg(), self.draft(DECISION, "today.md")))
+        self.assertEqual((rec["type"], rec["queue"], rec["urgent"]), ("decision", True, False))
+        rec = receipt(self.quiet(ledger.register, self.lg(), self.draft(
+            DECIDED, "d2.md", edit=lambda t: t.replace("- 紧急程度：可延后\n", "- 紧急程度：插队\n"))))
+        self.assertEqual(rec["type"], "decision")
+        self.assertIs(rec["queue"], False)                                   # the researcher decided it in a talk
+        for block, name, wid in ((ASSIGN, "a.md", "same_seq"), (CROSS, "c.md", "cross_request")):
+            rec = receipt(self.quiet(ledger.register, self.lg(), self.draft(block, name)))
+            self.assertEqual((rec["type"], rec["queue"], rec["urgent"]), (wid, False, False), name)
+        rec = receipt(self.quiet(ledger.register, self.lg(), self.write(FEEDBACK, "fb.md")))
+        self.assertEqual(rec["type"], "feedback")
+
     def test_what_the_new_item_page_requires_is_asked_for_before_creating(self):
         self.task()
         lg = self.lg()
@@ -730,6 +754,29 @@ class FieldsAndQueriesTest(LedgerCase):
         self.assertEqual([str(r["work_item_id"]) for r in self.quiet(ledger.query, self.lg("preview"), "tasks")], [task])
         self.assertEqual([str(r["work_item_id"]) for r in self.quiet(ledger.query, self.lg("preview"), "queue")], [decision])
         self.assertEqual(ledger.open_tasks(self.lg("preview")), [(task, "复现并测量基线")])
+
+    def test_queue_and_blocked_show_what_the_entry_lists(self):
+        """The researcher comes back: the entry lists the decisions waiting and the 等研究员： blocks off these two queries."""
+        self.task()
+        urgent = self.draft(DECISION, "u.md", edit=lambda t: t.replace("- 紧急程度：今天\n", "- 紧急程度：插队\n"))
+        decision = self.quiet(ledger.register, self.lg(), urgent)
+        rows, text = self.out(ledger.query, self.lg("preview"), "queue")
+        line = next(x for x in text.splitlines() if x.startswith("#%s " % decision))
+        self.assertRegex(line, r"  紧急程度：插队  回复期限：两天  主文档：https://\S+/wiki/\w+$")
+        self.assertEqual((rows[0]["urgency"], rows[0]["due"]), ("插队", "两天"))
+        mine = self.quiet(ledger.register, self.lg(), self.draft(ASSIGN, "a.md"))
+        other = self.quiet(ledger.register, self.lg(), self.draft(CROSS, "c.md"))
+        self.quiet(ledger.update, self.lg(), mine, ["blocked_reason=等研究员：拿真实数据（截止 2026-11-20 12:00）"])
+        self.quiet(ledger.update, self.lg(), other, ["blocked_reason=等基础设施：GPU 节点没排上"])
+        rows, text = self.out(ledger.query, self.lg("preview"), "blocked")
+        lines = {x.split()[0]: x for x in text.splitlines() if x.startswith("#")}
+        self.assertIn("  阻塞原因：等研究员：拿真实数据（截止 2026-11-20 12:00）  主文档：https://", lines["#" + mine])
+        self.assertIn("  阻塞原因：等基础设施：GPU 节点没排上", lines["#" + other])
+        self.assertEqual(sorted(r["blocked_reason"] for r in rows), ["等基础设施：GPU 节点没排上", "等研究员：拿真实数据（截止 2026-11-20 12:00）"])
+        self.assertNotIn("回复期限", lines["#" + mine])                                  # a request keeps no due in its receipt
+        lg = self.lg("offline")
+        self.assertIn("`%s`" % lg.field("decision", "urgency")["field_key"], ledger.mql_text(lg, "queue")[0])
+        self.assertEqual(ledger.moql_value({"key_label_value": {"key": "opt1", "label": "插队"}}), "插队")
 
     def test_get_shows_fields_by_name(self):
         task = self.task()

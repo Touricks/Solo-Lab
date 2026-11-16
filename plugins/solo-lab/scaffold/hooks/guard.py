@@ -2,8 +2,9 @@
 """PreToolUse guard for a project set up by the solo-lab plugin.
 
 Reads the hook input JSON on stdin and answers Bash, Monitor, Edit, Write,
-NotebookEdit, Agent and AskUserQuestion calls, based on policy.json and lark-risk.json in this
-directory. Two kinds of checks:
+NotebookEdit, Agent and AskUserQuestion calls, and the desktop app's terminal and turn
+wrap-up tools (mcp__<server>__run_in_terminal, mcp__<server>__wrap_up), based on
+policy.json and lark-risk.json in this directory. Two kinds of checks:
 - hard rules guard data: only the one claimed scribe session writes Feishu (and nobody
   while two scribes are claimed), the evaluation protocol's files stay read-only, high-risk and
   --yes Feishu commands are the researcher's, the hooks, settings, role definitions
@@ -15,6 +16,13 @@ directory. Two kinds of checks:
   under bypassPermissions or dontAsk, where no prompt can appear).
 - soft rules are the dispatch norms: they never block, they add a reminder to the
   model's context and a line to .claude/logs/guard.jsonl.
+A turn another agent session started (turn_origin agent, written by inbox.py) has nobody
+to answer a question, so in a pool session the wrap-up keeps its recap and loses ask,
+actions and blocked (allow with updatedInput), and AskUserQuestion is denied. The one
+exception: the entry may ask in the turn that registered a decision that jumps the queue
+(ask_ok in its status file). guard.jsonl records each case under agent_turn_gate:
+stripped, denied or allowed_urgent, and for every wrap-up whether it asked something (asked)
+in whose turn (turn_origin). The researcher's turns and the app's are left alone.
 Anything unexpected in a hard check exits 2, which blocks the call: Claude Code
 treats other non-zero exits as non-blocking, so failing open must be avoided
 explicitly. Settings deny and ask rules still apply after this hook answers allow.
@@ -66,13 +74,17 @@ def matches(rel, patterns):
 class Verdict:
     ORDER = {None: 0, "allow": 1, "ask": 2, "deny": 3}
 
-    def __init__(self, decision=None, reason=""):
+    def __init__(self, decision=None, reason="", gate=None, note=""):
         self.decision, self.reasons, self.updated = decision, [reason] if reason else [], None
+        self.gate = gate                        # agent_turn_gate in guard.jsonl: stripped, denied, allowed_urgent
+        self.notes = [note] if note else []     # for the model's context; not a soft-rule hit
 
     def merge(self, other):
         if self.ORDER[other.decision] > self.ORDER[self.decision]:
             self.decision = other.decision
         self.reasons.extend(r for r in other.reasons if r not in self.reasons)
+        self.gate = self.gate or other.gate
+        self.notes.extend(n for n in other.notes if n not in self.notes)
         return self
 
 
@@ -1301,18 +1313,58 @@ def check_agent(data, who, policy, soft):
     return Verdict()
 
 
-def check_ask(data, who, policy, soft):
-    """A turn another session's message started may have nobody to answer a question."""
+# --------------------------------------------------------- agent turns
+WRAPUP_TOOL = re.compile(r"^mcp__.+__wrap_up$")       # the desktop app's turn wrap-up; setup.py WRAPUP_TOOL
+ASK_KEYS = ("ask", "actions", "blocked")              # the wrap-up's question to the researcher
+
+
+def agent_turn(data, who):
+    """The status of a pool session whose current turn another agent session started (inbox.py wrote
+    turn_origin agent); None for any other turn, and for a session that holds no claim (the
+    researcher's own, one not claimed). An older value (message, other) is not agent."""
     if who.origin != "claim":
-        return Verdict()
+        return None
     st = pool.load_session(project_root(data), data.get("session_id") or "")
-    if st.get("turn_origin") == "message":
-        if (policy["agents"].get(who.role) or {}).get("rank") == 2:
-            soft.append("这一轮是别的会话的消息叫起来的，研究员可能不在：要研究员拍板的写【%s】发给入口，或者写成决策包，不要停在这里等回答。" % (
-                (policy.get("msg") or {}).get("decide", "需拍板")))
-        else:
-            soft.append("这一轮是别的会话的消息叫起来的，研究员可能不在：要拍板的事写进交给上一级的交付包，不要停在这里等回答。")
-    return Verdict()
+    return st if st.get("turn_origin") == "agent" else None
+
+
+def filled(value):
+    return bool(value.strip()) if isinstance(value, str) else bool(value)
+
+
+def check_wrapup(data, who, policy):
+    """In a turn another agent session started the wrap-up keeps its recap and loses its question,
+    except the one question the entry may ask in the turn that registered a decision that jumps
+    the queue (ask_ok). A wrap-up without a question is left alone."""
+    st = agent_turn(data, who)
+    tool_input = data.get("tool_input")
+    if st is None or not isinstance(tool_input, dict) or not any(filled(tool_input.get(k)) for k in ASK_KEYS):
+        return Verdict()
+    if st.get("ask_ok") and who.role == policy.get("entry_role"):
+        return Verdict(gate="allowed_urgent", note="本轮登记了插队决策 #%s，可以问这一次。" % st["ask_ok"])
+    verdict = Verdict("allow", "其他 agent 会话叫醒的轮次，收尾里的提问已去掉", gate="stripped",
+                      note="这一轮是其他 agent 会话叫醒的：收尾里的提问已去掉，只留回顾。")
+    verdict.updated = {k: v for k, v in tool_input.items() if k not in ASK_KEYS}
+    return verdict
+
+
+def check_ask(data, who, policy):
+    """In a turn another agent session started nobody answers AskUserQuestion: denied in every pool
+    session. The researcher's turns and the app's are left alone."""
+    st = agent_turn(data, who)
+    if st is None:
+        return Verdict()
+    decide = (policy.get("msg") or {}).get("decide", "需拍板")
+    reason = ("这一轮是其他 agent 会话叫醒的，研究员多半不在：不用 AskUserQuestion。要研究员拍板的事写决策包或发【%s】给入口；"
+              "+1、+0 写进交给上一级的交付包。" % decide)
+    if who.role == policy.get("entry_role"):
+        note = ("本轮登记了插队决策 #%s：在收尾里问研究员这一次。" % st["ask_ok"] if st.get("ask_ok")
+                else "要研究员拍板的事写成决策包，请书记员登记进决策队列。")
+    elif (policy["agents"].get(who.role) or {}).get("rank") == 2:
+        note = "要研究员拍板的事写成决策包，或者写【%s】发给入口。" % decide
+    else:
+        note = "要拍板的事写进交给上一级的交付包。"
+    return Verdict("deny", reason, gate="denied", note=note)
 
 
 def log(root, data, who, verdict, soft):
@@ -1328,6 +1380,12 @@ def log(root, data, who, verdict, soft):
             "decision": verdict.decision, "reason": "；".join(verdict.reasons)[:200],
             "soft_hits": [h[:160] for h in soft],
         }
+        if verdict.gate:
+            rec["agent_turn_gate"] = verdict.gate
+        if WRAPUP_TOOL.match(str(data.get("tool_name"))):   # route.py audit: questions left in, by who started the turn
+            tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
+            rec["asked"] = any(filled(tool_input.get(k)) for k in ASK_KEYS)
+            rec["turn_origin"] = pool.load_session(root, data.get("session_id") or "").get("turn_origin")
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except OSError:
@@ -1407,7 +1465,9 @@ def evaluate(data):
     elif tool in ("Agent", "Task"):
         verdict = check_agent(data, who, policy, soft)
     elif tool == "AskUserQuestion":
-        verdict = check_ask(data, who, policy, soft)
+        verdict = check_ask(data, who, policy)
+    elif WRAPUP_TOOL.match(str(tool)):
+        verdict = check_wrapup(data, who, policy)
     else:
         verdict = Verdict()
     touch(root, data, who)
@@ -1427,8 +1487,9 @@ def main():
             out["permissionDecisionReason"] = "；".join(verdict.reasons) or verdict.decision
             if verdict.updated is not None:
                 out["updatedInput"] = verdict.updated
-        if soft:
-            out["additionalContext"] = "\n".join("提醒：" + s for s in soft)
+        context = verdict.notes + ["提醒：" + s for s in soft]
+        if context:
+            out["additionalContext"] = "\n".join(context)
         if len(out) > 1:
             sys.stdout.write(json.dumps({"hookSpecificOutput": out}, ensure_ascii=True) + "\n")
             sys.stdout.flush()

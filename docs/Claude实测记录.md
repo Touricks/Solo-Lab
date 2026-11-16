@@ -1,10 +1,10 @@
-# Claude 实测记录（0.6.0、1.0.0）
+# Claude 实测记录（0.6.0、1.0.0、1.0.3）
 
 > 这份记录写于插件改名之前。文中的 `agent-org` 是 Solo-Lab 当时的插件名，命令和路径照当时的写法保留。文中的“派活”“交回”也是当时的说法，1.0.0 起叫“委托”“交付”，消息抬头【派活】【交回】就是现在的【委托】【交付】。
 
 版本 0.6.0，测试日期 2026-11-12 至 2026-11-13，测试项目 `agent-org-claude-test`（前四轮和流程测试）和 `agent-org-claude-fresh`（第五轮）。名词和日常用法见[使用说明](使用说明.md)，会话池的机制和假设清单见[机制说明](../plugins/solo-lab/skills/setup/references/mechanisms.md)。
 
-1.0.0 在一个真实项目上的初始化和它发现的上下文窗口问题，记在后面的“1.0.0 真实项目初始化：上下文窗口”一节。
+1.0.0 在一个真实项目上的初始化和它发现的上下文窗口问题，记在后面的“1.0.0 真实项目初始化：上下文窗口”一节。1.0.3 用探针 hook 测收尾工具和会话消息，记在“1.0.3 收尾工具和会话消息的 hook 实测（2026-11-15）”一节。
 
 0.6.0 的初始化和六个流程都在真实的 Claude Desktop 和飞书环境里走通了，最后按最终版本从空目录又完整初始化了一遍。
 
@@ -256,10 +256,39 @@
 
 1.0.1 的处理：项目设置不再写 `autoCompactWindow`；默认模型改成入口 fable、其余 opus；初始化第 8 步回读每个会话的模型、推理强度和窗口，`check --readback` 比对，模型和清单不在一档、窗口小于初始化会话的算问题。
 
+## 1.0.3 收尾工具和会话消息的 hook 实测（2026-11-15）
+
+1.0.3 要在被其他 agent 会话叫醒的轮次里去掉收尾的提问，先要弄清两件事：hook 能不能改写桌面应用的收尾工具，UserPromptSubmit 的 hook 怎样分出这一轮是谁开的。2026-11-15（美东时间）在桌面应用里用探针 hook 测了这两件事。探针写在新建的项目本地设置 `.claude/settings.local.json` 里。
+
+| 项 | 实测 |
+| --- | --- |
+| 匹配收尾工具 | PreToolUse 的 matcher `^mcp__.+__wrap_up$` 匹配得上桌面应用的收尾工具。hook 的输入里有 `tool_name`、`tool_input`、`mcp_server` 等键 |
+| 改写收尾工具的输入 | hook 在 `hookSpecificOutput` 里返回 `permissionDecision` 为 `allow`、`updatedInput` 为去掉 ask、actions、blocked 以后的输入，另带 `additionalContext`。应用照改写后的输入执行，工具返回 “Nothing is pending, so the app draws no box; the recap is the session's status...”。`additionalContext` 模型看得到 |
+| 哪些轮次生效 | 开会话时的首轮（`Background (from the session that started this one):` 开头）和被会话消息叫醒的轮次都一样；研究员开的轮次里 hook 也收到了收尾调用，那几次没有提问可去 |
+| 开出它的会话收到的回报 | 仍按改写前的输入：第一轮去掉提问以后，应用叫醒开出探针会话的那个会话，回报写的是 “finished a turn and then reported that it was waiting on the user”，正文带着被去掉的提问原文，还让它在对方仍在等时用一句话告诉用户 |
+| 新加的 hook 什么时候生效 | 新建的项目本地设置里加的 hook，在已经开着的会话里马上生效；删掉这个文件以后，开着的会话里探针还在跑 |
+
+UserPromptSubmit 的 hook 收到的 `prompt` 原文，实测见到这五种开头：
+
+| 这一轮怎么来的 | `prompt` 的开头 |
+| --- | --- |
+| 别的会话发来的消息 | `<cross-session-message from="local_…" from-name="…">`，下一行是消息首行，比如“【通知 #ID】A → B：…”，最后以 `</cross-session-message>` 结束。模型看到的版本前面多一行 “Another Claude session sent a message:”，hook 收不到这一行 |
+| 本会话开出的会话结束一轮，应用叫醒本会话 | 先是 `<system-reminder>` 块（实测这一次有两块，第一块是 “The session "…" you started (…) finished a turn …”），接着是 `<side-sessions-event>` |
+| 研究员自己打的字 | 应用可能在前面插 `<system-reminder>` 块，比如本会话开的某个会话还没开始就被研究员停掉或归档了；块后面才是研究员的话 |
+| 别的会话用 start_session 开出本会话时的首轮 | `Background (from the session that started this one):`，后面是背景，再后面是 `Task:` |
+| 本会话的后台任务完成 | `<task-notification>` |
+
+1.0.2 的 hook 把以标签开头的输入都当成应用生成，第三种里研究员的话会被认成不是研究员说的。
+
+1.0.3 的处理：先去掉开头的 `<system-reminder>` 块再判断。剩下的以 `<cross-session-message`（前面带 “Another Claude session sent a message:” 也认）、`<side-sessions-event` 或 `Background (from the session that started this one):` 开头的，算其他 agent 会话叫醒的；前五个非空行里有一行以插件抬头开头的，也算；以别的标签开头的、去掉提醒块以后什么都不剩的，算应用生成；其余算研究员开的。项目设置的 PreToolUse 里加一组 matcher 为 `^mcp__.+__wrap_up$` 的 hook，指向 `guard.py`：池会话被其他 agent 会话叫醒的轮次，照上面的写法去掉收尾里的提问，AskUserQuestion 直接拒绝。开出者收到的回报还带着提问，inbox hook 在 `<side-sessions-event>` 那一轮提醒它不转告研究员。升级重跑 `init --apply`；往已有的项目设置里加 hook 是否马上生效没测过，升级后看 `.claude/logs/guard.jsonl` 里有没有工具名以 `__wrap_up` 结尾的记录，没有就退出并重开桌面应用。
+
 ## 还没验证的
 
 | 没验证的 | 现状 |
 | --- | --- |
+| 1.0.3 的 hook 在会话池里跑：被其他 agent 会话叫醒的轮次去掉收尾提问、拒绝 AskUserQuestion，研究员主动发起讨论时入口附清单，插队决策登记那一轮放行一次提问 | 实测用的是探针 hook，只测了应用这一侧；1.0.3 的 guard 和 inbox 只过了离线回归 |
+| 往已有的 `.claude/settings.json` 加一组 hook（1.0.3 升级就是这样），开着的会话是否马上生效 | 实测只新建过项目本地设置；升级说明里写了看 `guard.jsonl` 核对 |
+| 池会话里的 +2 和入口收到“下级在等研究员”的回报时，那一轮的状态怎么写；被去掉提问的下级会话，在应用里还显不显示提问卡片、标不标“在等你” | 只见过探针的回报原文；下级会话在应用里的样子没有记录 |
 | 1.0.1 升级后的真实项目：重开桌面应用以后池会话的窗口回到 100 万，回读表和检查就绪 | 只过了离线回归 |
 | 用 1.0.1 从新目录初始化：入口是 fable、其余 18 个是 opus，窗口都等于初始化会话；开会话的工具认不认 fable 这个别名 | 只过了离线回归 |
 | 桌面应用开出的 Opus 会话默认是 100 万窗口；退出并重开桌面应用能让所有池会话重新读设置 | 只在命令行程序上验证过 |

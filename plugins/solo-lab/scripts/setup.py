@@ -486,6 +486,9 @@ POOL_HOOK_EVENTS = ("Stop", "StopFailure", "Notification", "PermissionRequest", 
 # The desktop app's terminal panel tool runs shell commands outside the Bash tool. A matcher with
 # regex characters is an unanchored regex, so it gets its own anchored group.
 TERMINAL_TOOL = "^mcp__.+__run_in_terminal$"
+# The desktop app's end-of-turn tool (an MCP tool whose name ends in __wrap_up) can draw a question
+# box for the researcher; guard.py takes the question out in a turn another session woke.
+WRAPUP_TOOL = "^mcp__.+__wrap_up$"
 
 
 def build_settings(task, risk, policy):
@@ -503,7 +506,8 @@ def build_settings(task, risk, policy):
     hooks = {
         "PreToolUse": [{"matcher": "Bash|Monitor|Edit|Write|NotebookEdit|Agent|Task|AskUserQuestion",
                         "hooks": hook("guard.py")},
-                       {"matcher": TERMINAL_TOOL, "hooks": hook("guard.py")}],
+                       {"matcher": TERMINAL_TOOL, "hooks": hook("guard.py")},
+                       {"matcher": WRAPUP_TOOL, "hooks": hook("guard.py")}],
         "PostToolUse": [{"matcher": "Bash|Monitor|Agent|Task", "hooks": hook("audit.py")},
                         {"matcher": TERMINAL_TOOL, "hooks": hook("audit.py")}],
         "PostToolUseFailure": [{"matcher": "Bash|Monitor|Agent|Task", "hooks": hook("audit.py")},
@@ -687,11 +691,14 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
     if rank == 2:
         lines += [
             "- 研究员会直接点开你的会话交代事情。这时先运行 `python3 -I .claude/solo-lab/bin/route.py focus open --topic '<一句话>'`，用 `route.py notify %s --text '…'` 告诉入口；做完或研究员说“结束”时运行 `route.py focus close`。谈定的事写成决策包（渠道：研究员主动发起）交给入口登记。没写进台账的决定不算数。" % entry,
-            "- 研究员不在场时不停下来问人：要研究员拍板的事写决策包，或给入口发【%s】；+1 和 +0 要拍板的事写进交付包。" % spec.term("msg", "decide"),
+            "- 被其他 agent 会话叫醒的轮次，研究员多半不在，不向研究员提问：要研究员拍板的事写决策包，或给入口发【%s】；+1 和 +0 要拍板的事写进交付包。收尾里的提问 hook 会去掉。"
+            "要研究员动手的事（研究员待办），请书记员把阻塞原因写成“等研究员：<事项>（截止 <时间>）”，再给入口发【%s】。" % (
+                spec.term("msg", "decide"), spec.term("msg", "notice")),
             "- 你有项目级记忆（`.claude/agent-memory/%s/`），开工前读一下。只记跨阶段要沿用的标准和判断；任务的当前状态以台账和状态包为准。" % name,
         ]
     else:
-        lines.append("- 研究员也可能直接点开你的会话。照做，开工时用 `route.py notify <委托你的会话名> --text '…'` 告诉它；研究员不在场时不停下来问人，要拍板的事写进交给上一级的交付包。")
+        lines.append("- 研究员也可能直接点开你的会话。照做，开工时用 `route.py notify <委托你的会话名> --text '…'` 告诉它。"
+                     "被其他 agent 会话叫醒的轮次不向研究员提问，要拍板的事写进交给上一级的交付包；收尾里的提问 hook 会去掉。")
     lines += sequence_lines(seq)
     return "\n".join(lines)
 
@@ -737,8 +744,9 @@ def entry_values(spec, policy):
             spec.term("msg", "register_receipt")),
         "entry_extra_info": "**补充信息（R1、R2）。** 在工作项下加带标签的评论（请书记员登记，或自己 `meegle comment add`），再给负责会话发【%s #ID】说明一句；它正被研究员直接用着的，改用 `route.py notify` 留言。【%s】只由委托方发。" % (
             spec.term("msg", "notice"), spec.term("msg", "resume")),
-        "entry_queue": "给 `%s` 发【%s】汇总成队列：每件写选项、代价和建议。研究员在本会话里" % (router, spec.term("msg", "assign")),
-        "entry_focus": "**研究员直接交代。** 平时研究员找你；特殊情况下研究员会直接点开某个 +2 的会话交代事情，也会和研究任务当前这一步的负责序列的 +2 深谈。每条研究任务走到哪一步、由谁负责，用 `ledger.py query tasks` 和 `ledger.py next <ID>` 看，两个流程的对照在 `org/phases.md`。\n\n%s\n\n这时那个会话会自己运行 `route.py focus open`，并用 `route.py notify` 告诉你。`route.py pool` 显示它“研究员在用”期间，你不委托它，新信息用 `route.py notify <会话名> --text '...' --work-item <ID>` 留在它的收件箱。谈定的事它会写成决策包（渠道：研究员主动发起）交给你：照 R6 请书记员建决策工作项，填上决定内容和决定人后确认“决定”这一步，“待签版本”写了要更新的字段的一并写进去，再通知受影响的会话。谈定的事没写进台账就不算数。\n\n**会话池。** 研究员说“恢复”时，运行 `route.py pool --recover`，照它列的清单发消息（你自己委托出去的发【%s #ID】，别人委托的请委托方发），先让书记员补完写到一半的登记。研究员在本会话明确说“补位”或“再开一个 …”时才开会话：路由和书记员由你开，其余序列的会话由那个序列的 +2 开；开法照 `route.py claim` 输出里的开池表，开好马上 `route.py expect` 预登记。没人要求时不开会话，也不提卡片；补位请求（`route.py refill`）放进每日决策队列。委托一批工作项之前先看额度：5 小时额度用了八成以上，只委托紧急程度为“插队”的。你开的会话每结束一轮，应用会叫醒你一次，这不算交付：先跑 `route.py pool --queue %s`，有待开工的工作项又有空闲会话就委托出去，没有就一句话结束本轮。" % (
+        "entry_queue": "清单长、要附选项和建议时，给 `%s` 发【%s】请它汇总成表：每件写选项、代价和建议。研究员在本会话里" % (
+            router, spec.term("msg", "assign")),
+        "entry_focus": "**研究员直接交代。** 平时研究员找你；特殊情况下研究员会直接点开某个 +2 的会话交代事情，也会和研究任务当前这一步的负责序列的 +2 深谈。每条研究任务走到哪一步、由谁负责，用 `ledger.py query tasks` 和 `ledger.py next <ID>` 看，两个流程的对照在 `org/phases.md`。\n\n%s\n\n这时那个会话会自己运行 `route.py focus open`，并用 `route.py notify` 告诉你。`route.py pool` 显示它“研究员在用”期间，你不委托它，新信息用 `route.py notify <会话名> --text '...' --work-item <ID>` 留在它的收件箱。谈定的事它会写成决策包（渠道：研究员主动发起）交给你：照 R6 请书记员建决策工作项，填上决定内容和决定人后确认“决定”这一步，“待签版本”写了要更新的字段的一并写进去，再通知受影响的会话。谈定的事没写进台账就不算数。\n\n**会话池。** 研究员说“恢复”时，运行 `route.py pool --recover`，照它列的清单发消息（你自己委托出去的发【%s #ID】，别人委托的请委托方发），先让书记员补完写到一半的登记。研究员在本会话明确说“补位”或“再开一个 …”时才开会话：路由和书记员由你开，其余序列的会话由那个序列的 +2 开；开法照 `route.py claim` 输出里的开池表，开好马上 `route.py expect` 预登记。没人要求时不开会话，也不提卡片；补位请求（`route.py refill`）记在 `route.py pool` 里，研究员来谈时和研究员待办一起列出。委托一批工作项之前先看额度：5 小时额度用了八成以上，只委托紧急程度为“插队”的。你开的会话每结束一轮，应用会叫醒你一次，这不算交付：先跑 `route.py pool --queue %s`，有待开工的工作项又有空闲会话就委托出去，没有就一句话结束本轮。" % (
             bullets([spec.render(spec.rules["entry"]["focus_rule"])]), spec.term("msg", "resume"), me),
         "entry_permissions": "**权限提示。** 每个会话的权限提示只出现在它自己的会话里；`route.py pool --watch` 把等研究员批准的会话列在最前。请研究员不要对飞书写操作的提示选“不再询问”。",
     }
@@ -769,7 +777,7 @@ def pmo_file(spec, rank, task, policy):
         router_scribe = "**交给书记员。** 入口要你安排登记、分发或归档时，给 `%s` 发【%s】，等它回【%s】，再把书记员的写入结果和异常清单写进给入口的【%s】。" % (
             scribe, spec.term("msg", "register_request"), spec.term("msg", "register_receipt"), spec.term("msg", "report"))
         router_report = "**交付。** 给入口发【%s】：路由结论，或者决策队列表，或者书记员的写入结果。正文长的写进 `packages/drafts/pmo/`，消息里只给路径和三行摘要。" % spec.term("msg", "report")
-        common.update({"description_json": yaml_str(prefix + "项目管理 +1（路由）。按路由决策表给出路由结论、汇总每日决策队列、安排书记员登记；不委托序列 +2。"),
+        common.update({"description_json": yaml_str(prefix + "项目管理 +1（路由）。按路由决策表给出路由结论、入口要时汇总决策队列、安排书记员登记；不委托序列 +2。"),
                        "routing_table": spec.routing_table(), "router_scribe": router_scribe, "router_report": router_report})
         return render(scaffold("agents/router.md.tmpl"), common)
     intake = "\n\n会话池里各会话直接给你发【%s】。一次处理一条；你在忙时，后来的消息会自动排队。写完给请求方回 `%s：<写了什么>`，下面列出异常。写台账前先不加 `--apply` 预览，确认后再加；`ledger.py` 自己会加文件锁，同一时间只有一个写入。" % (
@@ -812,10 +820,12 @@ def where_text(task, ids):
     ])
 
 
-HARD_RULES = ("hook 只拦会损坏数据的事。在任何会话里都直接拒绝：改 `.claude/` 下的 hook、配置和角色定义，"
+HARD_RULES = ("hook 只拦两类事：会损坏数据的，和研究员多半不在时向他提的问题。在任何会话里都直接拒绝：改 `.claude/` 下的 hook、配置和角色定义，"
               "改评测协议的只读路径（质量序列的会话例外：改动弹窗要研究员确认，bypass 和 dontAsk 模式下也拒绝），"
               "high-risk-write 和带 `--yes` 的飞书命令，派发时带 `name`，用 Agent 工具派书记员，不照规定写法的认领、预登记和释放，第二条入口或书记员认领。"
               "在研究员自己的会话里弹窗询问、在别的会话里拒绝：书记员以外的会话写飞书和台账，在共享工作区里切分支、stash、reset 或 pull，释放认领。"
+              "池会话被其他 agent 会话叫醒的轮次：拒绝 AskUserQuestion，去掉收尾工具里的提问（ask、actions、blocked），"
+              "只有插队决策的登记回执到入口的那一轮放行一次。"
               "别的派发规则是规范：违反时 hook 提醒、记日志，不拦截。")
 
 
@@ -842,7 +852,7 @@ def shared_mechanics(spec, policy):
 
 def pool_sections(spec, policy):
     entry = policy["agents"]["pmo-p2"]["fixed_session"]
-    decide = spec.term("msg", "decide")
+    decide, notice = spec.term("msg", "decide"), spec.term("msg", "notice")
     return "\n".join([
         "", "## 本目录怎样落实全局约定", "",
         bullets([
@@ -851,9 +861,13 @@ def pool_sections(spec, policy):
             "送达以收方 hook 的记录为准，不回 ACK，也不等 ACK。",
             "本项目的会话池就是研究员认可的派发方式：委托消息发给池里的会话，不改用后台子智能体。",
             "改了共享文件不群发通知，别人看台账里的“负责会话”。",
-            "被消息叫起来的轮次不停下来问人：+2 和入口把要研究员拍板的事写【%s】发给入口，或者写成决策包；+1、+0 写进交给上一级的交付包。" % decide,
+            "被其他 agent 会话叫醒的轮次，研究员多半不在，不向研究员提问。这类轮次有三种：其他会话发来的消息、本会话开出的会话结束一轮的回报、开会话时上级写的首轮。"
+            "这时面向研究员最多写一行状态，不标“等研究员回答”，不复述已经登记过的决策；要研究员拍板的事，+2 写成决策包或给入口发【%s】，+1、+0 写进交给上一级的交付包。"
+            "hook 会去掉收尾里的提问、拒绝 AskUserQuestion；唯一的例外是插队决策的登记回执到入口的那一轮，入口可以在收尾里问研究员一次。" % decide,
+            "研究员待办（要研究员动手的事）记成阻塞：卡住的那个序列 +2 请书记员把阻塞原因写成“等研究员：<事项>（截止 <时间>）”，再给入口 `%s` 发【%s】。"
+            "入口在那一轮的状态里提一次，研究员来谈时和待决定的决策一起列出；办完以后，这个 +2 请书记员清掉阻塞。" % (entry, notice),
             "重发一条消息时，把“重发，上一条作废”写进抬头的【】里，比如【委托 #2101（重发，上一条作废）】。",
-            "不提后续任务的卡片，后续工作写成需求包草稿交给委托方；不把手上的任务移交到新会话；收尾时不留等研究员回答的问题；不归档、清空或停止别的池会话，回退时由研究员本人在侧栏操作。",
+            "不提后续任务的卡片，后续工作写成需求包草稿交给委托方；不把手上的任务移交到新会话；不归档、清空或停止别的池会话，回退时由研究员本人在侧栏操作。",
         ]),
         "", "## Compact Instructions", "",
         "压缩上下文时保留：本会话的会话名和角色；未了事项，即委托出去还没交付的工作项 ID 和接收方、还欠谁交付的工作项 ID；研究员在本会话说过的限制；还没写成决策包的口头决定。",
@@ -1157,6 +1171,57 @@ def deviations_text(spec):
     return bullets(items) if items else "- 无"
 
 
+# org/decisions.md is the researcher's file, except the section under this heading: the plugin writes it
+# from rules.json plugin_decisions and init keeps it current.
+PLUGIN_SECTION = "## 插件定下的几处安排"
+# SHA-256 of that section as each version of the plugin wrote it, white space collapsed (squeeze). A
+# section that still reads like one of them was not edited: init replaces it in place. When
+# plugin_decisions change, add the new hash here (a test says which) so the next version can do the same.
+PLUGIN_SECTIONS = {
+    "da04954351482219e763b897bc64d8f5c0a652e15c2acc9c22dc9e52d7b30a45": "1.0.0 至 1.0.2",
+    "306a9239e096ec4fef53d600c8213cf8502398257a06f473eeb34b4d3d95a6e5": "1.0.3",
+}
+
+
+def squeeze(text):
+    return " ".join(text.split())
+
+
+def section_span(text, heading):
+    """(start, end) of the section under heading: from its heading line up to the next "## " heading,
+    or to the end of text. None when text has no such heading."""
+    m = re.search(r"^%s[ \t]*$" % re.escape(heading), text, re.M)
+    if not m:
+        return None
+    nxt = re.search(r"^## ", text[m.end():], re.M)
+    return m.start(), m.end() + nxt.start() if nxt else len(text)
+
+
+def decisions_file(target, fresh):
+    """(content, kind) for org/decisions.md; fresh is the file a new project gets. In a file that
+    exists only the plugin's section can change: a section that reads like the current rules is left
+    alone; one an earlier version wrote and nobody edited (PLUGIN_SECTIONS) is replaced in place,
+    every other byte kept (kind update); one the researcher edited stays, and the file with the
+    section replaced goes to .new (kind new). A file without the section, or not in UTF-8, is the
+    researcher's alone (kind None: kept)."""
+    path = os.path.join(target, "org", "decisions.md")
+    try:
+        current = read_text(path) if os.path.isfile(path) else None
+    except (UnicodeDecodeError, OSError):
+        current = None
+    span = section_span(current, PLUGIN_SECTION) if current is not None else None
+    if span is None:
+        return fresh, None
+    start, end = section_span(fresh, PLUGIN_SECTION)
+    old, new = current[span[0]:span[1]], fresh[start:end]
+    if squeeze(old) == squeeze(new):
+        return current, None
+    if span[1] == len(current):                    # the section ends the file
+        new = new.rstrip("\n") + "\n"
+    content = current[:span[0]] + new + current[span[1]:]
+    return content, "update" if sha256(squeeze(old)) in PLUGIN_SECTIONS else "new"
+
+
 def feishu_readme(task, ids):
     m = ids.get("meegle") or {}
     meegle, wiki = space_names(task, ids)
@@ -1168,6 +1233,7 @@ def feishu_readme(task, ids):
 class Plan:
     def __init__(self):
         self.files = {}      # rel -> (content, executable, keep_existing)
+        self.decided = {}    # rel -> what to do with a kept file that differs, decided from its content
         self.notes = []
         self.manifest = {}
 
@@ -1218,7 +1284,10 @@ def build_plan(target, task_path, seq_arg, runtime=None):
     put(FIRST_TASK, first_task_sheet(task), keep=True)
     put("org/org.md", org_md(spec, seqs))
     put("org/grants.md", grants_md(spec, task, policy))
-    put("org/decisions.md", render(scaffold("org/decisions.md.tmpl"), {"deviations": deviations_text(spec)}), keep=True)
+    decisions, kind = decisions_file(target, render(scaffold("org/decisions.md.tmpl"), {"deviations": deviations_text(spec)}))
+    put("org/decisions.md", decisions, keep=True)
+    if kind:
+        plan.decided["org/decisions.md"] = kind
     put("org/phases.md", phases_md(spec), keep=True)
     for rel, content in spec_files(spec, task, seeds, seqs).items():
         put(rel, content, keep=rel != "spec/task.json")
@@ -1349,6 +1418,11 @@ def actions_for(target, plan):
         if current == content:
             ok = not executable or os.access(path, os.X_OK)
             acts.append(("same" if ok else "chmod", rel, None))
+        elif rel in plan.decided:                      # org/decisions.md: its plugin section decides
+            kind = plan.decided[rel]
+            if kind == "new" and os.path.isfile(path + ".new") and read_text(path + ".new") == content:
+                kind = "pending"
+            acts.append((kind, rel, current))
         elif keep:
             acts.append(("kept", rel, None))
         elif current is not None and before.get(rel) == sha256(current):
@@ -1357,11 +1431,27 @@ def actions_for(target, plan):
             acts.append(("pending", rel, current))
         else:
             acts.append(("new", rel, current))
-    pair = (".claude/hooks/guard.py", ".claude/hooks/policy.json")
+    groups = [HOOK_CODE]
     on_disk = disk_policy_version(target)
-    if on_disk is not None and on_disk != POLICY_VERSION and any(kind in ("new", "pending") for kind, rel, _ in acts if rel in pair):
-        acts = [("paired", rel, cur) if rel in pair and kind == "update" else (kind, rel, cur) for kind, rel, cur in acts]
+    if on_disk is not None and on_disk != POLICY_VERSION:
+        groups.append(GUARD_PAIR)
+    held = True
+    while held:                                        # one file of a group held back holds back the rest
+        held = False
+        stuck = {rel for kind, rel, _ in acts if kind in ("new", "pending", "paired")}
+        for group in groups:
+            if stuck.intersection(group):
+                for i, (kind, rel, cur) in enumerate(acts):
+                    if rel in group and kind == "update":
+                        acts[i] = ("paired", rel, cur)
+                        held = True
     return acts
+
+
+# The hook scripts import pool.py and feishu_cmd.py from their own directory: a project runs them all from
+# one version, or the inbox hook may fail on every prompt.
+HOOK_CODE = tuple(".claude/hooks/" + s for s in HOOK_SCRIPTS + SHARED_HOOK_SCRIPTS)
+GUARD_PAIR = (".claude/hooks/guard.py", ".claude/hooks/policy.json")
 
 
 def pair_problem(target):
@@ -1395,7 +1485,7 @@ def disk_guard_version(target):
 
 
 LABELS = {"create": "新建", "same": "相同，跳过", "chmod": "补可执行权限", "update": "更新（上次生成后没人改过）",
-          "new": "本地改过，新版本写 .new", "paired": "和 guard.py、policy.json 中改过的那个配套，新版本也写 .new",
+          "new": "本地改过，新版本写 .new", "paired": "和改过的那个文件配套，新版本也写 .new",
           "pending": "内容不同，.new 已存在", "kept": "已有，研究员维护，不动"}
 
 
@@ -1425,7 +1515,12 @@ def report(target, plan, acts, apply):
                                         rel, rel + ".new", n=1)
             sys.stdout.writelines("      " + line for line in list(diff)[:60])
     print("合计：" + "，".join("%s %d" % (LABELS[k], v) for k, v in sorted(counts.items())))
-    if "paired" in counts:
+    paired = {rel for kind, rel, _ in acts if kind == "paired"}
+    if paired.intersection(HOOK_CODE):
+        print("提醒：.claude/hooks/ 下的 hook 脚本共用 pool.py，要换就一起换：本地改过的那个合并好，其余几个 .new 一起换上，再重跑 init；"
+              "只换一部分，新旧脚本混着跑，收件箱的 hook 可能每一轮都出错。")
+    on_disk = disk_policy_version(target)
+    if paired.intersection(GUARD_PAIR) and on_disk is not None and on_disk != POLICY_VERSION:
         print("提醒：guard.py 和 policy.json 要成对更新。两个 .new 一起合并以后再重跑 init；只合并 guard.py.new，hook 会全部拒绝；"
               "只合并 policy.json.new，旧 guard 会按新规则跑，部分硬规则悄悄变样。")
     problem = pair_problem(target)
@@ -1885,7 +1980,7 @@ def pool_health(target, manifest):
         problems.append("工作目录不是项目目录的会话：%s（会话要在项目目录里开，不开 worktree）" % "、".join(away))
     old = [r["name"] for r in rows if r.get("plugin_version") != manifest.get("plugin_version")]
     if old:
-        notes.append("还停在旧版插件规则上的会话：%s；研究员退出并重开桌面应用后，它们下一轮会收到新的角色说明" % "、".join(old))
+        notes.append("还停在旧版插件规则上的会话：%s；它们下次开局、压缩或清空上下文时收到新的角色说明，研究员退出并重开桌面应用的话下一轮就收到" % "、".join(old))
     versions = sorted({r["version"] for r in rows if r.get("version")})
     if len(versions) > 1:
         notes.append("池里的 Claude Code 版本不一致（%s）；行为有变化时重跑一遍会话池实验" % "、".join(versions))
