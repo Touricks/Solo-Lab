@@ -242,6 +242,49 @@ class SetupTest(ProjectCase):
         self.assertEqual(acts["CLAUDE.md"], "new")
         self.assertEqual(acts["org/decisions.md"], "same")
 
+    def test_the_runs_readme_is_the_projects_own_once_it_is_there(self):
+        """runs/README.md asks for the record format to be written into it, and solo-lab:spec reads the format from
+        there: what a project adds is no local change. init leaves the file as it is and writes no .new, check does
+        not report it. Up to 1.0.7 every init wrote a .new that held the file's own first lines; a project such an
+        init left waiting for a merge stops waiting at the next init."""
+        path = os.path.join(self.tmp, "runs", "README.md")
+        manifest = os.path.join(self.tmp, ".claude", "solo-lab", "manifest.json")
+        task = os.path.join(self.tmp, "spec", "task.json")
+        with open(path, encoding="utf-8") as f:
+            seed = f.read()
+        self.assertIn("定了以后写进本文件", seed)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("\n## 记录格式\n\n每条 Run 的输出目录里有一个 `trace.jsonl`。\n")
+        with open(path, encoding="utf-8") as f:
+            written = f.read()
+        with open(path + ".new", "w", encoding="utf-8") as f:           # what an init of 1.0.7 put beside it,
+            f.write(seed)
+        with open(manifest, encoding="utf-8") as f:
+            m = json.load(f)
+        m["pending_new"] = ["runs/README.md"]                           # and recorded as waiting for a merge
+        with open(manifest, "w", encoding="utf-8") as f:
+            json.dump(m, f, ensure_ascii=False)
+        plan = setup.build_plan(self.tmp, task, None)
+        acts = setup.actions_for(self.tmp, plan)
+        self.assertEqual(dict((rel, k) for k, rel, _ in acts)["runs/README.md"], "kept")
+        _, out = self.run_quiet(setup.report, self.tmp, plan, acts, False)
+        self.assertNotIn("runs/README.md", out)
+        self.run_quiet(setup.apply_plan, self.tmp, plan, acts)
+        with open(path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), written)
+        with open(manifest, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["pending_new"], [])
+        _, out = self.run_quiet(setup.check, self.tmp)
+        self.assertIn("本地配置：就绪", out)
+        self.assertNotIn("runs/README.md", out)
+        os.remove(path + ".new")                                        # with the leftover gone nothing is written again
+        plan = setup.build_plan(self.tmp, task, None)
+        self.assertTrue({k for k, _, _ in setup.actions_for(self.tmp, plan)} <= {"same", "kept"})
+        self.assertFalse(os.path.exists(path + ".new"))
+        os.remove(path)                                                 # a file that is gone is seeded again
+        plan = setup.build_plan(self.tmp, task, None)
+        self.assertEqual(dict((rel, k) for k, rel, _ in setup.actions_for(self.tmp, plan))["runs/README.md"], "create")
+
     def test_hook_scripts_are_updated_together(self):
         """The hooks import pool.py: one held back for a merge holds back the others it would run with."""
         with open(os.path.join(self.hooks, "pool.py"), "a", encoding="utf-8") as f:

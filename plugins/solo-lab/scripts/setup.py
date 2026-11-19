@@ -1407,7 +1407,8 @@ def build_plan(target, task_path, seq_arg, runtime=None):
         put("packages/drafts/%s/.gitkeep" % seq, "")
     put("packages/sent/.gitkeep", "")
     put("inbox/README.md", scaffold("inbox/README.md.tmpl"))
-    put("runs/README.md", scaffold("runs/README.md.tmpl"))
+    # runs/README.md asks for the record format to be written into it: seeded once, the project's own from then on
+    put("runs/README.md", scaffold("runs/README.md.tmpl"), keep=True)
     plan.manifest = {
         "plugin": "solo-lab", "plugin_version": plugin_version(), "plugin_scripts": plugin_scripts(),
         "sequences": seqs, "entry_role": policy["entry_role"],
@@ -1771,8 +1772,8 @@ def local_layer(target, m):
         path = os.path.join(target, rel)
         if not os.path.isfile(path):
             problems.append("缺文件：%s" % rel)
-        elif rel in ("org/decisions.md", "org/phases.md") or rel.startswith(("spec/", "packages/drafts/")):
-            continue                                        # the researcher's documents; a draft gets its work item written in
+        elif rel in ("org/decisions.md", "org/phases.md", "runs/README.md") or rel.startswith(("spec/", "packages/drafts/")):
+            continue            # the researcher's and the project's documents; a draft gets its work item written in
         else:
             try:
                 changed = sha256(read_text(path)) != digest

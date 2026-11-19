@@ -2576,9 +2576,15 @@ def status_block(lg, item_id, path):
             "--end-block-id", end, "--doc-format", "markdown", "--content", "-", write=True, stdin=content)
 
 
+def whole_document(content):
+    """The answer to a read of a whole document as one element: lark-cli gives the title and the top-level
+    blocks side by side, with nothing around them."""
+    return content if content.lstrip().startswith("<fragment") else "<fragment>%s</fragment>" % content
+
+
 def opening_blocks(xml, end_id):
-    """(first block, last block before end_id) of a range fragment that starts at the top of a document:
-    the blocks `ledger.py revise` replaces. A list is its <li> blocks; an <excerpt> stands for its top block."""
+    """(first block, last block before end_id) of a document read whole (whole_document): the blocks
+    `ledger.py revise` replaces. A list is its <li> blocks; an <excerpt> stands for its top block."""
     root = ET.fromstring(xml)
     children = [c for c in root if c.tag != "title"]
     if not children or children[0].get("id") == end_id or children[0].get("top-block-id") == end_id:
@@ -2681,8 +2687,10 @@ def revise(lg, item_id, path, note):
     else:
         if not status:
             raise LedgerError("#%s 的主文档里找不到“状态包”标题：revise 只换带状态包的主文档" % item_id)
-        rng = lg.lark("docs", "+fetch", "--doc", url, "--scope", "range", "--end-block-id", status, "--detail", "with-ids")
-        first, last = opening_blocks(doc_content(rng), status) if rng is not None else (
+        # The whole document, not a range that names only its end: lark-cli (1.0.98) answers such a range with the
+        # end block alone, and the id of the first block is known from no smaller read.
+        whole = lg.lark("docs", "+fetch", "--doc", url, "--detail", "with-ids")
+        first, last = opening_blocks(whole_document(doc_content(whole)), status) if whole is not None else (
             "<主文档第一块的 block_id>", "<状态包前一块的 block_id>")
     done, logged = [], False                      # what is written already, should a later step fail
     try:

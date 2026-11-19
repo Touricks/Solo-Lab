@@ -451,8 +451,9 @@ class FakeSpace:
             content = '<fragment mode="outline"><outline>%s</outline></fragment>' % self.xml(heads)
         elif flags.get("--scope") == "range":
             ids = [b["id"] for b in blocks]
-            start = ids.index(flags["--start-block-id"]) if flags.get("--start-block-id") else 0
             end = ids.index(flags["--end-block-id"]) if flags.get("--end-block-id") not in (None, "-1") else len(ids) - 1
+            # as lark-cli 1.0.98 answers: a range that names only its end is the end block alone, not the document up to it
+            start = ids.index(flags["--start-block-id"]) if flags.get("--start-block-id") else end
             content = '<fragment mode="range">%s</fragment>' % self.xml(blocks[start:end + 1])
         else:
             content = "<title>%s</title>%s" % (doc["title"], self.xml(blocks))

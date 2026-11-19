@@ -1436,6 +1436,31 @@ class DocumentsTest(LedgerCase):
         lg = self.lg("preview", [(("+fetch", "outline"), {"data": {"document": {"content": html}}})])
         self.assertEqual(ledger.heading_ids(lg, "u")[0], ("s1", "状态包"))
 
+    def test_a_revision_reads_the_whole_document_to_find_its_opening(self):
+        """What revise replaces runs from the document's first block to the block before 状态包. Up to 1.0.7 it was
+        read as a range that named only its end. lark-cli (1.0.98, a project's scribe on 2026-11-19) answers such a
+        range with the end block alone, so every revise stopped at 主文档在“状态包”标题之前没有内容块: the command
+        had only run against a stand-in that answered with the document up to the end block. The whole document is
+        read instead; lark-cli gives its title and its blocks side by side, with nothing around them."""
+        whole = ('<title id="t0">决策包</title><callout id="c1"><p id="c2">摘要</p></callout><ul><li id="l1">版本：第 1 版</li>'
+                 '<li id="l2">执行方：研究员</li></ul><h2 id="s1">状态包</h2><p id="p9">x</p><h2 id="z">交接记录</h2>')
+        self.assertEqual(ledger.opening_blocks(ledger.whole_document(whole), "s1"), ("c1", "l2"))
+        listed = '<title id="t0">决策包</title><ul><li id="l1">版本：第 1 版</li></ul><p id="p1">正文</p><h2 id="s1">状态包</h2>'
+        self.assertEqual(ledger.opening_blocks(ledger.whole_document(listed), "s1"), ("l1", "p1"))
+        alone = '<fragment mode="range" requested-end="s1"><h2 id="s1">状态包</h2></fragment>'      # the range, as answered
+        self.assertEqual(ledger.whole_document(alone), alone)
+        with self.assertRaises(ledger.LedgerError) as caught:
+            ledger.opening_blocks(alone, "s1")
+        self.assertIn("主文档在“状态包”标题之前没有内容块", str(caught.exception))
+        self.task()
+        item = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION))
+        lg = self.lg()
+        self.quiet(ledger.revise, lg, item, self.draft(PERMISSION, "v2.md", edit=version(2, "2026-11-22")), "改日期")
+        reads = [argv for argv, write, _ in lg.calls if "+fetch" in argv and not write]
+        self.assertTrue(any("--scope" not in argv and "with-ids" in argv for argv in reads))    # the whole document, with ids
+        for argv in reads:                                              # and no range is left to say where it starts
+            self.assertTrue("range" not in argv or "--start-block-id" in argv, argv)
+
     def test_status_sections_come_before_the_log(self):
         body = ledger.with_status_sections("## 认知层\nx\n\n## 交接记录\n[Product+2] 起草。\n")
         self.assertLess(body.index("## 状态包"), body.index("## 交接记录"))
