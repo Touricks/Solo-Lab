@@ -3,11 +3,17 @@
 
 - SessionStart records the session's desktop ID and Claude Code version, turns a
   waiting permit into a claim, re-attaches a claim after /clear, and injects the
-  role text with the open items on startup, resume, compaction and /clear.
+  role text with the open items on startup, resume, compaction and /clear. After
+  a compaction (source compact) the text ends with the research tasks of the work
+  items the session holds and the command that reads each task's 状态包
+  (pool.status_hint): the session reads it before it goes on (1.0.6).
 - SessionEnd marks the session offline and keeps its claim.
 - Stop, StopFailure, Notification, PermissionRequest and PermissionDenied keep the
   session's status (idle, idle_bg, failed, waiting_researcher) and counters;
-  PostCompact keeps the compaction summary in .claude/logs/compact/<name>.jsonl.
+  PostCompact keeps the compaction summary in .claude/logs/compact/<name>.jsonl
+  and prints that same line about the research tasks: the log has it, and whoever
+  reads the session's transcript sees what the session was told. The line reaches
+  the model through SessionStart, the event whose output is added to the context.
 - SubagentStart tells a subagent that it is not a pool session: it signs as the
   session that started it and has no Feishu write.
 
@@ -96,7 +102,8 @@ def pool_start(data, policy, root, sid, desk):
         reason = "上下文清空后接回认领。" + reason
     pool.update_session(root, sid, lambda st: st.update({"plugin_version": current, "name": who.name}))
     pl, _ = pool.load(root)
-    emit("SessionStart", pool.injection(root, policy, who.claim, reason, owners=pl.get("owners")))
+    emit("SessionStart", pool.injection(root, policy, who.claim, reason, owners=pl.get("owners"),
+                                        compacted=source == "compact", current=prev.get("work_item")))
     return 0
 
 
@@ -201,11 +208,16 @@ def pool_event(data, event, policy, root):
         pl, ok = pool.load(root)
         claim = pool.claim_by_session(pl, sid) if ok else None
         name = (claim or {}).get("name") or "session-" + sid[:8]
+        hint = None
+        if claim:                                  # a pool session: which research tasks' 状态包 it reads next
+            hint = pool.compaction_hint(root, policy, claim, pl.get("owners"), pool.load_session(root, sid).get("work_item"))
         path = os.path.join(root, ".claude", "logs", "compact", re.sub(r"[^A-Za-z0-9_.-]", "_", name) + ".jsonl")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps({"ts": pool.stamp(), "session_id": sid, "trigger": data.get("trigger"),
-                                "summary": data.get("compact_summary")}, ensure_ascii=False) + "\n")
+                                "summary": data.get("compact_summary"), "status_hint": hint}, ensure_ascii=False) + "\n")
+        if hint:
+            print(hint)
         return 0
     return 0
 

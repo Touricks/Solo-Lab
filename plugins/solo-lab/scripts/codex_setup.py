@@ -75,7 +75,7 @@ def adapt(base, original, target, spec, task, policy, seqs):
     put(".agent-org/orgspec/rules.json", dumps(spec.rules))
     put(".agent-org/operations/publishing.md", base.read_text(os.path.join(base.HERE,
         "../skills-codex/ledger/references/publishing.md")))
-    put("org/org.md", neutral(base.org_md(spec, seqs, enforced=False)))     # Codex hooks do not check the irreversible list
+    put("org/org.md", neutral(base.org_md(spec, seqs)))
     put("org/decisions.md", neutral(base.render(base.scaffold("org/decisions.md.tmpl"),
         {"deviations": base.deviations_text(spec)})), keep=True)
     put(".agent-org/lark-risk.json", original.files[".claude/hooks/lark-risk.json"][0])

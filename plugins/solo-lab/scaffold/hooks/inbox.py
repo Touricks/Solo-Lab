@@ -38,13 +38,17 @@ The hook also:
   registration: a revision is never mentioned to the researcher;
 - reads the local decision state .claude/state/gates.json (ledger.py writes it,
   this hook only reads it): every pool session gets one line a turn with what the
-  decisions still waiting freeze (1.0.4); the entry, in every turn, gets a line for
-  each one past its expiry time (expires_at): a reversible one that may take its
-  default (default_applies) is to be confirmed by the scribe with `ledger.py
+  decisions still waiting freeze (1.0.4). No hook stops those actions (1.0.6): the
+  line and the rules are what keeps them, and the line says so. The entry, in every
+  turn, gets a line for each waiting decision past its expiry time, which is its
+  registration plus the expiry time in org/decisions.md, worked out here as ledger.py
+  works it out (pool.expiry_hours, pool.expires_at): a reversible one that may take
+  its default (pool.takes_default) is to be confirmed by the scribe with `ledger.py
   confirm <ID> --by 到期默认`, who then tells the decision's 执行方 to act on the
-  default; any other one keeps waiting, comes first when the researcher next talks,
-  and is not pushed to the researcher. At most MAX_DUE such lines a turn; in the
-  turn that opens a session they count against the role text's budget;
+  default; any other one, also one that was decided once and rolled back to 待决定,
+  keeps waiting, comes first when the researcher next talks, and is not pushed to
+  the researcher. At most MAX_DUE such lines a turn; in the turn that opens a
+  session they count against the role text's budget;
 - turns the researcher's opening line in a new top-level session
   ("认领 <+2 角色>（会话名 …）", also after <system-reminder> blocks) into a claim
   and injects the role text;
@@ -189,9 +193,9 @@ LIST_DUE = ("先回答研究员，再跑 python3 -I .claude/solo-lab/bin/ledger.
             "把待决定的决策和等研究员执行的决策附在末尾，每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接，"
             "改过版的在事项后面写版本号；route.py pool 里还没处理的补位请求一起列，补位请求不算决策。都没有就不附。")
 SOURCE_SHOWN = 80                     # characters of the sender's title shown
-# The local decision state ledger.py keeps (1.0.4): what the decisions still waiting freeze, and when they expire.
+# The local decision state ledger.py keeps (1.0.4): the decisions still waiting, with what each of them freezes.
 GATES_FILE = "gates.json"
-FROZEN = "待定决策冻结的动作，决策定下以前谁都不做（能用命令认出的会被 hook 拦下），选项中立的准备照常做：%s。"
+FROZEN = "待定决策冻结的动作，决策定下以前谁都不做（hook 不拦，要自己守住），选项中立的准备照常做：%s。"
 FROZEN_SHOWN = 700                    # characters of the frozen line at most
 MORE_FROZEN = "……（全文看 python3 -I .claude/solo-lab/bin/ledger.py query queue 列的决策包）"
 DUE_DEFAULT = "#%s 已到期：请书记员按到期默认确认（ledger.py confirm %s --by 到期默认），书记员确认后通知执行方 %s 照到期默认动作办（%s）；已经请过的不再请。"
@@ -275,7 +279,8 @@ def load_pending(root):
 
 
 def frozen_text(pending):
-    """One line: what each decision still waiting freezes (categories, command prefixes, sentences). None
+    """One line: what each decision still waiting freezes, each item as its package wrote it (a category of
+    the list of irreversible actions or a sentence; a command prefix in a state written before 1.0.6). None
     when nothing is frozen."""
     rows = []
     for item_id, entry in pending.items():
@@ -295,25 +300,24 @@ def frozen_text(pending):
     return text
 
 
-def expired(pending, at):
-    """The decisions still waiting whose expiry time (expires_at, which ledger.py works out from the
-    registration and the expiry time in org/decisions.md) has come."""
+def expired(pending, at, hours):
+    """The decisions still waiting whose expiry time has come: their registration plus hours, the expiry
+    time org/decisions.md states now (pool.expiry_hours). ledger.py works it out the same way, so what the
+    entry is told and what `confirm --by 到期默认` accepts agree, also right after the researcher changed
+    the time."""
     out = []
     for item_id, entry in pending.items():
-        due = pool.parse_time(entry.get("expires_at"))
-        if due is None:
-            continue
-        if due.tzinfo is None:
-            due = due.astimezone()
-        if at >= due:
+        due = pool.expires_at(entry, hours)
+        if due is not None and at >= due:
             out.append((item_id, entry))
     return out
 
 
 def due_text(item_id, entry):
     """What the entry does about a decision past its expiry time: a reversible one that may take its
-    default is confirmed by the scribe with it; any other one keeps waiting for the researcher."""
-    if entry.get("default_applies") is True:
+    default is confirmed by the scribe with it; any other one, also one decided once and rolled back to
+    待决定, keeps waiting for the researcher."""
+    if pool.takes_default(entry):
         return DUE_DEFAULT % (item_id, item_id, entry.get("executor") or "（包头写的执行方）",
                               entry.get("default_option") or entry.get("default") or "包头写的选项")
     return DUE_WAIT % item_id
@@ -392,14 +396,14 @@ def pool_prompt(data, policy, root):
         return finish(parts), {}
     me = who.claim
     pending = load_pending(root)
-    due = expired(pending, at) if entry else []
+    due = expired(pending, at, pool.expiry_hours(root)[0]) if entry and pending else []
     if origin == "agent":
         parts.append(woken_text(source, entry, msg and msg.get("id"), receipt))
         if receipt:
             pool.log_event(root, {"event": "decision_announced", "id": msg["id"], "urgent": receipt.get("urgent") is True,
                                   "seen_by": me["name"], "session_id": sid})
     elif origin == "researcher" and entry and not opened:
-        text = back_text(prev, at, [i for i, e in due if e.get("default_applies") is not True])
+        text = back_text(prev, at, [i for i, e in due if not pool.takes_default(e)])
         if text:
             parts.append(text)
     back = origin == "researcher"                   # the researcher typed this prompt

@@ -269,6 +269,72 @@ class FeishuTest(BindingCase):
         self.assertEqual(json.loads(self.read("feishu/ids.json"))["meegle"]["states"]["decision"]["decided"],
                          dict(state, name="已决定"))
 
+    def test_a_space_brought_up_to_2_2_0_by_hand_takes_one_more_step(self):
+        """An old project: bound to a space made from template 2.1.0, which the template maintainer then brought up
+        to 2.2.0 by hand (two fields on the decision, the state 已决定 renamed 待执行, a view). Reading the snapshot
+        again, which any session may do, gives the ledger the two fields: they are no slots and are found by name
+        in the snapshot. The renamed state is a slot: its name is in the binding, which only `setup.py feishu
+        --live --apply` writes, and that reads the snapshot too. `space.py check` says when the binding is behind."""
+        decision = next(k for k, t in SNAP["types"].items() if t["api_name"] == "decision")
+
+        def by_hand(argv, out):
+            out = made_from_2_2_0(argv, out)
+            if argv[:2] == ["workitem", "meta-fields"] and argv[argv.index("--work-item-type") + 1] == decision:
+                out["list"] += [{"field_key": "field_d22001", "field_name": "执行方", "field_type": "text"},
+                                {"field_key": "field_d22002", "field_name": "研究员要做的事", "field_type": "text"}]
+            return out
+
+        def tool(*argv, edit=None):
+            out = io.StringIO()
+            with mock.patch.object(space, "call", Replay(edit)), contextlib.redirect_stdout(out):
+                code = space.main(list(argv) + ["--target", self.tmp])
+            return code, out.getvalue()
+
+        def seen():
+            """(the decided state's name in the binding, the two fields' keys as the ledger finds them, what `query queue` asks for)"""
+            lg = setup.ledger.Ledger(self.tmp, "offline")
+            return (json.loads(self.read("feishu/ids.json"))["meegle"]["states"]["decision"]["decided"]["name"],
+                    (lg.key_of("decision", "执行方"), lg.key_of("decision", "研究员要做的事")),
+                    "'已决定'" in setup.ledger.mql_text(lg, "queue")[0], "'待执行'" in setup.ledger.mql_text(lg, "queue")[0])
+
+        self.feishu([], True, True)
+        old = ("已决定", (None, None), True, False)
+        self.assertEqual(seen(), old)
+        code, text = tool("snapshot", edit=by_hand)                       # a preview says what changed and writes nothing
+        self.assertEqual(code, 0)
+        self.assertIn("变化：决策：多了字段 执行方、研究员要做的事", text)
+        self.assertIn("变化：决策：状态改名 已决定→待执行", text)
+        self.assertEqual(seen(), old)
+        code, text = tool("snapshot", "--apply", edit=by_hand)            # any session: the two fields are known now
+        self.assertIn("已写入 feishu/space.json 和 feishu/space.md。", text)
+        self.assertEqual(seen(), ("已决定", ("field_d22001", "field_d22002"), True, False))    # ...the state's name is not
+        code, text = tool("check")
+        self.assertEqual(code, 1)
+        self.assertIn("| 决策的状态“待执行” | 空间里现在是 “待执行”，绑定记的是 “已决定” | 重跑 setup.py feishu --target <项目目录> --live，核对后加 --apply |", text)
+        code, text = self.feishu([], True, False, edit=by_hand)           # the researcher's session: a preview first
+        self.assertEqual(code, 0)
+        self.assertIn("[更新] feishu/ids.json", text)
+        self.assertEqual(seen()[0], "已决定")
+        self.feishu([], True, True, edit=by_hand)
+        self.assertEqual(seen(), ("待执行", ("field_d22001", "field_d22002"), False, True))
+        self.assertEqual(tool("check")[0], 0)
+
+    def test_binding_again_alone_reads_the_snapshot_too(self):
+        """...so a project whose space had its state renamed does that one step, and needs no snapshot before it."""
+        decision = next(k for k, t in SNAP["types"].items() if t["api_name"] == "decision")
+
+        def by_hand(argv, out):
+            out = made_from_2_2_0(argv, out)
+            if argv[:2] == ["workitem", "meta-fields"] and argv[argv.index("--work-item-type") + 1] == decision:
+                out["list"].append({"field_key": "field_d22001", "field_name": "执行方", "field_type": "text"})
+            return out
+        self.feishu([], True, True)
+        code, text = self.feishu([], True, True, edit=by_hand)
+        self.assertEqual(code, 0)
+        self.assertIn("变化：决策：状态改名 已决定→待执行", text)
+        lg = setup.ledger.Ledger(self.tmp, "offline")
+        self.assertEqual((lg.state("decision", "decided"), lg.key_of("decision", "执行方")), ("待执行", "field_d22001"))
+
     def test_without_a_snapshot_there_is_nothing_to_bind(self):
         code, text = self.feishu([], False, False)
         self.assertIn("还没读过空间，绑定不了：加 --live 从空间读", text)

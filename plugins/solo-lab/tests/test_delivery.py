@@ -515,7 +515,7 @@ class ReplayTest(DeliveryCase):
 
 
 # ----------------------------------------------------------------- 1.0.4
-FROZEN_HEAD = "待定决策冻结的动作，决策定下以前谁都不做（能用命令认出的会被 hook 拦下），选项中立的准备照常做："
+FROZEN_HEAD = "待定决策冻结的动作，决策定下以前谁都不做（hook 不拦，要自己守住），选项中立的准备照常做："
 WAITS = "#%s 已到期，继续等，研究员来谈时排在最前；不推给研究员，不提醒截止。"
 DELIVERED = wrap("【交付 #2101】Alg-p2-01 → PMO-p2-01：交付包 y.md", "[示例] Alg-p2-01")
 
@@ -530,16 +530,25 @@ class GatesInboxTest(DeliveryCase):
     pool session is told each turn what the decisions still waiting freeze. The entry is told each turn about
     those past their expiry time (B8): a reversible one is for the scribe to confirm by its default; any other
     keeps waiting, comes first when the researcher talks, and is not pushed to the researcher. A revision is
-    never announced."""
+    never announced. 1.0.6: the expiry is the registration plus the time org/decisions.md states now, worked out
+    as ledger.py works it out; the state keeps no expiry of its own."""
 
     def pending(self, item, hours, **fields):
         since = pool_lib.now() - datetime.timedelta(hours=hours)
-        return dict({"id": item, "title": "事项 %s" % item, "registered_at": pool_lib.stamp(since),
-                     "expires_at": pool_lib.stamp(since + datetime.timedelta(hours=24)), "frozen": []}, **fields)
+        return dict({"id": item, "title": "事项 %s" % item, "registered_at": pool_lib.stamp(since), "frozen": []}, **fields)
 
-    def gates(self, *entries):
+    def gates(self, *entries, **more):
         with open(os.path.join(self.tmp, ".claude", "state", "gates.json"), "w", encoding="utf-8") as f:
-            json.dump({"version": 1, "pending": {e["id"]: e for e in entries}, "releases": []}, f, ensure_ascii=False)
+            json.dump(dict({"version": 2, "pending": {e["id"]: e for e in entries}}, **more), f, ensure_ascii=False)
+
+    def expiry(self, written):
+        """org/decisions.md with the plugin's line about the expiry time saying this."""
+        path = os.path.join(self.tmp, "org", "decisions.md")
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        self.assertEqual(len(re.findall(r"可逆决策的到期时长：登记后 [\d.]+ (?:小时|天)", text)), 1)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(re.sub(r"可逆决策的到期时长：登记后 [\d.]+ (?:小时|天)", "可逆决策的到期时长：" + written, text))
 
     def test_what_has_expired_reaches_the_entry_only(self):
         reversible = self.pending("2701", 25, reversible=True, default="按轮次分目录", default_option="按轮次分目录", default_applies=True,
@@ -573,6 +582,56 @@ class GatesInboxTest(DeliveryCase):
         code, out = self.prompt("s-entry", DELIVERED)                               # never blocks the prompt
         self.assertEqual(code, 0)
         self.assertIn(WOKEN, out.get("additionalContext", ""))
+
+    def test_the_expiry_follows_decisions_md_at_once(self):
+        """The entry is told a decision has expired by the expiry time org/decisions.md states now, the same time
+        `confirm --by 到期默认` goes by: after the researcher changes the line the two still agree, with no write to
+        the local state in between. What a state written before 1.0.6 kept as expires_at is not read."""
+        late = self.pending("2731", 30, reversible=True, default="按轮次分目录", default_option="按轮次分目录", default_applies=True,
+                            executor="RnD-p2-01", expires_at=pool_lib.stamp(pool_lib.now() - datetime.timedelta(hours=6)))
+        waits = self.pending("2732", 30, reversible=False, default="等研究员", default_applies=False,
+                             expires_at=pool_lib.stamp(pool_lib.now() + datetime.timedelta(days=30)))     # stale, the other way
+        self.gates(late, waits, expiry_hours=24, expiry_from="默认", releases=[])
+        woken = self.context("s-entry", DELIVERED)
+        self.assertIn(default_due("2731", "按轮次分目录"), woken)
+        self.assertIn(WAITS % "2732", woken)
+        self.expiry("登记后 48 小时")                                               # 30 hours is not 48
+        text = self.context("s-entry", DELIVERED)
+        self.assertNotIn("已到期", text)
+        self.assertNotIn("排在清单最前", self.context("s-entry", "早"))
+        self.expiry("登记后 1 天")
+        self.assertIn(default_due("2731", "按轮次分目录"), self.context("s-entry", DELIVERED))
+        self.expiry("登记后 12 小时")
+        self.gates(self.pending("2733", 13, reversible=True, default="A", default_option="A", default_applies=True, executor="Alg-p2-01"))
+        self.assertIn(default_due("2733", "A", "Alg-p2-01"), self.context("s-entry", DELIVERED))
+        self.expiry("登记后两天")                                                   # unreadable: 24 hours, and the prompt goes through
+        self.assertNotIn("已到期", self.context("s-entry", DELIVERED))
+        os.remove(os.path.join(self.tmp, "org", "decisions.md"))                    # no file: 24 hours
+        self.assertNotIn("已到期", self.context("s-entry", DELIVERED))
+        self.gates(self.pending("2734", 25, reversible=True, default="A", default_option="A", default_applies=True, executor="Alg-p2-01"),
+                   self.pending("2735", 25, registered_at="不是时间", default_applies=True))        # no registration time: not expired
+        text = self.context("s-entry", DELIVERED)
+        self.assertIn(default_due("2734", "A", "Alg-p2-01"), text)
+        self.assertNotIn("#2735", text)
+
+    def test_a_decision_rolled_back_keeps_waiting(self):
+        """1.0.6 (the researcher, 2026-11-16): a decision that was decided once and rolled back to 待决定 takes no
+        default. Past its expiry the entry is told it keeps waiting and comes first when the researcher talks; the
+        scribe is not asked to confirm it by its default. So is one a state from 1.0.4 or 1.0.5 marked reopened_at."""
+        default = dict(reversible=True, default="按轮次分目录", default_option="按轮次分目录", executor="RnD-p2-01")
+        back = pool_lib.stamp(pool_lib.now() - datetime.timedelta(hours=1))
+        self.gates(self.pending("2741", 30, default_applies=False, rolled_back_at=back, **default),
+                   self.pending("2742", 30, default_applies=True, reopened_at=back, **default),         # as 1.0.5 wrote it
+                   self.pending("2743", 30, default_applies=True, **default),
+                   self.pending("2744", 3, default_applies=False, rolled_back_at=back, **default))       # not past its expiry yet
+        woken = self.context("s-entry", DELIVERED)
+        for item in ("2741", "2742"):
+            self.assertIn(WAITS % item, woken)
+            self.assertNotIn("confirm %s --by 到期默认" % item, woken)
+        self.assertIn(default_due("2743", "按轮次分目录"), woken)
+        self.assertNotIn("#2744", woken)
+        talk = self.context("s-entry", "早")
+        self.assertIn(FIRST_TALK + LIST_DUE + "已经到期、继续等研究员的决策（#2741、#2742）排在清单最前，不提截止。", talk)
 
     def test_every_pool_session_sees_what_is_frozen(self):
         self.gates(self.pending("2711", 2, title="实验平台用什么隔离候选代码", frozen=[
@@ -611,8 +670,9 @@ class GatesInboxTest(DeliveryCase):
 class ExpiryTest(DeliveryCase):
     """1.0.4, B8 with the ledger. A reversible decision registered more than 24 hours ago: the entry is told, the
     scribe's confirm --by 到期默认 writes a decision that starts with 到期默认： and is the option the package names,
-    and the entry hears no more of it. An irreversible one past its expiry: confirm --by 到期默认 is refused, what it
-    would release stays blocked, and the researcher gets no reminder; it comes first when they talk."""
+    and the entry hears no more of it. An irreversible one past its expiry: confirm --by 到期默认 is refused, the pool
+    sessions are still told what it freezes (the hook stops no command for it, 1.0.6), and the researcher gets no
+    reminder; it comes first when they talk."""
 
     def setUp(self):
         super().setUp()
@@ -634,14 +694,15 @@ class ExpiryTest(DeliveryCase):
         return self.quiet(ledger.register, self.lg(), path)
 
     def age(self, item, hours):
-        """The decision as if it had been registered that many hours ago (expires_at as ledger.py works it out)."""
-        with open(ledger.gates_path(self.tmp), encoding="utf-8") as f:
-            data = json.load(f)
-        since = ledger.now_at() - datetime.timedelta(hours=hours)
-        data["pending"][item].update(registered_at=since.isoformat(timespec="seconds"),
-                                     expires_at=(since + datetime.timedelta(hours=24)).isoformat(timespec="seconds"))
-        with open(ledger.gates_path(self.tmp), "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
+        """The decision as if it had been registered that many hours ago, in the local state and in its receipt."""
+        since = (ledger.now_at() - datetime.timedelta(hours=hours)).isoformat(timespec="seconds")
+        for path, entry in ((ledger.gates_path(self.tmp), lambda data: data["pending"][item]),
+                            (os.path.join(self.tmp, "packages", "sent", "%s.json" % item), lambda data: data)):
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            entry(data)["registered_at"] = since
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
 
     def test_an_expired_decision_takes_its_default_only_when_reversible(self):
         rev, perm = self.register(11, "rev.md"), self.register(10, "perm.md")
@@ -654,7 +715,7 @@ class ExpiryTest(DeliveryCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             ledger.confirm(self.lg(), rev, ledger.BY_DEFAULT)
-        self.assertIn("到期默认：照选项“按轮次分目录”办，执行完请书记员归档；没有放行任何不可逆动作。", out.getvalue())
+        self.assertIn("到期默认：照选项“按轮次分目录”办，执行完请书记员归档。", out.getvalue())
         content = self.fake.item(rev)["fields"][self.lg().field("decision", "决定内容")["field_key"]]
         self.assertEqual(content, "到期默认：按轮次分目录：runs/rnd/<轮次>/<变体>/（登记后 24 小时内研究员没有决定）")
         with self.assertRaises(ledger.LedgerError), contextlib.redirect_stdout(io.StringIO()):
@@ -662,11 +723,56 @@ class ExpiryTest(DeliveryCase):
         woken = self.context("s-entry", DELIVERED)
         self.assertNotIn("#%s 已到期" % rev, woken)
         self.assertIn(WAITS % perm, woken)
-        out = self.bash("s-alg2", "open -a Docker")[1]                                 # what it would release stays blocked
-        self.assertEqual(out.get("permissionDecision"), "deny")
-        self.assertIn("待定决策 #%s（实验平台用什么隔离候选代码）冻结了“特权应用：Docker”" % perm, out["permissionDecisionReason"])
+        self.assertIn("#%s（实验平台用什么隔离候选代码）：“特权应用：Docker”" % perm, self.context("s-alg2", "继续"))    # still frozen, and told so
+        self.assertEqual(self.bash("s-alg2", "open -a Docker"), (0, {}))               # the rules keep it, not the hook (1.0.6)
         talk = self.context("s-entry", "早")
         self.assertIn("已经到期、继续等研究员的决策（#%s）排在清单最前，不提截止。" % perm, talk)
+
+    def test_the_hook_and_the_ledger_agree_after_the_time_is_changed(self):
+        """The case that went wrong before 1.0.6: the researcher changes the expiry time in org/decisions.md, and
+        until the next write to the local state the entry was told every turn to ask for 到期默认 while the scribe's
+        command was refused (or, the time made shorter, the entry was told nothing). Both read the line now."""
+        path = os.path.join(self.tmp, "org", "decisions.md")
+
+        def expiry(written):
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(re.sub(r"可逆决策的到期时长：登记后 [\d.]+ (?:小时|天)", "可逆决策的到期时长：" + written, text))
+
+        def refused():
+            try:
+                self.quiet(ledger.confirm, self.lg(), rev, ledger.BY_DEFAULT)
+            except ledger.LedgerError as e:
+                return str(e)
+            return None
+        rev = self.register(11, "rev.md")
+        self.age(rev, 30)
+        expiry("登记后 48 小时")
+        self.assertNotIn("已到期", self.context("s-entry", DELIVERED))               # the entry is not told ...
+        self.assertIn("登记了 30 小时，还没满到期时长 48 小时（org/decisions.md）", refused())    # ... and the command would be refused
+        expiry("登记后 24 小时")
+        self.assertIn(default_due(rev, "按轮次分目录"), self.context("s-entry", DELIVERED))
+        self.assertIsNone(refused())                                                # told, and taken
+        self.assertNotIn("已到期", self.context("s-entry", DELIVERED))
+
+    def test_a_decision_the_researcher_rolled_back_is_not_taken_by_its_default(self):
+        """With the ledger: a reversible decision the researcher decided and then rolled back. However long it has
+        waited, the entry is told it keeps waiting, the scribe's confirm --by 到期默认 is refused with the reason, and
+        it comes first when the researcher talks."""
+        rev = self.register(11, "rev.md")
+        self.age(rev, 30)
+        self.quiet(ledger.confirm, self.lg(), rev, "研究员", ["决定内容=按变体分目录", "决定人=研究员"], option="按变体分目录")
+        self.assertNotIn("已到期", self.context("s-entry", DELIVERED))
+        self.quiet(ledger.rollback, self.lg(), rev, "决定", "研究员想再看看", by="研究员")
+        woken = self.context("s-entry", DELIVERED)
+        self.assertIn(WAITS % rev, woken)
+        self.assertNotIn("请书记员按到期默认确认", woken)
+        with self.assertRaises(ledger.LedgerError) as e, contextlib.redirect_stdout(io.StringIO()):
+            ledger.confirm(self.lg(), rev, ledger.BY_DEFAULT)
+        self.assertIn("定过一次，又回滚到了待决定", str(e.exception))
+        self.assertIn("已经到期、继续等研究员的决策（#%s）排在清单最前，不提截止。" % rev, self.context("s-entry", "早"))
+        self.assertIn("#%s（运行记录按轮次还是按变体分目录）：“`python3 tools/relayout_runs.py`”" % rev, self.context("s-alg2", "继续"))   # frozen again
 
 if __name__ == "__main__":
     unittest.main()

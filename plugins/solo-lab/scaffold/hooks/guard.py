@@ -4,37 +4,30 @@
 Reads the hook input JSON on stdin and answers Bash, Monitor, Edit, Write,
 NotebookEdit, Agent and AskUserQuestion calls, and the desktop app's terminal and turn
 wrap-up tools (mcp__<server>__run_in_terminal, mcp__<server>__wrap_up), based on
-policy.json and lark-risk.json in this directory. Three kinds of checks:
+policy.json and lark-risk.json in this directory. Two kinds of checks:
 - hard rules guard data: only the one claimed scribe session writes Feishu (and nobody
   while two scribes are claimed), the evaluation protocol's files stay read-only, high-risk and
   --yes Feishu commands are the researcher's, the hooks, settings, role definitions
   and claims under .claude/ are not edited, Agent calls carry no name, pool sessions
   do not dispatch the scribe with the Agent tool, do not switch branches, stash or
   pull in the shared directory, and claim, pre-register and release only as allowed.
-  Writes to the evaluation protocol's files and to .claude/ are denied in every
-  session; the other hard rules ask in the researcher's own session (deny there too
-  under bypassPermissions or dontAsk, where no prompt can appear). The paths that only
-  init and the plugin's scripts write (policy.json owned_paths with nobody as owner: the hooks,
-  settings, role definitions, the local state with the claims and gates.json, spec/task.json)
-  are also denied to shell commands that overwrite, move or delete them (check_owned_writes).
+  Edits of .claude/ (Edit, Write, NotebookEdit) are denied in every session. Edits of the
+  evaluation protocol's files are denied in a pool session and ask in a quality session
+  and, from 1.0.6, in the researcher's own. The other hard rules ask in the researcher's
+  own session. Where a rule asks, it denies under bypassPermissions or dontAsk, where no
+  prompt can appear.
+  What else a shell command does is not this hook's business (1.0.6): deleting, moving
+  or overwriting files, sudo, ssh, git push and the like get no answer here and go
+  through Claude Code's own permission checks; the irreversible list and the pending
+  decisions' frozen actions are kept by the rules and the package check, not here.
+  An allow from this hook skips those checks for the whole command, so it is given only
+  when the hook judged the whole command: nothing in it but lark-cli, meegle and the
+  project's own ledger.py, with cd, pushd and popd between them (feishu_cmd.Parsed.plain).
+  A Feishu read or the scribe's write with anything else on the line (&& sudo ..., ; git
+  push, > a file, sudo in front, inside $(...) or sh -c) gets no answer instead of allow;
+  deny and ask are answered as before.
 - soft rules are the dispatch norms: they never block, they add a reminder to the
   model's context and a line to .claude/logs/guard.jsonl.
-- irreversible actions (1.0.4): the categories of the irreversible list (policy.json
-  "irreversible", from orgspec/irreversible.json) that a shell command or a path shows.
-  One needs a release in the local decision state .claude/state/gates.json, which only
-  ledger.py run by the scribe writes: a decision the researcher made whose option picked
-  lists the category, with a qualifier that covers the command (compared word by word: hosts with
-  the host of a remote argument, paths with the files the command changes). Without one, a pool
-  session is denied (the reason says how to write the decision package) and the researcher's own
-  session asks. A decision still waiting freezes what its package lists under 冻结的动作
-  (categories, command prefixes): those are stopped in the same way until it is decided (a frozen
-  qualifier matches more loosely than a release: any of its words in the command), and releases
-  that overlap what it freezes are held back meanwhile. Protected paths (the task file's
-  protected_paths) are never released by a decision: deleting, moving, overwriting them or
-  changing their permissions with a shell command is denied in a pool session, asked in the
-  researcher's own (and in a quality session, as an edit is). A release lets the call through
-  to Claude Code's own permission checks; guard.jsonl records every category met under
-  irreversible, and the decisions' IDs under released_by when the call is not denied.
 A turn another agent session started (turn_origin agent, written by inbox.py) has nobody
 to answer a question, so in a pool session the wrap-up keeps its recap and loses ask,
 actions and blocked (allow with updatedInput), and AskUserQuestion is denied. The one
@@ -62,7 +55,7 @@ import feishu_cmd as fc  # noqa: E402
 import pool  # noqa: E402
 
 TMP_PREFIXES = ("/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/")
-POLICY_VERSION = 6
+POLICY_VERSION = 7
 
 
 def glob_regex(pattern):
@@ -97,8 +90,6 @@ class Verdict:
         self.decision, self.reasons, self.updated = decision, [reason] if reason else [], None
         self.gate = gate                        # agent_turn_gate in guard.jsonl: stripped, denied, allowed_urgent
         self.notes = [note] if note else []     # for the model's context; not a soft-rule hit
-        self.irreversible = []                  # guard.jsonl irreversible: each category of the list met
-        self.released = []                      # “放行：…” lines, shown only when the call is not denied
 
     def merge(self, other):
         if self.ORDER[other.decision] > self.ORDER[self.decision]:
@@ -106,13 +97,7 @@ class Verdict:
         self.reasons.extend(r for r in other.reasons if r not in self.reasons)
         self.gate = self.gate or other.gate
         self.notes.extend(n for n in other.notes if n not in self.notes)
-        self.irreversible.extend(other.irreversible)
-        self.released.extend(n for n in other.released if n not in self.released)
         return self
-
-    def context(self):
-        """What goes into the model's context: the notes, and the releases unless the call is denied."""
-        return self.notes + (self.released if self.decision != "deny" else [])
 
 
 def refuse(who, data, reason):
@@ -194,6 +179,8 @@ def as_needed(policy, c):
 
 AS_HINT = {"user": "知识库、文档和云空间的命令用研究员身份，带 --as user",
            "bot": "收发消息和订阅事件用机器人身份，带 --as bot"}
+NO_SUBCOMMAND = ("看不出这条 %s 命令的子命令，没法判断它是读还是写：把子命令和参数直接写出来，查看帮助用 --help。"
+                 "它只是一段文字的话（比如写在双引号里的反引号之间），改用单引号，免得 shell 把它当命令执行。")
 
 
 def check_lark(inv, c, who, policy, data, soft, rewritable):
@@ -225,6 +212,8 @@ def check_lark(inv, c, who, policy, data, soft, rewritable):
             soft.append("追加的交接记录第一行要带会话标签 %s；书记员用 ledger.py append。" % pol["tag"])
     if key in pol.get("lark_write", ()):
         return Verdict("allow", "%s 在 %s 的写入白名单里" % (key, name)), new_args
+    if not c["pos"]:
+        return refuse(who, data, NO_SUBCOMMAND % "lark-cli"), None
     return refuse(who, data, "（%s）不能执行写命令 %s。要写进飞书的内容先写成草稿，请书记员登记。" % (name, key)), new_args
 
 
@@ -252,6 +241,8 @@ def check_meegle(inv, c, who, data, soft, rewritable):
     updated = new_args if new_args != inv.args else None
     if key in pol.get("meegle_write", ()):
         return Verdict("allow", "%s 在 %s 的写入白名单里" % (key, name)), updated
+    if not c["pos"]:
+        return refuse(who, data, NO_SUBCOMMAND % "meegle"), None
     return refuse(who, data, "（%s）不能执行写命令 %s。工作项、字段、节点和文档只由书记员写；先写成草稿，请书记员登记。" % (name, key)), None
 
 
@@ -337,6 +328,7 @@ class _Ctx:
     def __init__(self, bodies, cwd, depth):
         self.text, self.bodies, self.cwd, self.depth = "", bodies, cwd, depth
         self.assign = {}
+        self.dirs = []              # the directories pushd keeps for popd
         self.find_named = None      # inside a find: True when it selects ledger.py, so {} is the script
 
 
@@ -526,16 +518,8 @@ def _ledger_write(command, cwd, depth, bodies=None):
                 ctx.assign[name] = value
         seg, _ = fc._drop_redirects(raw)
         argv, wrappers = fc._unwrap(seg)
-        if argv and argv[0] == "function":
-            argv, more = fc._unwrap(argv[2:])
-            wrappers = wrappers + more
-        if argv and (" " in argv[0] or "\t" in argv[0]):        # env -S 'python3 -I' ...
-            try:
-                argv = shlex.split(argv[0]) + argv[1:]
-            except ValueError:
-                pass
-        if argv and os.path.basename(argv[0]) == "cd":
-            ctx.cwd = fc._cd(ctx.cwd, argv)
+        if argv and os.path.basename(argv[0]) in fc.CD_COMMANDS:
+            ctx.cwd = fc.change_dir(argv, ctx.cwd, ctx.dirs)
             prev_out, prev_ledger = None, False
             continue
         if argv and not (os.path.basename(argv[0]) == "find" or argv[0].startswith("-")):
@@ -655,47 +639,8 @@ IDENTITY_VARS = re.compile(
     r"|(?:^|[;&|({\n])\s*(?:[A-Za-z_]\w*=\S*\s+)*" + IDENTITY + "="           # NAME=value where a command starts
     r"|\benv\b(?:\s+(?:-[uCS]\s+\S+|-\S+|[A-Za-z_]\w*=\S*))*\s+" + IDENTITY + "=", re.M)
 CLEAR_ENV = re.compile(r"\benv\b[^;&|\n]*\s(?:-[a-zA-Z]*i[a-zA-Z]*|--ignore-environment|-)(?=\s|$)", re.M)
-SUB_MARK = re.compile(r"\$__SUB(\d+)")
+SUB_MARK, split_substitutions = fc.SUB_MARK, fc.split_substitutions
 VAR_REF = re.compile(r"\$\{(\w+)\}|\$(\w+)")
-
-
-def split_substitutions(text, heredoc=False):
-    """(text with each $(...) and `...` the shell would run replaced by $__SUB<n>, their inner texts).
-    Inside single quotes and after a backslash they are plain text; a here-document body has no quotes."""
-    out, subs, i, n, q = [], [], 0, len(text), None
-    while i < n:
-        c = text[i]
-        if q == "'":
-            out.append(c)
-            q = None if c == "'" else q
-            i += 1
-            continue
-        if c == "\\" and i + 1 < n:
-            out.append(text[i:i + 2])
-            i += 2
-            continue
-        if not heredoc and c == "'" and q is None:
-            q = "'"
-        elif not heredoc and c == '"':
-            q = None if q == '"' else '"'
-        elif text.startswith("$(", i) and not text.startswith("$((", i):
-            depth, j = 1, i + 2
-            while j < n and depth:
-                depth += {"(": 1, ")": -1}.get(text[j], 0)
-                j += 1
-            subs.append(text[i + 2:j - 1] if depth == 0 else text[i + 2:])
-            out.append("$__SUB%d" % len(subs))
-            i = j
-            continue
-        elif c == "`":
-            j = text.find("`", i + 1)
-            subs.append(text[i + 1:] if j < 0 else text[i + 1:j])
-            out.append("$__SUB%d" % len(subs))
-            i = n if j < 0 else j + 1
-            continue
-        out.append(c)
-        i += 1
-    return "".join(out), subs
 
 
 def expand(word, assign):
@@ -742,23 +687,6 @@ def out_file(raw, where):
     return None
 
 
-WRITE_REDIRECTS = (">", ">>", ">|", "&>", "<>")
-
-
-def redirect_targets(raw, where, assign):
-    """([full path], [as written]) of every file a command's redirections write to (> >> >| &> <>, and >&
-    to a file name)."""
-    out, shown = [], []
-    for i, t in enumerate(raw[:-1]):
-        target = raw[i + 1]
-        if t in WRITE_REDIRECTS or (t == ">&" and not target.isdigit() and target != "-"):
-            target = expand(target, assign)
-            if target and target not in ("/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"):
-                out.append(full_path(os.path.expandvars(target) if "$" in target else target, where))
-                shown.append("%s %s" % (t, target))
-    return out, shown
-
-
 def find_pick(argv):
     """What {} stands for in a find's -exec: git or route.py when the find selects that file."""
     for i, a in enumerate(argv[1:], 1):
@@ -779,52 +707,6 @@ def find_pick(argv):
     return None
 
 
-def find_starts(argv):
-    """The starting points of a find (the words before its first test or action); . when it names none."""
-    out, i = [], 1
-    while i < len(argv) and (argv[i] in ("-H", "-L", "-P", "-D") or argv[i].startswith("-O")):
-        i += 2 if argv[i] == "-D" else 1
-    while i < len(argv) and not argv[i].startswith("-") and argv[i] not in ("(", "!", ")", "\\(", "\\!", "\\)", ","):
-        out.append(argv[i])
-        i += 1
-    return out or ["."]
-
-
-XARGS_VALUES = ("-I", "-i", "-n", "-P", "-L", "-d", "-E", "-s", "-a")
-
-
-def xargs_command(seg, wrappers):
-    """(the wrappers in front of an xargs among the wrappers, the command it runs with its own wrappers, the -I
-    replacement string or None); None without an xargs. An empty command is xargs's own echo. wrappers is the
-    head of seg."""
-    k = next((j for j, w in enumerate(wrappers) if os.path.basename(w) == "xargs"), None)
-    if k is None:
-        return None
-    i, repl = k + 1, None
-    while i < len(seg) and seg[i].startswith("-"):
-        if seg[i] in ("-I", "-i") and i + 1 < len(seg):
-            repl = seg[i + 1]
-        elif seg[i].startswith("-I") and len(seg[i]) > 2:
-            repl = seg[i][2:]
-        i += 2 if seg[i] in XARGS_VALUES else 1
-    return seg[:k], seg[i:], repl
-
-
-def sudo_shell(wrappers):
-    """Do the wrappers end with sudo -s, sudo -i or doas -s: a root shell that reads its commands from standard
-    input when no command follows?"""
-    for k, w in enumerate(wrappers):
-        if os.path.basename(w) not in ("sudo", "doas"):
-            continue
-        takes, j = fc.VALUE_OPTIONS.get(os.path.basename(w), ()), k + 1
-        while j < len(wrappers) and wrappers[j].startswith("-"):
-            o = wrappers[j]
-            if o in ("--shell", "--login") or (not o.startswith("--") and ("s" in o[1:] or "i" in o[1:])):
-                return True
-            j += 2 if o in takes else 1
-    return False
-
-
 def simple_output(tokens, where):
     """What one plain echo, printf or cat prints, from its tokens; None for anything else."""
     segs, _ = fc._segments(tokens)
@@ -837,23 +719,16 @@ def simple_output(tokens, where):
     return text
 
 
-def command_runs(command, cwd, root, depth=0, bodies=None, assign=None, written=None, detail=False):
+def command_runs(command, cwd, root, depth=0, bodies=None, assign=None, written=None):
     """(argv, directory) of each simple command a shell command runs, as far as the text shows.
 
-    Split at ; && || | and ( ); wrappers (env, timeout, nohup ...) dropped; cd followed, but a cd
-    inside ( ... ), $(...) or a pipeline stays there. Followed: $(...) and backticks the shell runs
-    (not those inside single quotes, after a backslash or in a comment), sh -c and eval, simple
-    NAME=value variables, here-documents, here-strings, pipes and files fed to a shell, to source or
-    to a root shell (su, sudo -s, sudo -i: a file written earlier in the same command counts), su -c,
-    find -exec ({} stands for git or route.py when the find selects it, and for the find's starting
-    points; what a find writes to a pipe is its starting points too), and xargs (what it runs is read
-    with the words of its standard input when they show; a command that comes from an unknown
-    standard input is text the parser cannot read). Here-document bodies not fed to a shell, quoted
-    arguments and comments are not commands. (None, text) stands for text the parser cannot read.
-    With detail, each entry has a third item: {"wrappers": the words dropped in front of argv (sudo,
-    env FOO=1 ...), "writes": the files its redirections write to, "redirects": those redirections as
-    written}; a command made of redirections only (> file) or of wrappers only (sudo -s) is an entry
-    with an empty argv, and (None, text, {}) is text the parser cannot read."""
+    Split at ; && || | and ( ); wrappers (env, timeout, nohup ...) dropped; cd, pushd and popd
+    followed, but one inside ( ... ), $(...) or a pipeline stays there. Followed: $(...) and
+    backticks the shell runs (not those inside single quotes, after a backslash or in a comment),
+    sh -c and eval, simple NAME=value variables, here-documents, here-strings, pipes and files fed
+    to a shell or to source (a file written earlier in the same command counts), and find -exec.
+    Here-document bodies not fed to a shell, quoted arguments and comments are not commands.
+    (None, text) stands for text the parser cannot read."""
     if depth > 4:
         return []
     text, new = fc.split_heredocs(command)
@@ -864,10 +739,7 @@ def command_runs(command, cwd, root, depth=0, bodies=None, assign=None, written=
     out = []
 
     def deeper(inner, where):
-        return command_runs(inner, where, root, depth + 1, bodies, assign, written, detail)
-
-    def unread(rest):
-        return (None, rest, {}) if detail else (None, rest)
+        return command_runs(inner, where, root, depth + 1, bodies, assign, written)
 
     for body, quoted in new.values():                   # an unquoted here-document expands $(...)
         if not quoted:
@@ -879,8 +751,11 @@ def command_runs(command, cwd, root, depth=0, bodies=None, assign=None, written=
     except ValueError:
         for inner in subs:
             out.extend(deeper(inner, cwd))
-        return out + [unread(text)]
-    st, stack, done = {"where": cwd, "prev_out": None}, [], set()
+        return out + [(None, text)]
+    st, stack, done = {"where": cwd, "prev_out": None, "dirs": []}, [], set()
+
+    def follow(cur, path):
+        return target_dir(cur, path, root)
 
     def segment(raw, piped_in, piped_out):
         where = st["where"]
@@ -901,63 +776,29 @@ def command_runs(command, cwd, root, depth=0, bodies=None, assign=None, written=
         stdin_text = "\n".join(t for t in fed if t)
         st["prev_out"] = None
         seg, _ = fc._drop_redirects(raw)
-        argv, wrappers = fc._unwrap(seg)
+        argv, _ = fc._unwrap(seg)
         argv = [expand(a, assign) for a in argv]
-        if argv and (" " in argv[0] or "\t" in argv[0]):   # env -S 'python3 -I' ..., $C holding a command
+        if argv and (" " in argv[0] or "\t" in argv[0]):   # $C holding a command
             try:
                 argv = shlex.split(argv[0]) + argv[1:]
             except ValueError:
                 pass
-        info = None
-        if detail:
-            writes, shown = redirect_targets(raw, where, assign)
-            info = {"wrappers": [expand(w, assign) for w in wrappers], "writes": writes, "redirects": shown}
-
-        def emit(words):
-            out.append((words, where, info) if detail else (words, where))
-        xargs = xargs_command(seg, wrappers)
-        if xargs is not None and xargs[1]:
-            front, inner, repl = xargs
-            if stdin_text.strip():                      # echo ls | xargs sudo: xargs runs sudo ls
-                fed = stdin_text[:4000]
-                lines = [ln for ln in fed.splitlines() if ln.strip()][:8]
-                texts = ([shlex.join(front + [t.replace(repl, ln) for t in inner]) for ln in lines] if repl
-                         else [shlex.join(front + inner) + " " + " ".join(fed.split())])
-                for t in texts:
-                    out.extend(deeper(t, where))
-                return
-            run, _ = fc._unwrap(inner)
-            if not run or os.path.basename(run[0]).lstrip("\\") in SHELL_NAMES | {"eval", "su"} | SOURCE:
-                out.append(unread(" ".join(raw)))       # the command itself comes from standard input
         if not argv:
-            if detail and (info["writes"] or any(not fc.ASSIGN_RE.match(w) for w in wrappers)):
-                emit([])                                # > file: a write with no command; sudo -s: the wrappers run
-            if sudo_shell(wrappers) and stdin_text:     # echo cmd | sudo -s: a root shell reads its commands
-                out.extend(deeper(stdin_text, where))
             return
         head = os.path.basename(argv[0]).lstrip("\\")
-        if head == "cd":
+        if head in fc.CD_COMMANDS:
             if not (piped_in or piped_out):
-                st["where"] = target_dir(where, argv[1] if len(argv) > 1 else "", root)
-            return
-        if head == "su":                                # su -c CMD runs CMD; su alone reads its commands from stdin
-            cmd = flag_value(argv[1:], "-c") or flag_value(argv[1:], "--command")
-            for t in ([cmd] if cmd else [stdin_text]):
-                if t:
-                    out.extend(deeper(t, where))
-            emit(argv)
+                st["where"] = fc.change_dir(argv, where, st["dirs"], follow)
             return
         if head in SHELL_NAMES:
             kind, value, _ = fc.shell_target(argv[1:])
             if kind == "command":
                 out.extend(deeper(value, where))
-                if detail and (info["wrappers"] or info["writes"]):
-                    emit(argv)                          # sudo sh -c '...': the wrapper runs too
                 return
             for t in ([stdin_text] if kind == "stdin" else fed_script(value, where, written, bodies)):
                 if t:
                     out.extend(deeper(t, where))
-            emit(argv)
+            out.append((argv, where))
             return
         if head in SOURCE and len(argv) > 1:
             for t in fed_script(argv[1], where, written, bodies):
@@ -967,21 +808,16 @@ def command_runs(command, cwd, root, depth=0, bodies=None, assign=None, written=
         if head == "eval":
             out.extend(deeper(" ".join(argv[1:]), where))
             return
-        if head == "find":                              # {} is git or route.py when the find selects it, and the files under its starting points
-            pick, starts = find_pick(argv), find_starts(argv)
+        if head == "find":
+            pick = find_pick(argv)
             for clause in fc.find_clauses(argv):
-                seen = []
-                for stand in ([[pick]] if pick else []) + [starts]:
-                    words = [y for x in clause for y in (stand if x == "{}" else [x])]
-                    if words and words not in seen:
-                        seen.append(words)
-                        out.extend(deeper(shlex.join(words), where))
+                clause = [pick if x == "{}" and pick else x for x in clause]
+                if clause:
+                    out.extend(deeper(shlex.join(clause), where))
         if head == "xcrun" and len(argv) > 1:
             argv = argv[1:]
-        emit(argv)
+        out.append((argv, where))
         text_out = fc.pipe_output(argv, stdin_text, where)
-        if head == "find" and text_out is None:         # find ... | xargs rm: the files under its starting points
-            text_out = "\n".join(find_starts(argv))
         if text_out and (head == "printf" or (head == "echo" and "-e" in argv[1:2])):
             text_out = text_out.replace("\\n", "\n").replace("\\t", "\t")      # printf 'git stash\n'
         if head == "tee":
@@ -1018,9 +854,9 @@ def command_runs(command, cwd, root, depth=0, bodies=None, assign=None, written=
                 cur = []
             piped_in = piped_out
             if tok == "(":
-                stack.append(st["where"])
+                stack.append((st["where"], list(st["dirs"])))
             elif tok == ")" and stack:
-                st["where"] = stack.pop()
+                st["where"], st["dirs"] = stack.pop()
             continue
         cur.append(tok)
     if cur:
@@ -1260,934 +1096,6 @@ def check_git(data, who, command, root):
     return refuse(who, data, reason)
 
 
-# ------------------------------------------------------------ irreversible
-# policy.json "irreversible" is the irreversible list (orgspec/irreversible.json) as setup.py writes it: the
-# categories a command or a path shows, with their match rules (the list file explains them), and the
-# project's protected paths. .claude/state/gates.json is the local decision state ledger.py keeps (format
-# above ledger.save_gates): "pending" decisions with what they freeze, "releases" of decided ones.
-GATES_FILE = "gates.json"
-DOCKER_VALUES = {"--context", "-c", "--config", "-H", "--host", "-l", "--log-level", "--tlscacert", "--tlscert", "--tlskey"}
-CMD_VALUES = {"git": GIT_VALUE_OPTIONS, "docker": DOCKER_VALUES}       # global options with a value, before the subcommand
-REMOTE_ITSELF = {"ssh", "sftp"}                                         # they always reach another host
-REMOTE_ARG = re.compile(r"^(?:(?:rsync|scp|sftp|ssh)://|[A-Za-z0-9._-]+::|(?:[^/@\s:]+@)?[A-Za-z0-9][A-Za-z0-9._-]*:(?!//))")
-DELETERS = {"rm", "rmdir", "unlink", "shred"}
-PERMISSION_CMDS = {"chmod", "chown", "chgrp", "chflags"}
-COPIERS = {"cp", "install", "ln"}
-IN_PLACE = {"sed": ("efl", ""), "gsed": ("efl", ""), "perl": ("eEIMmxFdDV", "0lC")}   # (letters taking the rest, letters taking digits)
-PATH_VALUES = {   # options that take the next word as their value, for the commands whose file arguments are read
-    "cp": {"-t", "-S", "--target-directory", "--suffix"}, "ln": {"-t", "-S", "--target-directory", "--suffix"},
-    "mv": {"-t", "-S", "--target-directory", "--suffix"},
-    "install": {"-t", "-S", "-m", "-o", "-g", "-f", "-B", "--target-directory", "--suffix", "--mode", "--owner", "--group"},
-    "truncate": {"-s", "-r", "--size", "--reference"}, "shred": {"-n", "-s", "--iterations", "--size"},
-    "sed": {"-e", "-f", "-l", "--expression", "--file", "--line-length"},
-    "gsed": {"-e", "-f", "-l", "--expression", "--file", "--line-length"}, "perl": {"-e", "-E", "-I", "-M", "-m", "-x"},
-}
-# A qualifier's words a command can show: command names, options, hosts, paths (~/.ssh and .env keep their ~/ and .).
-TERM = re.compile(r"[~./*?\[A-Za-z0-9_-][A-Za-z0-9._:/@+~=*?\[\]-]*")
-QUALIFIER_OR = re.compile(r"\s*(?:[、|]|或者|或)\s*")              # alternatives: scp、ssh, ssh 或 scp
-SHOWN = 80                                                             # characters of a command quoted in a reason
-
-
-def load_gates(root):
-    """(pending decisions by ID, releases, problem) from .claude/state/gates.json, which only ledger.py writes.
-    A missing file is an empty state; one that cannot be read gives a problem and releases nothing."""
-    path = os.path.join(pool.state_dir(root), GATES_FILE)
-    if not os.path.exists(path):
-        return {}, [], None
-    data = fc.load_json(path, None)
-    if not isinstance(data, dict):
-        return {}, [], "本地决策状态 .claude/state/gates.json 读不出来，放行一律不算"
-    pending = data.get("pending") if isinstance(data.get("pending"), dict) else {}
-    releases = data.get("releases") if isinstance(data.get("releases"), list) else []
-    return ({str(k): v for k, v in pending.items() if isinstance(v, dict)},
-            [r for r in releases if isinstance(r, dict) and r.get("category")], None)
-
-
-def irreversible_categories(policy):
-    """The categories of the irreversible list a command or a path shows (policy.json)."""
-    irr = policy.get("irreversible") if isinstance(policy.get("irreversible"), dict) else {}
-    return [c for c in irr.get("categories") or [] if isinstance(c, dict) and c.get("id") and c.get("match")]
-
-
-def protected_globs(policy):
-    irr = policy.get("irreversible") if isinstance(policy.get("irreversible"), dict) else {}
-    return list((irr.get("paths") or {}).get("protected") or policy.get("h_paths") or [])
-
-
-def short(text):
-    text = " ".join(str(text).split())
-    return text if len(text) <= SHOWN else text[:SHOWN - 1] + "…"
-
-
-def positionals(args, values=()):
-    """The non-empty arguments of a command that are neither options nor option values; all after -- count."""
-    out, i = [], 0
-    while i < len(args):
-        a = args[i]
-        if a == "--":
-            out.extend(x for x in args[i + 1:] if x)
-            break
-        if a.startswith("-") and len(a) > 1:
-            i += 2 if a in values else 1
-            continue
-        if a:
-            out.append(a)
-        i += 1
-    return out
-
-
-def has_flag(args, letter, long_name):
-    """Is a short option given alone or in a cluster (-R, -Rf), or its long form (--recursive)?"""
-    for a in args:
-        if a == "--":
-            return False
-        if a == long_name or (a.startswith("-") and not a.startswith("--") and letter in a[1:]):
-            return True
-    return False
-
-
-def option_value(args, names):
-    for i, a in enumerate(args):
-        if a in names and i + 1 < len(args):
-            return args[i + 1]
-        for n in names:
-            if n.startswith("--") and a.startswith(n + "="):
-                return a.split("=", 1)[1]
-    return None
-
-
-def in_place(args, head):
-    """Does sed or perl edit its files in place: -i with or without a backup suffix, alone or in a cluster
-    (-pi, -Ei, -i.bak), or --in-place?"""
-    rest, digits = IN_PLACE.get(head, ("", ""))
-    for a in args:
-        if a == "--":
-            return False
-        if a == "--in-place" or a.startswith("--in-place="):
-            return True
-        if a.startswith("-") and not a.startswith("--"):
-            k = 1
-            while k < len(a):
-                ch = a[k]
-                if ch == "i":
-                    return True
-                if ch in rest or not ch.isalpha():
-                    break
-                k += 1
-                if ch in digits:
-                    while k < len(a) and a[k].isdigit():
-                        k += 1
-    return False
-
-
-def arg_given(rest, value, head):
-    """args_any: the option is given (exactly, or as --opt=value); sed's and perl's -i also in a cluster."""
-    if head in IN_PLACE and value.startswith("-") and not value.startswith("--") and "i" in value:
-        return in_place(rest, head)
-    return any(a == value or a.startswith(value + "=") for a in rest)
-
-
-def cmd_rest(argv, words):
-    """The arguments after the words a match rule's cmd names (the first compared by file name, the others in
-    order, global options in between skipped); None when argv is not that command."""
-    if not argv or not words or os.path.basename(argv[0]).lstrip("\\") != words[0]:
-        return None
-    values = CMD_VALUES.get(words[0], ())
-    i = 1
-    for word in words[1:]:
-        while i < len(argv) and argv[i].startswith("-") and len(argv[i]) > 1 and argv[i] != "--":
-            i += 2 if argv[i] in values else 1
-        if i >= len(argv) or argv[i] != word:
-            return None
-        i += 1
-    return argv[i:]
-
-
-def opened_apps(args):
-    """Names of the applications `open` starts: -a NAME or -b BUNDLE (also at the end of a cluster such as
-    -na), or a path ending in .app."""
-    names, i = [], 0
-    while i < len(args):
-        a = args[i]
-        if a == "--args":
-            break
-        if a.startswith("-") and not a.startswith("--") and len(a) > 1:
-            if a[-1] in "ab" and i + 1 < len(args):
-                names.append(args[i + 1])
-                i += 2
-                continue
-        elif a.startswith("--"):
-            i += 2 if a in ("--env", "--stdin", "--stdout", "--stderr") else 1
-            continue
-        elif a.rstrip("/").lower().endswith(".app"):
-            names.append(a)
-        i += 1
-    return [os.path.basename(n.rstrip("/")) for n in names if n]
-
-
-def app_entry(cat, name):
-    """The application of a category's apps list that name (Docker, Docker.app, com.docker.docker) stands for."""
-    name = str(name or "").strip().lower()
-    for entry in cat.get("apps") or []:
-        if name in [str(n).lower() for n in [entry.get("name", "")] + list(entry.get("names") or [])]:
-            return entry
-    return None
-
-
-BRACE = re.compile(r"(?<!\$)\{([^{}]*,[^{}]*)\}")
-
-
-def brace_expand(word, limit=64):
-    """The words the shell's brace expansion makes of word: data/{eval,dev}/x is data/eval/x and data/dev/x
-    (comma lists, nested ones too; not ${VAR} or a find's {})."""
-    out = [word]
-    for _ in range(8):
-        nxt, changed = [], False
-        for w in out:
-            m = BRACE.search(w)
-            if not m:
-                nxt.append(w)
-                continue
-            changed = True
-            nxt += [w[:m.start()] + part + w[m.end():] for part in m.group(1).split(",")]
-        out = nxt[:limit]
-        if not changed:
-            break
-    return out
-
-
-RSYNC_VALUES = {"-e", "--rsh", "-f", "--filter", "--exclude", "--include", "--exclude-from", "--include-from", "--files-from",
-                "-T", "--temp-dir", "--partial-dir", "--compare-dest", "--copy-dest", "--link-dest", "--backup-dir", "--suffix",
-                "--chmod", "--chown", "-B", "--block-size", "-M", "--remote-option", "--log-file", "--password-file", "--port",
-                "--bwlimit", "--timeout", "--max-size", "--min-size", "--out-format", "--info", "--debug"}
-
-
-def git_sub(argv, where):
-    """(git's subcommand, its arguments, the directory it works in) for a git command line; None for anything else."""
-    if not argv or os.path.basename(argv[0]).lstrip("\\") != "git":
-        return None
-    i = 1
-    while i < len(argv) and argv[i].startswith("-"):
-        opt = argv[i].split("=", 1)[0]
-        value = argv[i].split("=", 1)[1] if "=" in argv[i] else (argv[i + 1] if i + 1 < len(argv) else "")
-        if opt == "-C" and value:
-            where = full_path(value, where)
-        i += 1 if "=" in argv[i] else (2 if opt in GIT_VALUE_OPTIONS else 1)
-    return (argv[i], argv[i + 1:], where) if i < len(argv) else None
-
-
-def copy_targets(srcs, dest, full, into_dir=False):
-    """(what cp, install, ln, mv or rsync writes, the directories whose contents it may overwrite): each source's
-    name in the destination when that is a directory (several sources, -t, a trailing /, or one that exists), and
-    the destination itself; a source written as dir/ or dir/. copies its contents into the destination."""
-    target = full(dest)
-    is_dir = into_dir or len(srcs) > 1 or dest.endswith("/") or os.path.isdir(target)
-    written = []
-    for s in srcs:
-        path = target if s.endswith(("/", "/.")) else full(os.path.join(dest, os.path.basename(s))) if is_dir else None
-        if path and path not in written:
-            written.append(path)
-    into = [target] if any(s.endswith(("/", "/.")) for s in srcs) else []
-    return written + ([target] if target not in written else []), into
-
-
-def path_targets(argv, where):
-    """(paths a command writes or removes, directories whose whole contents it removes or changes), full paths.
-    Only the commands of the list are read, after brace expansion (mv data/{eval,old} is mv data/eval data/old).
-    cp, install, ln and rsync write their destination and the copies in it (all of a destination they copy a
-    directory's contents into, and with rsync --delete); mv and git mv take their sources away and write their
-    destination; rm, git rm and the like remove their arguments with what is under them, find -delete what is
-    under its starting points; tee, truncate, dd of=, sed -i and perl -i write their files; chmod, chown, chgrp
-    and chflags change their files, with -R the trees under them (the mode or owner counts as a file too: a mode
-    such as -w looks like an option, and a mode taken for a path matches no group)."""
-    if not argv:
-        return [], []
-    head = os.path.basename(argv[0]).lstrip("\\")
-    args = [x for a in argv[1:] for x in brace_expand(a)]
-
-    def full(p):
-        return full_path(os.path.expandvars(p) if "$" in p else p, where)
-    sub = git_sub(argv, where) if head == "git" else None
-    if sub and sub[0] in ("rm", "mv"):
-        rest = [x for a in sub[1] for x in brace_expand(a)]
-        if has_flag(rest, "n", "--dry-run"):
-            return [], []
-        return path_targets([sub[0]] + rest, sub[2])
-    if head == "find":
-        if "-delete" not in args:
-            return [], []
-        starts = [full(p) for p in find_starts(argv)]
-        return starts, starts
-    pos = positionals(args, PATH_VALUES.get(head, ()))
-    if head in DELETERS:
-        paths = [full(p) for p in pos]
-        return paths, paths
-    if head == "rsync":
-        pos = positionals(args, RSYNC_VALUES)
-        if len(pos) < 2 or REMOTE_ARG.match(pos[-1]):
-            return [], []                               # to another host: 对外发送 sees it
-        written, into = copy_targets(pos[:-1], pos[-1], full)
-        removes = [a for a in args if a.startswith("--delete") or a == "--remove-source-files"]
-        local = [full(s) for s in pos[:-1] if not REMOTE_ARG.match(s)]
-        if "--remove-source-files" in removes:
-            written, into = written + local, into + local
-        return written, (into + [full(pos[-1])]) if removes else into
-    if head in COPIERS or head == "mv":
-        if head == "install" and has_flag(args, "d", "--directory"):
-            return [full(p) for p in pos], []
-        target = option_value(args, ("-t", "--target-directory"))
-        if target:
-            srcs, dest = pos, target
-        elif len(pos) >= 2:
-            srcs, dest = pos[:-1], pos[-1]
-        elif head == "ln" and pos:
-            srcs, dest = pos, "."
-        else:
-            return ([full(p) for p in pos], [full(p) for p in pos]) if head == "mv" else ([], [])
-        out, into = copy_targets(srcs, dest, full, bool(target) or dest == ".")
-        if head == "mv":
-            return [full(s) for s in srcs] + out, [full(s) for s in srcs]
-        return out, into
-    if head in ("tee", "truncate"):
-        return [full(p) for p in pos], []
-    if head == "dd":
-        return [full(a[3:]) for a in args if a.startswith("of=") and len(a) > 3], []
-    if head in IN_PLACE:
-        return ([full(p) for p in pos], []) if in_place(args, head) else ([], [])
-    if head in PERMISSION_CMDS:
-        paths = [full(p) for p in pos]
-        return paths, paths if has_flag(args, "R", "--recursive") else []
-    return [], []
-
-
-def path_forms(path, root):
-    """(forms relative to the project root, absolute forms) of a full path, as written and with symlinks followed."""
-    lex = os.path.normpath(path)
-    real = resolved(lex)
-    rels = []
-    for r in (relative(lex, root), relative(real, os.path.realpath(root)), relative(lex, os.path.realpath(root))):
-        if r is not None and r not in rels:
-            rels.append(r)
-    return rels, [lex] if real == lex else [lex, real]
-
-
-def is_outside(path, root):
-    """Outside the project directory and the temporary directories, as written and with symlinks followed."""
-    rels, forms = path_forms(path, root)
-    if rels:
-        return False
-    tmp = os.environ.get("TMPDIR", "")
-    return not any((p + "/").startswith(TMP_PREFIXES) or (tmp and inside(p, os.path.realpath(tmp))) for p in forms)
-
-
-WILD = re.compile(r"[*?\[]")
-
-
-def parts_of(path):
-    return [c for c in path.split("/") if c]
-
-
-def part_meets(a, b):
-    """Can one name match both path components a (from a command, maybe a shell wildcard) and b (from a glob)?"""
-    if FOLD_CASE:
-        a, b = a.lower(), b.lower()
-    wa, wb = bool(WILD.search(a)), bool(WILD.search(b))
-    if not wa and not wb:
-        return a == b
-    try:
-        if not wa:
-            return fnmatch.fnmatchcase(a, b)
-        if not wb:
-            return fnmatch.fnmatchcase(b, a)
-    except re.error:
-        return True
-    return True                                     # two wildcards: take it that they can meet
-
-
-def meets(p, g, subtree=False, literal=True):
-    """Do the components p of a path (shell wildcards allowed: rm data/*/test.csv) reach what the components g of a
-    glob name? A path the glob matches counts, so does one under it, and the base directory of a glob ending in **
-    (cp -R new/. repo/eval for repo/eval/**). With subtree (rm -r, chmod -R), also a directory that holds the
-    glob's base, the part before its first wildcard (rm -rf data for data/eval/**; not every directory for
-    **/*.pem). ** in the glob stands for any number of components."""
-    if not g:
-        return True                                 # the path is what the glob names, or under it
-    if g[0] == "**":
-        return meets(p, g[1:], subtree, False) or (bool(p) and meets(p[1:], g, subtree, False))
-    if not p:
-        return subtree and literal
-    return part_meets(p[0], g[0]) and meets(p[1:], g[1:], subtree, literal and not WILD.search(g[0]))
-
-
-def glob_hit(path, root, globs, subtree=False):
-    """The form of path a group of globs matches, or None. ~/ globs are compared with the absolute path, **/
-    globs with both forms, other globs with the path relative to the project root (meets: a path under a glob, the
-    base directory of a glob ending in **, and a path with shell wildcards that may reach one count too). With
-    subtree, a directory that holds what a glob names counts too (rm -r, chmod -R), and so does one that holds
-    the whole project (rm -rf .. ) for the globs relative to it."""
-    rels, forms = path_forms(path, root)
-    real_root = os.path.realpath(root)
-    holds_project = subtree and not rels and any(inside(root, f) or inside(real_root, f) for f in forms)
-    for g in globs:
-        if g == "~" or g.startswith("~/"):
-            pat, cands = os.path.expanduser(g), forms
-        elif g.startswith("**/"):
-            pat, cands = g, rels + forms
-        else:
-            pat, cands = g, rels
-        for c in cands:
-            if (c.startswith("/") == pat.startswith("/") or pat.startswith("**/")) and meets(parts_of(c), parts_of(pat), subtree):
-                return c or "."                     # the project directory itself
-        if holds_project and cands is not forms:
-            return forms[0]
-    return None
-
-
-def in_group(group, path, cat, root, policy, subtree=False):
-    """The form of path a path group of the list matches (outside, protected, or one of the category's own), or None."""
-    if group == "outside":
-        return path if is_outside(path, root) else None
-    if group == "protected":
-        return glob_hit(path, root, protected_globs(policy), subtree)
-    return glob_hit(path, root, (cat.get("paths") or {}).get(group) or [], subtree)
-
-
-def group_hit(groups, path, cat, root, policy, subtree=False):
-    """The form of path the first of these path groups matches, or None."""
-    for group in groups:
-        found = in_group(group, path, cat, root, policy, subtree)
-        if found:
-            return found
-    return None
-
-
-def group_paths(groups, paths, cat, root, policy, subtree=False):
-    """[(the form a path group matches, full path)] for each of paths that one of these groups matches."""
-    out = []
-    for p in paths:
-        form = group_hit(groups, p, cat, root, policy, subtree)
-        if form:
-            out.append((form, p))
-    return out
-
-
-def rule_hit(rule, cat, cands, argv, where, redirects, root, policy):
-    """{app, paths, targets} when one simple command meets a match rule of the list; None otherwise: paths are
-    the forms of what it changes in a path group, targets the same as full paths. lark-cli rules are met on the
-    parsed invocation instead (lark_hits). A writes rule takes the files written themselves: the redirections'
-    targets, what cp, mv, tee or sed -i write, a file removed; not a directory that holds one (rm -rf ~/Library is
-    no write of Docker Desktop's settings)."""
-    if rule.get("writes"):
-        written, _ = path_targets(argv, where)
-        found = group_paths([rule["writes"]], redirects + written, cat, root, policy)
-        return {"app": None, "paths": [f for f, _ in found], "targets": [p for _, p in found]} if found else None
-    words = rule.get("cmd") or []
-    if not words or words[0] == "lark-cli":
-        return None
-    for cand in cands:
-        rest = cmd_rest(cand, words)
-        if rest is None:
-            continue
-        if rule.get("args_any") and not any(arg_given(rest, v, words[0]) for v in rule["args_any"]):
-            continue
-        if rule.get("sub_prefix"):
-            first = positionals(rest)[:1]
-            if not first or not any(first[0].startswith(p) for p in rule["sub_prefix"]):
-                continue
-        app = None
-        if rule.get("app"):
-            app = next((e for e in (app_entry(cat, n) for n in opened_apps(rest)) if e), None)
-            if not app:
-                continue
-        if rule.get("app_name"):
-            app = app_entry(cat, rule["app_name"])
-        if rule.get("remote") and words[0] not in REMOTE_ITSELF and not any(REMOTE_ARG.match(a) for a in positionals(rest)):
-            continue
-        found = []
-        if rule.get("paths"):
-            written, subtree = path_targets(cand, where)
-            found = (group_paths(rule["paths"], written, cat, root, policy)
-                     + group_paths(rule["paths"], subtree, cat, root, policy, True))
-            if not found:
-                continue
-        return {"app": app.get("name") if app else None, "paths": [f for f, _ in found], "targets": [p for _, p in found]}
-    return None
-
-
-def word_cands(argv, wrappers):
-    """The ways one simple command can be read: its argv, and from each wrapper word on (sudo, doas, env ...)."""
-    seg = list(wrappers) + list(argv)
-    return [list(argv)] + [seg[i:] for i, w in enumerate(wrappers) if not fc.ASSIGN_RE.match(w) and not w.startswith("-")]
-
-
-def unread_names(text, cats):
-    """Categories of the list whose plain commands (sudo, git push, scp ...) appear in text the parser cannot read."""
-    names = []
-    for cat in cats:
-        for rule in cat.get("match") or []:
-            words = rule.get("cmd") or []
-            if words and words[0] != "lark-cli" and set(rule) <= {"cmd", "remote", "app_name"} and re.search(
-                    r"(?<![\w./-])%s(?![\w-])" % r"\s+".join(re.escape(w) for w in words), text):
-                names.append(cat["name"])
-                break
-    return names
-
-
-def irreversible_hits(runs, root, policy, cats):
-    """([hit], [(text, category names)]): each category of the list a simple command meets, as {cat, text
-    (the command as written, wrappers included), argv (its words, wrappers included), where (its directory),
-    root, app (the privileged application), paths (what it changes in a path group), targets (the same as full
-    paths)}; and the texts the parser could not read that name a plain command of the list."""
-    hits, unread = [], []
-    for argv, where, info in runs:
-        if argv is None:
-            names = unread_names(where or "", cats)
-            if names:
-                unread.append((where, names))
-            continue
-        cands = word_cands(argv, info["wrappers"])
-        words = list(info["wrappers"]) + list(argv)
-        heads = [w for w in info["wrappers"] if not fc.ASSIGN_RE.match(w) and not w.startswith("-")] + list(argv[:1])
-        text = " ".join(words + list(info["redirects"]))
-        for cat in cats:
-            for rule in cat["match"]:
-                hit = rule_hit(rule, cat, cands, argv, where, info["writes"], root, policy)
-                if hit:
-                    hits.append(dict(hit, cat=cat, text=text, argv=words, heads=heads, where=where, root=root))
-                    break
-    return hits, unread
-
-
-def researcher_messages(root):
-    """IDs of the researcher's Feishu DMs, which route.py listen writes into inbox/feishu.jsonl."""
-    ids = set()
-    try:
-        with open(os.path.join(root, "inbox", "feishu.jsonl"), encoding="utf-8") as f:
-            for line in f:
-                try:
-                    rec = json.loads(line)
-                except ValueError:
-                    continue
-                if isinstance(rec, dict) and rec.get("id"):
-                    ids.add(str(rec["id"]))
-    except OSError:
-        pass
-    return ids
-
-
-def to_researcher_only(c, root):
-    """except researcher: a message to the researcher alone (--user-id is the open_id in feishu/ids.json), or a
-    reply to one of the researcher's DMs."""
-    flags, verb = c["flags"], c["pos"][1:2]
-    if verb == ["+messages-send"]:
-        ids = fc.load_json(os.path.join(root, "feishu", "ids.json"), {}) or {}
-        me = ((ids.get("lark") or {}) if isinstance(ids, dict) else {}).get("researcher_open_id")
-        users = [u for u in flags.get("--user-id") or [] if u]
-        return bool(me) and bool(users) and not flags.get("--chat-id") and all(u == me for u in users)
-    if verb == ["+messages-reply"]:
-        mid = fc.last(flags, "--message-id")
-        return bool(mid) and str(mid) in researcher_messages(root)
-    return False
-
-
-def lark_hits(command, cwd, root, risk, cats):
-    """Hits of the list's lark-cli rules (mail +send, im +messages-send ...), on the invocations fc.parse finds."""
-    hits = []
-    for inv in fc.parse(command, cwd).invocations:
-        if inv.cli != "lark":
-            continue
-        c = fc.classify(inv, risk)
-        if c["help"] or c["dry_run"]:
-            continue
-        for cat in cats:
-            for rule in cat["match"]:
-                words = rule.get("cmd") or []
-                if not words or words[0] != "lark-cli" or c["pos"][:len(words) - 1] != words[1:]:
-                    continue
-                if rule.get("except") == "researcher" and to_researcher_only(c, root):
-                    continue
-                hits.append({"cat": cat, "text": "lark-cli " + " ".join(inv.args), "argv": ["lark-cli"] + list(inv.args),
-                             "heads": ["lark-cli"], "where": inv.cwd or cwd, "root": root, "app": None, "paths": [], "targets": []})
-                break
-    return hits
-
-
-def term_kind(term):
-    """path (~/.ssh, .env, repo/eval, *.pem), remote (campus-hpc:/scratch, host::module, a URL) or word (scp,
-    campus-hpc, git, push)."""
-    if "://" in term or (REMOTE_ARG.match(term) and not term.startswith(("~", "/", "."))):
-        return "remote"
-    if term.startswith(("~", "/", ".")) or "/" in term or WILD.search(term):
-        return "path"
-    return "word"
-
-
-def qualifier_terms(qualifier):
-    """What of a qualifier a command can show: groups that must all be met, each a list of alternatives
-    (written with 、 | 或), each a list of terms; Chinese words are left out. Words and hosts are lower-cased,
-    paths keep their case and their ~/ or . (~/.ssh, .env). “scp、ssh 到 CAMPUS-HPC” is (scp or ssh) and campus-hpc.
-    [] when nothing is left."""
-    groups = []
-    for chunk in QUALIFIER_OR.sub("、", qualifier or "").split():
-        alts = []
-        for alt in chunk.split("、"):
-            terms = []
-            for t in TERM.findall(alt):
-                t = t.rstrip(".,;:") if re.search(r"[A-Za-z0-9*?]", t.rstrip(".,;:")) else t
-                if re.search(r"[A-Za-z0-9*?]", t):
-                    terms.append(t if term_kind(t) == "path" else t.lower())
-            if terms:
-                alts.append(terms)
-        if alts:
-            groups.append(alts)
-    return groups
-
-
-SSH_VALUES = {"-b", "-B", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l", "-m", "-O", "-o", "-p", "-P", "-Q", "-R",
-              "-S", "-W", "-w"}
-REMOTE_SHELLS = {"ssh", "sftp", "slogin", "mosh", "autossh"}
-URL = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://(?:[^@/]*@)?([^/:?#]+)(?::\d+)?(/[^?#]*)?")
-HOST_PATH = re.compile(r"^(?:[^/@\s:]+@)?([A-Za-z0-9][A-Za-z0-9._-]*)::?(.*)$")
-
-
-def host_path(arg):
-    """(host, path there) of a remote argument (user@host:path, host::module, scheme://user@host:port/path); None
-    for anything else."""
-    m = URL.match(arg)
-    if m:
-        return m.group(1).lower(), m.group(2) or ""
-    m = HOST_PATH.match(arg) if REMOTE_ARG.match(arg) else None
-    return (m.group(1).lower(), m.group(2)) if m else None
-
-
-def command_words(argv, heads=()):
-    """(the words of a command lower-cased, with the value of each --opt=value and the file names of the commands
-    it runs (heads: /usr/bin/scp is scp); the hosts it reaches, [(host, path there)]: the host of each remote
-    argument and the destination of ssh, sftp and the like). A path's last part is no word of its own:
-    campus-hpc in runs/campus-hpc or in ssh host 'ls /x/campus-hpc' is no host."""
-    words, remotes = {os.path.basename(h).lower() for h in heads}, []
-    for a in argv:
-        low = a.lower()
-        words.add(low)
-        if low.startswith("--") and "=" in low:
-            words.add(low.split("=", 1)[1])
-        found = host_path(a)
-        if found:
-            remotes.append(found)
-    for k, a in enumerate(argv):
-        if os.path.basename(a) in REMOTE_SHELLS:
-            dest = positionals(argv[k + 1:], SSH_VALUES)[:1]
-            if dest and not host_path(dest[0]):
-                remotes.append((dest[0].rsplit("@", 1)[-1].lower(), ""))
-    return words, remotes
-
-
-def word_meets(term, words, remotes):
-    """A word term is one of the command's words or the host it reaches (campus-hpc is campus-hpc:~/x, me@campus-hpc, ssh
-    campus-hpc; example.edu is login.example.edu); a remote term (campus-hpc:/scratch) is a host it reaches, with that
-    path or one under it."""
-    if term_kind(term) == "word":
-        return term in words or any(h == term or h.endswith("." + term) for h, _ in remotes)
-    found = host_path(term)
-    if not found:
-        return term in words
-    host, path = found
-    return term in words or any(h == host and (not path or p == path or p.startswith(path.rstrip("/") + "/")) for h, p in remotes)
-
-
-def path_under(path, term, root):
-    """Is a full path the one a path term names, or under it? A term without / (.env, .ssh, *.pem) is a file or
-    directory name anywhere on the path; ~ is the home directory; other relative terms start at the project root."""
-    path = os.path.normpath(path)
-    if "/" not in term.rstrip("/") and not term.startswith("~"):
-        return any(part_meets(c, term.rstrip("/")) for c in parts_of(path))
-    base = os.path.expanduser(term)
-    base = os.path.normpath(base if os.path.isabs(base) else os.path.join(root, base))
-    return path.startswith("/") and meets(parts_of(path), parts_of(base))
-
-
-def local_args(hit):
-    """The full paths of the local files a hit's command names (no option, no remote argument)."""
-    argv, where = hit.get("argv") or [], hit.get("where") or hit.get("root") or "."
-    return [full_path(a, where) for a in positionals(argv[1:]) if not host_path(a)]
-
-
-def qualifier_apps(cat, text):
-    """The applications of a category's apps list (by their name) that a qualifier names anywhere in it: Docker,
-    Docker Desktop 的沙箱, com.docker.docker and 启动 Docker all name Docker."""
-    low, found = str(text or "").lower(), []
-    for entry in cat.get("apps") or []:
-        for n in [entry.get("name", "")] + list(entry.get("names") or []):
-            n = str(n).lower()
-            if n and re.search(r"(?<![A-Za-z0-9.])%s(?![A-Za-z0-9])" % re.escape(n), low):
-                found.append(entry.get("name"))
-                break
-    return found
-
-
-def covers(qualifier, cat, hit, strict=True):
-    """Does a release's or a frozen item's qualifier cover a hit? An empty one is the whole category. A
-    privileged application is compared by the application names found in it; a category met only through the
-    files it writes (Docker 资源) takes its qualifier as a note. Other qualifiers by qualifier_terms: strict (a
-    release) wants each word to be one of the command's words or the host it reaches, and every file the
-    command changes in the category under a path the qualifier names; loose (a frozen item) takes any term found
-    in the command's text. None when the qualifier holds nothing to compare (no application or term): a frozen
-    item takes it as the whole category, a release as nothing."""
-    q = str(qualifier or "").strip()
-    if not q:
-        return True
-    if cat.get("apps"):
-        found = qualifier_apps(cat, q)
-        return hit.get("app") in found if found else None
-    if all(not r.get("cmd") for r in cat["match"]):
-        return True
-    groups = qualifier_terms(q)
-    if not groups:
-        return None
-    words, remotes = command_words(hit.get("argv") or hit["text"].split(), hit.get("heads") or [])
-    root = hit.get("root") or "."
-    if not strict:
-        text = hit["text"].lower()
-        files = hit.get("targets") or local_args(hit)
-
-        def appears(t):
-            if t.lower() in text or (term_kind(t) == "path" and os.path.expanduser(t).lower() in text):
-                return True
-            return any(path_under(p, t, root) for p in files) if term_kind(t) == "path" else word_meets(t, words, remotes)
-        return all(any(all(appears(t) for t in alt) for alt in alts) for alts in groups)
-    paths = []
-    for alts in groups:
-        named = []
-        for alt in alts:
-            paths += [t for t in alt if term_kind(t) == "path"]
-            rest = [t for t in alt if term_kind(t) != "path"]
-            if rest:
-                named.append(rest)
-        if named and not any(all(word_meets(t, words, remotes) for t in alt) for alt in named):
-            return False
-    if paths:
-        files = hit.get("targets") or local_args(hit)
-        return bool(files) and all(any(path_under(p, t, root) for t in paths) for p in files)
-    return True
-
-
-def overlaps(release, frozen, cat):
-    """Does a pending decision's frozen item hold a release back: the same category, and the same qualifier
-    or either one the whole category (ledger.overlaps); also two qualifiers that name the same application, and
-    a frozen qualifier the hook cannot compare, which stands for the whole category."""
-    qa, qb = str(release.get("qualifier") or "").strip(), str(frozen.get("qualifier") or "").strip()
-    if not qa or not qb or qa.lower() == qb.lower():
-        return True
-    if cat.get("apps"):
-        a, b = set(qualifier_apps(cat, qa)), set(qualifier_apps(cat, qb))
-        return not a or not b or bool(a & b)
-    return not qualifier_terms(qb)
-
-
-def decision_label(entry):
-    return "#%s（%s）" % (entry.get("id"), entry.get("title") or "决策包")
-
-
-def protected_verdict(who, data, policy, hit):
-    """Protected paths are never released by a decision: as an edit of them, a quality session asks; the
-    researcher's own session asks too; any other session is denied."""
-    where = next((p for p in hit["paths"] if p != "."), "项目目录（里面有受保护路径）" if hit["paths"] else "受保护路径")
-    what = "`%s`" % short(hit["text"])
-    if who.role in policy.get("h_writers", []):
-        if data.get("permission_mode") in pool.BYPASS_MODES:
-            v = Verdict("deny", "%s 会改评测协议的受保护路径 %s，要研究员确认；当前是 %s 模式，确认框弹不出来，请研究员自己改。" % (
-                what, where, data["permission_mode"]))
-        else:
-            v = Verdict("ask", "%s 会改评测协议的受保护路径 %s（评测脚本、评测集和接口），改动要研究员确认。" % (what, where))
-    elif who.researcher:
-        v = refuse(who, data, "%s 会删除、移动、覆盖受保护路径 %s 或改它的权限（任务文件登记的评测脚本、评测集和接口）。" % (what, where))
-    else:
-        v = Verdict("deny", "（%s）不能用 shell 命令删除、移动、覆盖受保护路径，也不能改它们的权限：%s 动到了 %s。任务文件登记的评测脚本、"
-                            "评测集和接口在优化过程中保持不变；只有质量序列能提出修改，并且要研究员签字。" % (who.label, what, where))
-    v.irreversible.append({"category": hit["cat"]["name"], "command": short(hit["text"]), "result": "protected", "decisions": []})
-    return v
-
-
-def gate_verdict(who, data, policy, hit, pending, releases, problem):
-    """The verdict on one hit: frozen by a pending decision, released by a decided one, or neither."""
-    cat = hit["cat"]
-    if cat.get("release") == "researcher_session":
-        return protected_verdict(who, data, policy, hit)
-    what, name = "`%s`" % short(hit["text"]), cat["name"]
-    record = {"category": name, "command": short(hit["text"])}
-    if hit.get("app"):
-        record["qualifier"] = hit["app"]
-    frozen = [(e, f) for e in pending.values() for f in (e.get("frozen") if isinstance(e.get("frozen"), list) else [])
-              if isinstance(f, dict) and f.get("kind") == "category" and f.get("category") == cat["id"]]
-    stopping = [(e, f) for e, f in frozen if covers(f.get("qualifier"), cat, hit, strict=False) is not False]
-    if stopping:
-        e, f = stopping[0]
-        v = refuse(who, data, "%s 属于不可逆事项清单里的“%s”，待定决策 %s冻结了“%s”：决策定下以前谁都不做。先做选项中立的准备；"
-                              "要提前做，请研究员先定这条决策。" % (what, name, decision_label(e), f.get("text") or name))
-        v.irreversible.append(dict(record, result="frozen", decisions=sorted({str(x.get("id")) for x, _ in stopping})))
-        return v
-    own = [r for r in releases if r.get("category") == cat["id"]]
-    fits = [r for r in own if covers(r.get("qualifier"), cat, hit) is True]
-    held = [r for r in fits if any(overlaps(r, f, cat) for _, f in frozen)]
-    active = [r for r in fits if r not in held]
-    if active:
-        ids = sorted({str(r.get("decision")) for r in active})
-        v = Verdict()
-        v.released.append("放行：%s 属于不可逆事项清单里的“%s”，由决策 %s放行。" % (what, name, "、".join(
-            "#%s（选项“%s”：%s）" % (r.get("decision"), r.get("option") or "", r.get("text") or name) for r in active)))
-        v.irreversible.append(dict(record, result="released", decisions=ids))
-        return v
-    why = []
-    if problem:
-        why.append(problem + "。")
-    for r in held:
-        e, f = next(((x, y) for x, y in frozen if overlaps(r, y, cat)), ({}, {}))
-        why.append("决策 #%s 放行的“%s”暂停：待定决策 %s冻结了和它重叠的“%s”。" % (
-            r.get("decision"), r.get("text") or name, decision_label(e), f.get("text") or name))
-    for r in own:
-        if r not in fits:
-            unread = covers(r.get("qualifier"), cat, hit) is None
-            why.append("决策 #%s 放行的是“%s”，%s。" % (r.get("decision"), r.get("text") or name,
-                                               ("限定里没有应用名单里的应用（%s），hook 认不出这条命令在不在里面" % "、".join(
-                                                   str(a.get("name")) for a in cat.get("apps") or []) if cat.get("apps") else
-                                                "限定里没有能和命令对上的词（命令名、主机名、路径这类），hook 认不出这条命令在不在里面")
-                                               if unread else "这条命令不在里面"))
-    v = refuse(who, data, "%s 属于不可逆事项清单里的“%s”，没有研究员批准、所选选项里列了它的决策。%s要做就写决策包：选项表“要放行的不可逆动作”"
-                          "一列写“%s”（可以加限定，写命令里看得到的词），研究员选了这个选项、书记员按它确认以后放行；+1、+0 写进交给上一级的交付包。" % (
-                              what, name, "".join(why), name))
-    v.irreversible.append(dict(record, result="no_release", decisions=sorted({str(r.get("decision")) for r in held})))
-    return v
-
-
-def same_word(word, frozen, where, root):
-    """Is a command's word the word of a frozen prefix: the same, or the same path once both are full paths (the
-    command's from its directory, the prefix's from the project root: ./tools/x.py, cd tools && x.py)."""
-    if word == frozen:
-        return True
-    a, b = full_path(word, where), full_path(frozen, root)
-    return a.lower() == b.lower() if FOLD_CASE else a == b
-
-
-def prefix_meets(cand, words, where, root):
-    """Does a command start with a frozen command prefix? The first word by its file name (any python counts for
-    python3); the others in order, skipping the options in between with one value each (python3 -I x.py, docker
-    compose -f infra.yml up), paths compared as paths (same_word)."""
-    if not cand:
-        return False
-    head, first = os.path.basename(cand[0]).lstrip("\\"), os.path.basename(words[0])
-    if head != first and not (PYTHON.search(head) and PYTHON.search(first)):
-        return False
-    i = 1
-    for w in words[1:]:
-        after_option = False
-        while i < len(cand) and not same_word(cand[i], w, where, root):
-            if cand[i].startswith("-") and len(cand[i]) > 1:
-                after_option = True
-            elif after_option:
-                after_option = False              # the value of the option just skipped
-            else:
-                return False
-            i += 1
-        if i >= len(cand):
-            return False
-        i += 1
-    return True
-
-
-def frozen_commands(runs, pending, root):
-    """[(decision, frozen item, command as written)] for each simple command that starts with a frozen command prefix
-    (prefix_meets)."""
-    items = [(e, f, [str(w) for w in f["words"]]) for e in pending.values()
-             for f in (e.get("frozen") if isinstance(e.get("frozen"), list) else [])
-             if isinstance(f, dict) and f.get("kind") == "command" and isinstance(f.get("words"), list) and len(f["words"]) >= 2]
-    out = []
-    for argv, where, info in runs if items else []:
-        if not argv:
-            continue
-        cands = word_cands(argv, info["wrappers"])
-        for e, f, words in items:
-            if any(prefix_meets(c, words, where, root) for c in cands):
-                out.append((e, f, " ".join(list(info["wrappers"]) + list(argv))))
-    return out
-
-
-def owned_hard(policy):
-    """The paths only init and the plugin's scripts write: owned_paths with nobody as owner."""
-    return [p for p, owners in (policy.get("owned_paths") or {}).items() if not owners]
-
-
-def check_owned_writes(who, policy, root, runs):
-    """A shell command that overwrites, moves or deletes a path only init and the plugin's scripts write (the hooks,
-    settings, role definitions, the local state with the claims and gates.json, spec/task.json): denied in every
-    session, as an edit of them is. ledger.py and route.py write the state themselves, not through the shell."""
-    hard, group = owned_hard(policy), {"paths": {"owned": owned_hard(policy)}}
-    for argv, where, info in runs if hard else []:
-        if argv is None:
-            continue
-        written, subtree = path_targets(argv, where)
-        mine = [p for p in subtree if any(path_forms(p, root)[0])]  # rm -rf . and rm -rf .. are the protected paths' rule
-        found = (group_paths(["owned"], info["writes"] + written, group, root, policy)
-                 + group_paths(["owned"], mine, group, root, policy, True))
-        if found:
-            text = short(" ".join(list(info["wrappers"]) + list(argv) + list(info["redirects"])))
-            return Verdict("deny", "（%s）不能用 shell 命令覆盖、挪走或删除 %s：`%s` 动到的是只由初始化和插件的脚本写的文件（hook、配置、角色定义，"
-                                   "认领表和本地决策状态只由 route.py 和书记员跑的 ledger.py 写），在任何会话里都不手改；要改请研究员改插件或任务文件后重跑 init。" % (
-                                       who.label, found[0][0], text))
-    return None
-
-
-def check_irreversible(data, who, policy, root, command, risk, runs=None):
-    """The irreversible list and the pending decisions' frozen actions, for one shell command (runs: its
-    command_runs with detail, when already worked out)."""
-    cats = irreversible_categories(policy)
-    pending, releases, problem = load_gates(root)
-    if not cats and not pending:
-        return Verdict()
-    cwd = data.get("cwd") or root
-    runs = command_runs(command, cwd, root, detail=True) if runs is None else runs
-    hits, unread = irreversible_hits(runs, root, policy, cats)
-    hits += lark_hits(command, cwd, root, risk, cats)
-    verdict = Verdict()
-    for e, f, text in frozen_commands(runs, pending, root):
-        v = refuse(who, data, "`%s` 被待定决策 %s冻结（冻结的动作：%s）：决策定下以前谁都不做。先做选项中立的准备；要提前做，请研究员先定这条决策。" % (
-            short(text), decision_label(e), f.get("text") or f.get("prefix")))
-        v.irreversible.append({"category": "冻结的命令", "command": short(text), "result": "frozen", "decisions": [str(e.get("id"))]})
-        verdict.merge(v)
-    for text, names in unread:
-        verdict.merge(refuse(who, data, "看不清这条命令，里面像是有不可逆事项清单里的命令（%s）：写成能看清的单条命令再试。" % "、".join(names)))
-    for hit in hits:
-        verdict.merge(gate_verdict(who, data, policy, hit, pending, releases, problem))
-    return verdict
-
-
-def check_edit_irreversible(data, who, policy):
-    """An edit tool writing a file a category of the list watches (Docker Desktop's settings). Protected paths
-    keep their own rule in check_path."""
-    cats = irreversible_categories(policy)
-    tool_input = data.get("tool_input") or {}
-    path = tool_input.get("file_path") or tool_input.get("notebook_path")
-    if not cats or not isinstance(path, str) or not path:
-        return Verdict()
-    root = project_root(data)
-    full = full_path(path, root)
-    hits = []
-    for cat in cats:
-        for rule in cat["match"]:
-            group = rule.get("writes")
-            if group and group != "protected" and in_group(group, full, cat, root, policy):
-                hits.append({"cat": cat, "text": "%s %s" % (data.get("tool_name"), path), "argv": [str(data.get("tool_name")), path],
-                             "heads": [str(data.get("tool_name"))], "where": root, "root": root, "app": None, "paths": [path],
-                             "targets": [full]})
-                break
-    if not hits:
-        return Verdict()
-    pending, releases, problem = load_gates(root)
-    verdict = Verdict()
-    for hit in hits:
-        verdict.merge(gate_verdict(who, data, policy, hit, pending, releases, problem))
-    return verdict
-
-
 def check_ledger(data, who, policy, root, sub):
     scribe = policy.get("scribe_role", "pmo-scribe")
     fixed = (policy["agents"].get(scribe) or {}).get("fixed_session") or scribe
@@ -2203,6 +1111,20 @@ def check_ledger(data, who, policy, root, sub):
         who.label, sub, fixed, (policy.get("msg") or {}).get("register_request", "登记请求")))
 
 
+NOT_WHOLE = "命令里除了飞书和台账调用还有别的，hook 不替整条命令答允许，权限照 Claude Code 自己的检查（其中的飞书或台账调用：%s）"
+
+
+def whole(verdict, parsed):
+    """An allow from this hook lets the whole command past Claude Code's own permission checks, so it stands
+    only for a command the hook judged whole (parsed.plain: nothing but lark-cli, meegle and the project's own
+    ledger.py, cd between them). For any other command the allow becomes no answer, with no rewritten input;
+    guard.jsonl keeps why. Deny and ask stay as they are."""
+    if verdict.decision == "allow" and not parsed.plain:
+        verdict.decision, verdict.updated = None, None
+        verdict.reasons = [NOT_WHOLE % "；".join(verdict.reasons)]
+    return verdict
+
+
 def check_bash(data, who, policy, risk, soft, command=None):
     tool_input = data.get("tool_input") or {}
     command = tool_input.get("command") or "" if command is None else command
@@ -2212,13 +1134,6 @@ def check_bash(data, who, policy, risk, soft, command=None):
                   check_setup(data, who, root, command), check_git(data, who, command, root)):
         if found:
             verdict.merge(found)
-    if verdict.decision == "deny":
-        return verdict
-    runs = command_runs(command, data.get("cwd") or root, root, detail=True)
-    owned = check_owned_writes(who, policy, root, runs)
-    if owned:
-        return verdict.merge(owned)
-    verdict.merge(check_irreversible(data, who, policy, root, command, risk, runs))
     if verdict.decision == "deny":
         return verdict
     ledger = ledger_write(command, data.get("cwd") or root)
@@ -2233,7 +1148,7 @@ def check_bash(data, who, policy, risk, soft, command=None):
     if hidden:
         return verdict.merge(refuse(who, data, "看不到实际执行的飞书命令（%s）；请直接写出单条命令。" % "；".join(hidden)))
     if not parsed.invocations:
-        return verdict
+        return whole(verdict, parsed)
     rewritable = (parsed.simple and len(parsed.invocations) == 1 and data.get("tool_name") == "Bash"
                   and "$" not in command and "`" not in command)
     for inv in parsed.invocations:
@@ -2249,7 +1164,7 @@ def check_bash(data, who, policy, risk, soft, command=None):
             verdict.updated = updated
     if verdict.decision == "deny":
         verdict.updated = None
-    return verdict
+    return whole(verdict, parsed)
 
 
 # --------------------------------------------------------------- files
@@ -2334,7 +1249,7 @@ def check_path(data, who, policy, soft):
         return Verdict()
     rel = rels[0]
     if any(path_matches(r, policy["h_paths"]) for r in rels):
-        if who.role in policy["h_writers"]:
+        if who.role in policy["h_writers"] or who.researcher:
             if data.get("permission_mode") in pool.BYPASS_MODES:
                 return Verdict("deny", "评测协议用到的文件改动要研究员确认；当前是 %s 模式，确认框弹不出来，请研究员自己改。" % data["permission_mode"])
             return Verdict("ask", "评测协议用到的文件（评测脚本、评测集和接口），改动要研究员确认。")
@@ -2456,11 +1371,6 @@ def log(root, data, who, verdict, soft):
         }
         if verdict.gate:
             rec["agent_turn_gate"] = verdict.gate
-        if verdict.irreversible:                            # each category of the list met, and what became of it
-            rec["irreversible"] = verdict.irreversible
-            released = sorted({d for g in verdict.irreversible if g.get("result") == "released" for d in g.get("decisions") or []})
-            if released and verdict.decision != "deny":
-                rec["released_by"] = released               # the decisions whose releases let the call through
         if WRAPUP_TOOL.match(str(data.get("tool_name"))):   # route.py audit: questions left in, by who started the turn
             tool_input = data.get("tool_input") if isinstance(data.get("tool_input"), dict) else {}
             rec["asked"] = any(filled(tool_input.get(k)) for k in ASK_KEYS)
@@ -2540,7 +1450,7 @@ def evaluate(data):
         command = (data.get("tool_input") or {}).get("command")
         verdict = check_bash(data, who, policy, risk, soft, command) if command else Verdict()
     elif tool in ("Edit", "Write", "NotebookEdit"):
-        verdict = check_path(data, who, policy, soft).merge(check_edit_irreversible(data, who, policy))
+        verdict = check_path(data, who, policy, soft)
     elif tool in ("Agent", "Task"):
         verdict = check_agent(data, who, policy, soft)
     elif tool == "AskUserQuestion":
@@ -2566,7 +1476,7 @@ def main():
             out["permissionDecisionReason"] = "；".join(verdict.reasons) or verdict.decision
             if verdict.updated is not None:
                 out["updatedInput"] = verdict.updated
-        context = verdict.context() + ["提醒：" + s for s in soft]
+        context = verdict.notes + ["提醒：" + s for s in soft]
         if context:
             out["additionalContext"] = "\n".join(context)
         if len(out) > 1:

@@ -26,7 +26,9 @@ started a turn) and ask_ok (the decision the entry may ask the researcher about 
 turn); the guard hook reads them.
 
 setup.py copies this file to .claude/hooks/ (for the hooks) and .claude/solo-lab/bin/
-(for route.py and ledger.py).
+(for route.py and ledger.py). Being the one module both sides load, it also holds what
+ledger.py and the inbox hook must agree on about decisions that wait for the researcher:
+the expiry time read from org/decisions.md, and which decisions 到期默认 may take.
 
     .claude/state/pool.json            claims, permits, pending, tombstones, work item
                                        owners, refill requests, focus flags, re-attach notes
@@ -182,10 +184,12 @@ def log_event(root, rec):
 
 
 def read_events(root):
+    """The records of dispatch.jsonl. A line that is no JSON object is skipped, and so is one with a byte that
+    is no UTF-8: the hooks that read the log (the injection after a compaction, the open items) go on with the rest."""
     out = []
     path = os.path.join(root, ".claude", "logs", "dispatch.jsonl")
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 try:
                     rec = json.loads(line)
@@ -204,6 +208,87 @@ def manifest_version(root):
             return json.load(f).get("plugin_version")
     except (OSError, ValueError, AttributeError):
         return None
+
+
+# ---------------------------------------------------- decisions waiting
+# How long a reversible decision waits before 到期默认 may take it, and which waiting decisions may take it.
+# ledger.py (confirm --by 到期默认, query queue) and the inbox hook (the entry's lines about decisions past
+# their expiry) both work it out here, each time they need it, from org/decisions.md and the decision's
+# registration time: the local decision state keeps no expiry time of its own (1.0.6), so the two never disagree.
+EXPIRY_HOURS = 24
+EXPIRY_KEY = "可逆决策的到期时长"
+DURATION = r"(\d+(?:\.\d+)?)\s*(小时|天)"
+EXPIRY_FALLBACK = re.compile(r"读不到时?按\s*\d+(?:\.\d+)?\s*(?:小时|天)算")        # the tail of the plugin's own line
+EXPIRY_CHANGE = "改成|改为|改到|延长到|延长为|延长至|缩短到|缩短为|缩短至|调整为|调整到|调成|调到|变成|变为"
+EXPIRY_CHANGED = re.compile(r"(?:%s)[^0-9\n，,。；;]{0,8}?%s" % (EXPIRY_CHANGE, DURATION))
+# What follows the key when a line states a time, readable or not: a colon or an equals sign, 是 / 为 / 定为 with a
+# number after it, or a number straight away (：48h, ：一周, 是 2d, 72). A line that only mentions the key does not.
+EXPIRY_STATED = re.compile(r"\s*(?:[:：=＝]|(?:是|为|定为|定成|设为|设成)\s*(?:登记后\s*)?[0-9一二两三四五六七八九十半]|[0-9])")
+EXPIRY_UNREADABLE = ("提醒：org/decisions.md 里“%s”一行读不出时长（写成“登记后 24 小时”或“登记后 2 天”；改时长的写成“改成登记后 36 小时”），"
+                     "按 %d 小时算" % (EXPIRY_KEY, EXPIRY_HOURS))
+
+
+def read_expiry(line):
+    """(hours, says nothing) for a line of org/decisions.md that names the expiry time. hours when the line
+    states one time (登记后 24 小时, 登记后 2 天) or says what the time becomes (从 24 小时改成 36 小时 is 36);
+    None otherwise: (None, True) for a line that only mentions the key (先不动，下个月再看), which settles
+    nothing; (None, False) for one that states a time and cannot be read without guessing: several times and
+    no word for which one holds, a time that is no number (改成两天), another unit or none (：48h, ：一周, ：72)."""
+    rest = EXPIRY_FALLBACK.sub("", line.split(EXPIRY_KEY, 1)[1])
+    if re.search(EXPIRY_CHANGE, rest):
+        hits = EXPIRY_CHANGED.findall(rest)
+    else:
+        hits = re.findall(DURATION, rest)
+        if not hits and not re.search("小时|天", rest) and not EXPIRY_STATED.match(rest):
+            return None, True
+        if len(hits) != 1:
+            return None, False
+    if not hits:
+        return None, False
+    n, unit = hits[-1]
+    hours = float(n) * (24 if unit == "天" else 1)
+    return (hours, False) if hours > 0 else (None, False)
+
+
+def expiry_hours(root):
+    """(hours, where from, reminder or None): how long a reversible decision waits before 到期默认 may take
+    it, counted from its registration. The last line of org/decisions.md that states the time decides, so what
+    the researcher wrote under 补充决定 wins over the plugin's own line; without one, 24 hours. A line that
+    cannot be read without guessing is not guessed at: 24 hours, with a reminder."""
+    try:
+        with open(os.path.join(root, "org", "decisions.md"), encoding="utf-8") as f:
+            lines = [line for line in f.read().splitlines() if EXPIRY_KEY in line]
+    except (OSError, UnicodeDecodeError):
+        return EXPIRY_HOURS, "默认", None
+    for line in reversed(lines):
+        hours, nothing = read_expiry(line)
+        if hours:
+            return hours, "org/decisions.md", None
+        if not nothing:
+            break
+    return EXPIRY_HOURS, "默认", EXPIRY_UNREADABLE if lines else None
+
+
+def rolled_back(entry):
+    """When a waiting decision was rolled back to 待决定 after the researcher had decided it: rolled_back_at
+    (reopened_at in a local decision state written by 1.0.4 or 1.0.5). None when it never was."""
+    return entry.get("rolled_back_at") or entry.get("reopened_at") or None
+
+
+def takes_default(entry):
+    """May 到期默认 take this waiting decision once it has expired? Only a reversible one that a session
+    carries out with nothing for the researcher to do by hand (default_applies, worked out when it was
+    registered), and never one the researcher decided once and rolled back: that one waits for the researcher."""
+    return entry.get("default_applies") is True and not rolled_back(entry)
+
+
+def expires_at(entry, hours):
+    """When a waiting decision expires: its registration plus the expiry time. None when the registration
+    time cannot be read."""
+    since = parse_time(entry.get("registered_at"))
+    if since is None:
+        return None
+    return (since if since.tzinfo else since.astimezone()) + datetime.timedelta(hours=hours)
 
 
 # ------------------------------------------------------- session status
@@ -869,6 +954,154 @@ def open_items(root, name, owners=None):
     return sorted(sent.items()), sorted(owed.items())
 
 
+# ----------------------------------------------- research tasks of held items
+# A session whose context was compacted still knows the work items it holds, not where they sit in their
+# research task: which decision the task waits on, which conditions of the experiment are settled, what is
+# paused. The task's main document keeps that in its 状态包 (`ledger.py status <研究任务 ID>`; the entry keeps it
+# current). So what is injected after a compaction names the research tasks of the items the session holds,
+# as far as the registration receipts say (packages/sent/<ID>.json, written by ledger.py: type, task, source),
+# with the command that prints a task's 状态包, given once. Local files only: nothing here calls Feishu, and
+# whatever cannot be found becomes one line that says so, never an error. The line shares the injection's
+# limit with the role text and the open items, and the entry's role text nearly fills it: the line names the
+# tasks, not every item again, and the open items are written by session (items_text).
+TASK_TYPE = "research_task"            # the contract's main-line type, as a receipt names it
+TASK_HOPS = 5                          # how far up 来源工作项 the receipts are followed
+TASKS_SHOWN = 4                        # research tasks named in the line, at most
+TASK_ITEMS_SHOWN = 6                   # work items named for one research task, at most
+STATUS_CMD = "python3 -I .claude/solo-lab/bin/ledger.py status %s"
+COMPACTED = "上下文刚压缩过，接着干活之前先读所属研究任务的状态包（规矩照角色说明里“压缩上下文以后”那一条）："
+NOTHING_HELD = ("上下文刚压缩过。派发记录里本会话没有未了的工作项：手上确实没有的，说一句“跳过”再继续；"
+                "有的，照角色说明里“压缩上下文以后”那一条找到它所属的研究任务，先运行 %s 读状态包。" % (STATUS_CMD % "<研究任务 ID>"))
+TASK_UNKNOWN = ("%s 在本地回执里查不到所属研究任务：用 ledger.py get <工作项 ID> 看“所属研究任务”字段，"
+                "没有就用 ledger.py trace <工作项 ID> 沿“来源工作项”往上找，找到了%s；找不到就说一句“跳过”再继续")
+EACH_TASK = "逐条运行 %s" % (STATUS_CMD % "<研究任务 ID>")
+# The entry keeps the 状态包 of every research task that is not archived, so it reads them all, whatever it holds.
+ENTRY_COMPACTED = COMPACTED.replace("所属研究任务的", "研究任务的")
+ENTRY_TASKS = ENTRY_COMPACTED + "未了事项属于研究任务 %s；连同其余没归档的（ledger.py query tasks 列出），" + EACH_TASK + "。"
+ENTRY_NOTHING = ENTRY_COMPACTED + "用 ledger.py query tasks 列出没归档的研究任务，" + EACH_TASK + "；一条都没有，说一句“跳过”再继续。"
+HINT_FAILED = "上下文刚压缩过。没能从本地回执查出手上工作项所属的研究任务（%s）：照角色说明里“压缩上下文以后”那一条自己找，找不到就说一句“跳过”再继续。"
+
+
+RECEIPT_NAME = re.compile(r"(\d+)(?:-.*)?\.json$")       # <ID>.json, <ID>-<draft file>.json; not reply-<ID>-….json
+
+
+def receipt_files(root):
+    """{work item ID: [paths]} of the registration receipts in packages/sent/, <ID>.json before <ID>-<draft
+    file>.json, from one listing of the folder; {} when it cannot be listed."""
+    sent, out = os.path.join(root, "packages", "sent"), {}
+    try:
+        names = os.listdir(sent)
+    except OSError:
+        return out
+    for name in sorted(names, key=lambda n: ("-" in n, n)):
+        m = RECEIPT_NAME.match(name)
+        if m:
+            out.setdefault(m.group(1), []).append(os.path.join(sent, name))
+    return out
+
+
+def registration_receipt(root, item_id, files=None, seen=None):
+    """The registration receipt of a work item, packages/sent/<ID>.json or <ID>-<draft file>.json; {} when
+    there is none or it cannot be read. files: receipt_files(root), when the caller looks up many; seen:
+    receipts read before, by ID."""
+    key = str(item_id)
+    if seen is not None and key in seen:
+        return seen[key]
+    found = {}
+    for path in (receipt_files(root) if files is None else files).get(key, []):
+        try:
+            with open(path, encoding="utf-8") as f:
+                rec = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if isinstance(rec, dict) and str(rec.get("work_item_id")) == key:
+            found = rec
+            break
+    if seen is not None:
+        seen[key] = found
+    return found
+
+
+def research_task_of(root, item_id, files=None, seen=None):
+    """The ID of the research task a work item belongs to, by the registration receipts alone: the item
+    itself when it is a research task, else the task its receipt names (所属研究任务), else the same for the
+    item it came from (来源工作项), TASK_HOPS items up at most. None when the receipts do not say."""
+    item, walked = str(item_id or "").lstrip("#"), set()
+    files = receipt_files(root) if files is None else files
+    for _ in range(TASK_HOPS):
+        if not item.isdigit() or item in walked:
+            return None
+        walked.add(item)
+        rec = registration_receipt(root, item, files, seen)
+        if rec.get("type") == TASK_TYPE:
+            return item
+        task = str(rec.get("task") or "").lstrip("#")
+        if task.isdigit():
+            return task
+        item = str(rec.get("source") or "").lstrip("#")
+    return None
+
+
+def listed(ids, shown):
+    """#1、#2 … for the first IDs, then how many there are when more."""
+    text = "、".join("#%s" % i for i in ids[:shown])
+    return text + (" 等 %d 条" % len(ids) if len(ids) > shown else "")
+
+
+def status_hint(root, items, entry=False):
+    """What a session is told once its context was compacted: the research tasks of the work items it holds
+    (items: their IDs, the ones it is working on first) and the command that prints a task's 状态包, written
+    once: with the task's ID when there is one task, with a placeholder when there are several. For an item
+    whose research task the receipts do not give, how to find it and that it may be skipped; with no item,
+    that there is nothing to read. The entry (entry) keeps the 状态包 of every research task that is not
+    archived: it is told to list those and read each, whatever it holds, and its own items are named by their
+    tasks alone (the open items above the line have the IDs). One paragraph; never raises."""
+    try:
+        ids = []
+        for i in items or []:
+            i = str(i or "").lstrip("#")
+            if i.isdigit() and i not in ids:
+                ids.append(i)
+        tasks, unknown, files, seen = {}, [], receipt_files(root) if ids else {}, {}       # the folder is listed once
+        for i in ids:
+            task = research_task_of(root, i, files, seen)
+            if task:
+                tasks.setdefault(task, []).append(i)
+            else:
+                unknown.append(i)
+        if entry:
+            return ENTRY_TASKS % listed(list(tasks), TASKS_SHOWN) if tasks else ENTRY_NOTHING
+        if not ids:
+            return NOTHING_HELD
+        shown = list(tasks.items())[:TASKS_SHOWN]
+        one = len(tasks) == 1                        # one task: the command with its ID; several: the command once
+        parts = []
+        for task, held in shown:
+            held = [i for i in held if i != task]
+            parts.append("%s研究任务 #%s%s" % ("%s 属于" % listed(held, TASK_ITEMS_SHOWN) if held else "手上的是", task,
+                                            "，运行 %s" % (STATUS_CMD % task) if one else ""))
+        if len(tasks) > TASKS_SHOWN:
+            parts.append("另有 %d 条研究任务，用 ledger.py query tasks 列出" % (len(tasks) - TASKS_SHOWN))
+        if not one and tasks:
+            parts.append(EACH_TASK)
+        if unknown:
+            parts.append(TASK_UNKNOWN % (listed(unknown, TASK_ITEMS_SHOWN),
+                                         "运行 %s" % (STATUS_CMD % "<研究任务 ID>") if one or not tasks else "照上面的命令读"))
+        return COMPACTED + "；".join(parts) + "。"
+    except Exception as e:                           # a hint, never a reason to fail the hook
+        return HINT_FAILED % (str(e)[:120] or type(e).__name__)
+
+
+def compaction_hint(root, policy, claim, owners=None, current=None):
+    """status_hint for the session that holds claim, from the open items the dispatch log gives it and the item
+    its status file names (current). Whatever goes wrong on the way becomes the line that says so."""
+    try:
+        sent, owed = open_items(root, claim.get("name"), owners)
+        return status_hint(root, held_items(sent, owed, current), entry=claim.get("role") == policy.get("entry_role"))
+    except Exception as e:
+        return HINT_FAILED % (str(e)[:120] or type(e).__name__)
+
+
 def role_body(root, role):
     try:
         with open(os.path.join(root, ".claude", "agents", role + ".md"), encoding="utf-8") as f:
@@ -889,25 +1122,42 @@ def describe(policy, claim):
 
 
 def items_text(pairs, fmt, more):
-    shown = [fmt % p for p in pairs[:ITEMS_SHOWN]]
+    """The first ITEMS_SHOWN of [(#ID, session)], the items of one session written together (#1、#2→X；#3→Y):
+    a session that assigned many items to a few others sees them all in little room."""
+    groups = {}
+    for item, other in pairs[:ITEMS_SHOWN]:
+        groups.setdefault(other, []).append("#%s" % item)
+    shown = [fmt % ("、".join(ids), other) for other, ids in groups.items()]
     if len(pairs) > ITEMS_SHOWN:
         shown.append(more % (len(pairs) - ITEMS_SHOWN))
     return "；".join(shown)
 
 
-def injection(root, policy, claim, reason="", limit=INJECT_LIMIT, owners=None):
+def held_items(sent, owed, current=None):
+    """The IDs of the work items a session holds, the ones it works on first: what it still owes, the item
+    its last 【委托】 or 【继续】 named (current), then what it assigned and has not got back."""
+    ids = [i for i, _ in owed] + [current] + [i for i, _ in sent]
+    return [i for n, i in enumerate(ids) if i and i not in ids[:n]]
+
+
+def injection(root, policy, claim, reason="", limit=INJECT_LIMIT, owners=None, compacted=False, current=None):
     """Role text injected after a claim, a resume, a compaction or a /clear: the role definition
-    without frontmatter, the open items and a pointer, at most limit characters."""
+    without frontmatter, the open items and a pointer, at most limit characters: what does not fit is cut
+    from the end of the role text, with a pointer to the file. After a compaction (compacted) it ends with
+    the research tasks of the items the session holds and the command that reads a task's 状态包
+    (status_hint); current is the work item the session's status file names."""
     name, role = claim.get("name"), claim.get("role")
     sent, owed = open_items(root, name, owners)
     items = []
     if sent:
-        items.append("委托出去还没交付：" + items_text(sent, "#%s→%s", "另有 %d 条，用 route.py pool --recover 看全"))
+        items.append("委托出去还没交付：" + items_text(sent, "%s→%s", "另有 %d 条，用 route.py pool --recover 看全"))
     if owed:
-        items.append("还欠交付：" + items_text(owed, "#%s（交付给 %s）", "另有 %d 条"))
+        items.append("还欠交付：" + items_text(owed, "%s（交付给 %s）", "另有 %d 条"))
     head = "%s本会话是 %s。下面的角色说明就是本会话的工作说明。" % (reason, describe(policy, claim))
     tail = "未了事项：%s。台账和状态包是正本：开工前用 ledger.py get 读工作项，找人用 route.py pool。完整说明在 .claude/agents/%s.md。" % (
         "；".join(items) or "无", role)
+    if compacted:
+        tail += "\n\n" + status_hint(root, held_items(sent, owed, current), entry=role == policy.get("entry_role"))
     body = role_body(root, role)
     room = limit - len(head) - len(tail) - 4
     if len(body) > room:

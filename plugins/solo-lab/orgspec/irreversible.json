@@ -1,6 +1,6 @@
 {
-  "_说明": "不可逆事项清单。每一类写明包括什么、对应不可逆判据的哪几条、怎么识别、怎么放行。清单里每一类都落到能机械检查的对象上：命令、路径或包的类型，落不到的不进清单；清单以外的事算可逆，到期按决策包写的到期默认动作办。决策包用 name 指一类（“要放行的不可逆动作”一列和“冻结的动作”一节，可以加限定，比如“特权应用：Docker”），包检查按这里核对；setup 用它生成 org/org.md 里的规则正文，并把 recognized_by 含 command 或 path 的几类写进 guard 的 policy.json。match 是识别这一类的规则，满足任一条就算：cmd 是命令开头的几个词，第一个词按文件名比（/usr/bin/sudo 也算 sudo），后面的词原样比；args_any 要求后面的参数里有其中一个；sub_prefix 要求 cmd 后面第一个参数以其中一个开头；app 指 open -a、open -b 或 open 一个 .app 路径打开的应用，app_name 指这条命令打开的应用，都和 apps 的 names 比，不分大小写；remote 指要有别的主机（参数里有 host:路径 或 user@host:路径；ssh、sftp 本身就是）；except 写例外，researcher 指收件人只有研究员本人；paths 写这条命令的文件参数落在哪几组路径里才算；writes 写哪一组路径被任何工具写入就算（编辑工具，或者重定向、cp、mv、tee、sed -i 这类命令）。路径组在这一类的 paths 里列出，或者是 computed_paths 里由项目算出的两组。",
-  "schema_version": 1,
+  "_说明": "不可逆事项清单，写决策包和判断可逆性的依据：每一类写明包括什么（covers）、对应不可逆判据的哪几条（criteria）。决策包用 name 指一类：选项表的“不可逆的动作”一列写这个选项要做的类别，“冻结的动作”一节也可以写类别，类别后面可以带一句说明，比如“特权应用：启动 Docker Desktop”。包检查按这里核对类别在不在清单里，任一选项列了类别的决策包必须写不可逆；清单是必须写不可逆的下限，清单以外的由作者按判据判断。setup 用它生成 org/org.md 的“不可逆事项”一节。hook 不读这份清单，也不按它拦命令，所以这里不写命令怎么识别、怎么放行。sheet_rows 是研究任务单“资源上限”一节里对应这一类的几行。",
+  "schema_version": 2,
   "criteria": {
     "1": "花钱或占用额度：付费调用、追加预算、使用付费的云资源",
     "2": "改权限、身份或机器的系统状态：sudo、安装要管理员权限的组件、改凭据文件的权限、新建系统账号、改 Docker Desktop 的资源设置、改网络和防火墙",
@@ -8,192 +8,62 @@
     "4": "定下付费运行所依赖的实验条件：执行环境、模型和生成设置、数据划分、预算",
     "5": "销毁或移动数据：删除、覆盖、挪动原始数据和评测集的副本，改其他目录的读写权限"
   },
-  "release_rules": {
-    "decision": {
-      "short": "研究员批准、所选选项里列了它的决策",
-      "text": "要有一条研究员批准的决策在所选选项里列了它，才能执行。池会话里没有这样的决策就拒绝，拒绝理由告诉它去写决策包；研究员自己的会话里弹窗确认。每次放行，guard 日志记下决策 ID。放行一直有效，直到后来的一条决策把它收回；待定决策冻结的动作和一条放行重叠时（同一类，限定相同、写的是同一个应用，或者有一方不带限定、是整类），这条放行暂停到那条决策定下来。到期默认记下的决定不放行任何类别。"
-    },
-    "decision_package": {
-      "short": "研究员批准、所选选项里列了它的决策；hook 不拦命令",
-      "text": "要有一条研究员批准的决策在所选选项里列了它，才能做。hook 不拦命令，靠包检查和预算规则：选项里列了它的决策包必须写不可逆，到期只能等研究员。"
-    },
-    "researcher_session": {
-      "short": "不走决策放行：用 shell 命令删改时池会话拒绝，质量序列和研究员自己的会话弹窗确认",
-      "text": "不走决策放行。用 shell 命令删除、移动、覆盖或改权限时，池会话拒绝，质量序列的会话和研究员自己的会话弹窗确认；用编辑工具改照原来的规则，只有质量序列的会话弹窗确认，其余会话一律拒绝。决策包的选项里不写这一类。"
-    }
-  },
-  "computed_paths": {
-    "outside": "项目目录和临时目录（/tmp、/private/tmp、/var/folders、/private/var/folders、$TMPDIR）以外的路径",
-    "protected": "任务文件 spec/task.json 里登记的 protected_paths，默认是评测脚本、评测集和接口"
-  },
   "categories": [
     {
       "id": "admin",
       "name": "管理员权限",
       "covers": "sudo、su、doas",
-      "criteria": [2],
-      "recognized_by": ["command"],
-      "how": "命令：sudo、su、doas",
-      "release": "decision",
-      "match": [
-        {"cmd": ["sudo"]},
-        {"cmd": ["su"]},
-        {"cmd": ["doas"]}
-      ]
+      "criteria": [2]
     },
     {
       "id": "privileged_app",
       "name": "特权应用",
       "covers": "启动会装特权组件的应用，先列 Docker Desktop（open -a Docker）",
-      "criteria": [2],
-      "recognized_by": ["command"],
-      "how": "命令：open -a、open -b 或 open 一个 .app 打开名单里的应用，docker desktop start；应用名单写在这一类的 apps 里，限定写应用名，比如“特权应用：Docker”",
-      "release": "decision",
-      "apps": [
-        {"name": "Docker", "names": ["Docker", "Docker.app", "Docker Desktop", "Docker Desktop.app", "com.docker.docker"]}
-      ],
-      "match": [
-        {"cmd": ["open"], "app": true},
-        {"cmd": ["docker", "desktop", "start"], "app_name": "Docker"},
-        {"cmd": ["docker", "desktop", "restart"], "app_name": "Docker"}
-      ]
+      "criteria": [2]
     },
     {
       "id": "system",
       "name": "系统和账号",
       "covers": "launchctl、defaults write、systemsetup、networksetup、pfctl，用 security 改钥匙串；用 sysadminctl、dscl 新建账号",
-      "criteria": [2],
-      "recognized_by": ["command"],
-      "how": "命令：launchctl、defaults write、systemsetup、networksetup、pfctl、改钥匙串的 security 子命令、sysadminctl -addUser、dscl -create",
-      "release": "decision",
-      "match": [
-        {"cmd": ["launchctl"]},
-        {"cmd": ["defaults", "write"]},
-        {"cmd": ["systemsetup"]},
-        {"cmd": ["networksetup"]},
-        {"cmd": ["pfctl"]},
-        {"cmd": ["security"], "sub_prefix": ["add-", "delete-", "set-", "import", "create-keychain", "default-keychain", "login-keychain", "unlock-keychain", "authorizationdb"]},
-        {"cmd": ["sysadminctl"], "args_any": ["-addUser"]},
-        {"cmd": ["dscl"], "args_any": ["-create"]}
-      ]
+      "criteria": [2]
     },
     {
       "id": "permission",
       "name": "权限",
       "covers": "对 .env、~/.ssh、*.pem、*.key 这类凭据文件，以及项目目录和临时目录以外的路径 chmod、chown、chgrp",
-      "criteria": [2],
-      "recognized_by": ["command", "path"],
-      "how": "命令加路径：chmod、chown、chgrp 的文件参数是凭据文件，或者在项目目录和临时目录以外",
-      "release": "decision",
-      "paths": {
-        "credentials": [".env", ".env.*", "**/.env", "**/.env.*", "~/.ssh", "~/.ssh/**", "**/*.pem", "**/*.key"]
-      },
-      "match": [
-        {"cmd": ["chmod"], "paths": ["credentials", "outside"]},
-        {"cmd": ["chown"], "paths": ["credentials", "outside"]},
-        {"cmd": ["chgrp"], "paths": ["credentials", "outside"]}
-      ]
+      "criteria": [2]
     },
     {
       "id": "docker_resources",
       "name": "Docker 资源",
       "covers": "改 Docker Desktop 的设置文件，或用命令改内存和 CPU",
-      "criteria": [2],
-      "recognized_by": ["path", "command"],
-      "how": "路径、命令：写 Docker Desktop 的设置文件，用编辑工具，或者用重定向、cp、mv、tee、sed -i 这类命令；只认设置文件本身，删除或挪走它的上级目录不算这一类",
-      "release": "decision",
-      "paths": {
-        "docker_settings": [
-          "~/Library/Group Containers/group.com.docker/settings.json",
-          "~/Library/Group Containers/group.com.docker/settings-store.json",
-          "~/.docker/desktop/settings.json",
-          "~/.docker/desktop/settings-store.json"
-        ]
-      },
-      "match": [
-        {"writes": "docker_settings"}
-      ]
+      "criteria": [2]
     },
     {
       "id": "send_out",
       "name": "对外发送",
       "covers": "发邮件，给研究员以外的人或群发消息，git push，用 scp、rsync、ssh 把数据或作业送到别的主机",
       "criteria": [3, 1],
-      "criteria_note": "在集群上跑作业还占额度，也算判据 1",
-      "recognized_by": ["command"],
-      "how": "命令：mail、mailx、sendmail、mutt、msmtp，lark-cli mail 的发送、回复、转发、分享到群（+share-to-chat），发给研究员以外的 lark-cli im 消息，git push，带远程主机的 scp、rsync，ssh、sftp",
-      "release": "decision",
-      "match": [
-        {"cmd": ["mail"]},
-        {"cmd": ["mailx"]},
-        {"cmd": ["sendmail"]},
-        {"cmd": ["mutt"]},
-        {"cmd": ["msmtp"]},
-        {"cmd": ["lark-cli", "mail", "+send"]},
-        {"cmd": ["lark-cli", "mail", "+reply"]},
-        {"cmd": ["lark-cli", "mail", "+reply-all"]},
-        {"cmd": ["lark-cli", "mail", "+forward"]},
-        {"cmd": ["lark-cli", "mail", "+share-to-chat"]},
-        {"cmd": ["lark-cli", "im", "+messages-send"], "except": "researcher"},
-        {"cmd": ["lark-cli", "im", "+messages-reply"], "except": "researcher"},
-        {"cmd": ["git", "push"]},
-        {"cmd": ["scp"], "remote": true},
-        {"cmd": ["rsync"], "remote": true},
-        {"cmd": ["ssh"], "remote": true},
-        {"cmd": ["sftp"], "remote": true}
-      ]
+      "criteria_note": "在集群上跑作业还占额度，也算判据 1"
     },
     {
       "id": "protected",
       "name": "受保护路径",
       "covers": "用 shell 命令删除、移动、覆盖任务文件里登记的受保护路径（默认是评测脚本、评测集和接口），或改它们的权限",
       "criteria": [5],
-      "criteria_note": "收窄到受保护路径",
-      "recognized_by": ["command", "path"],
-      "how": "命令加路径：rm、rmdir、unlink、shred、mv、cp、install、ln、rsync、git rm、git mv、find -delete、truncate、dd、tee、sed -i、perl -i、chmod、chown、chgrp、chflags 的文件参数落在受保护路径里（花括号和通配符展开后比；写进受保护目录本身、删除含受保护路径的上级目录都算），或者用重定向覆盖它们",
-      "release": "researcher_session",
-      "match": [
-        {"cmd": ["rm"], "paths": ["protected"]},
-        {"cmd": ["rmdir"], "paths": ["protected"]},
-        {"cmd": ["unlink"], "paths": ["protected"]},
-        {"cmd": ["shred"], "paths": ["protected"]},
-        {"cmd": ["mv"], "paths": ["protected"]},
-        {"cmd": ["cp"], "paths": ["protected"]},
-        {"cmd": ["install"], "paths": ["protected"]},
-        {"cmd": ["ln"], "paths": ["protected"]},
-        {"cmd": ["rsync"], "paths": ["protected"]},
-        {"cmd": ["git", "rm"], "paths": ["protected"]},
-        {"cmd": ["git", "mv"], "paths": ["protected"]},
-        {"cmd": ["find"], "args_any": ["-delete"], "paths": ["protected"]},
-        {"cmd": ["truncate"], "paths": ["protected"]},
-        {"cmd": ["dd"], "paths": ["protected"]},
-        {"cmd": ["tee"], "paths": ["protected"]},
-        {"cmd": ["sed"], "args_any": ["-i"], "paths": ["protected"]},
-        {"cmd": ["perl"], "args_any": ["-i", "-pi"], "paths": ["protected"]},
-        {"cmd": ["chmod"], "paths": ["protected"]},
-        {"cmd": ["chown"], "paths": ["protected"]},
-        {"cmd": ["chgrp"], "paths": ["protected"]},
-        {"cmd": ["chflags"], "paths": ["protected"]},
-        {"writes": "protected"}
-      ]
+      "criteria_note": "收窄到受保护路径"
     },
     {
       "id": "spend",
       "name": "花钱",
       "covers": "付费调用、追加预算、付费云资源",
-      "criteria": [1],
-      "recognized_by": ["package"],
-      "how": "决策包和预算规则：选项里列了它的决策包写不可逆；研究任务的总预算和资源上限照预算规则",
-      "release": "decision_package"
+      "criteria": [1]
     },
     {
       "id": "paid_run_conditions",
       "name": "付费运行的条件",
       "covers": "执行环境、模型和生成设置、数据划分、预算",
       "criteria": [4],
-      "recognized_by": ["package"],
-      "how": "决策包和研究任务单：选项里列了它的决策包写不可逆；研究任务单“资源上限”一节的执行环境、计算资源写“待研究员确认”，或者写定下它的决策 ID，写了具体内容却没有决策 ID 的，登记时脚本提示要进决策队列",
-      "release": "decision_package",
       "sheet_rows": ["执行环境", "计算资源"]
     }
   ]

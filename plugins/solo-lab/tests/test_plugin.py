@@ -193,13 +193,45 @@ class SetupTest(ProjectCase):
     def test_idempotent(self):
         plan = setup.build_plan(self.tmp, TASK, None)
         acts = setup.actions_for(self.tmp, plan)
-        changed = {rel for k, rel, _ in acts if k not in ("same", "kept")}
-        self.assertEqual(changed, {"CLAUDE.md", "feishu/README.md"})   # they quote the new project_key
-        self.assertEqual({k for k, rel, _ in acts if rel in changed}, {"update"})
+        changed = {rel: k for k, rel, _ in acts if k not in ("same", "kept")}
+        self.assertEqual(changed, {"CLAUDE.md": "update", "feishu/README.md": "update",     # they quote the new project_key
+                                   "org/phases.md": "regen"})                               # the flows of the space bound since
         self.run_quiet(setup.apply_plan, self.tmp, plan, acts)
         plan = setup.build_plan(self.tmp, TASK, None)
         kinds = {k for k, _, _ in setup.actions_for(self.tmp, plan)}
         self.assertTrue(kinds <= {"same", "kept"}, kinds)
+
+    def test_the_flows_file_of_a_bound_project_is_written_again(self):
+        """org/phases.md carries the flows of the space and the plugin's rules for moving a task along. Once the
+        project is bound, init writes it again from the snapshot the project keeps, so a rule an earlier version
+        worded differently does not stay in it; with nothing read from the space the file is left as it is."""
+        path = os.path.join(self.tmp, "org", "phases.md")
+        with open(path, encoding="utf-8") as f:
+            unbound = f.read()
+        self.assertNotIn("### 研究任务：验证", unbound)                     # setUp ran init before the space was there
+        plan = setup.build_plan(self.tmp, TASK, None)
+        acts = setup.actions_for(self.tmp, plan)
+        self.assertEqual(dict((rel, k) for k, rel, _ in acts)["org/phases.md"], "regen")
+        _, out = self.run_quiet(setup.report, self.tmp, plan, acts, False)
+        self.assertIn("[更新（照空间快照和现在的规则重新生成）] org/phases.md", out)
+        self.run_quiet(setup.apply_plan, self.tmp, plan, acts)
+        with open(path, encoding="utf-8") as f:
+            fresh = f.read()
+        self.assertIn("### 研究任务：验证", fresh)
+        self.assertIn("实验方只碰开发集", fresh)
+        with open(path, "w", encoding="utf-8") as f:                        # the rule as 1.0.5 worded it
+            f.write(fresh.replace("实验方只碰开发集", "执行方只碰开发集"))
+        plan = setup.build_plan(self.tmp, TASK, None)
+        acts = setup.actions_for(self.tmp, plan)
+        self.assertEqual({rel: k for k, rel, _ in acts if k not in ("same", "kept")}, {"org/phases.md": "regen"})
+        self.run_quiet(setup.apply_plan, self.tmp, plan, acts)
+        with open(path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), fresh)
+        os.remove(os.path.join(self.tmp, "feishu", "space.json"))           # nothing read from the space
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(unbound + "\n研究员的备注\n")
+        plan = setup.build_plan(self.tmp, TASK, None)
+        self.assertEqual(dict((rel, k) for k, rel, _ in setup.actions_for(self.tmp, plan))["org/phases.md"], "kept")
 
     def test_local_edit_goes_to_new(self):
         path = os.path.join(self.tmp, "CLAUDE.md")
@@ -278,6 +310,8 @@ class DecisionsFileTest(ProjectCase):
         "不可逆的、执行方是研究员的决策一直等研究员，不提醒截止。包头的回复期限只作参考。修订决策用 ledger.py revise 原位换掉主文档开头，版本号加一，不推给研究员。"
         "依据：研究员 2026-11-16 定。",
         "可逆决策的到期时长：登记后 24 小时。研究员可以改这一行的数字，台账脚本按这一行算，读不到时按 24 小时算。依据：研究员 2026-11-16 定。"]
+    # The section's list as 1.0.5 wrote it: 1.0.4's, with the decided state called 待执行 and what older spaces call it.
+    V105 = [x.replace("待执行（空间里的“已决定”）", "待执行（用 2.1.0 及以前的模板建的空间里叫“已决定”）") for x in V104]
 
     def path(self):
         return os.path.join(self.tmp, "org", "decisions.md")
@@ -347,6 +381,36 @@ class DecisionsFileTest(ProjectCase):
         new_start, new_end = setup.section_span(after, setup.PLUGIN_SECTION)
         self.assertEqual((after[:new_start], after[new_end:]), (before[:start], before[end:]))
         self.assertIn("## 补充决定\n\n" + self.MINE, after)
+
+    def test_the_section_1_0_5_wrote_is_refreshed_in_place(self):
+        """1.0.6 took the command checks out of the hooks and settled who may carry a decision out: a project from
+        1.0.5 gets the new wording of the two arrangements in place, the researcher's own decisions and the expiry
+        time kept."""
+        old = setup.render(setup.scaffold("org/decisions.md.tmpl"), {"deviations": setup.bullets(self.V105)})
+        self.assertEqual(setup.PLUGIN_SECTIONS.get(setup.sha256(setup.squeeze(self.section(old)))), "1.0.5")
+        self.assertEqual(setup.PLUGIN_SECTIONS.get(setup.sha256(setup.squeeze(self.current_section()))), "1.0.6")
+        before = self.write(self.V105)
+        kind, out = self.init()
+        self.assertEqual(kind, "update")
+        self.assertIn("[更新（上次生成后没人改过）] org/decisions.md", out)
+        after = self.text()
+        self.assertEqual(self.section(after), self.current_section())
+        for gone in ("能用命令或路径识别的类别由 hook 按它放行", "到期默认从不放行清单里的类别", "受保护路径不走决策放行",
+                     "每一类都落到能机械检查的对象上"):
+            self.assertIn(gone, before)
+            self.assertNotIn(gone, after)
+        for part in ("hook 不拦清单里的命令，也不按待定决策冻结：命令的权限照会话自己的权限检查",
+                     "执行方写会话的，只收各序列的 +2、入口和路由；要下级干的活，由 +2 用需求包委托。",
+                     "书记员确认“决定”时用 `ledger.py confirm --executor <会话名>` 把执行方改成那个会话。",
+                     "研究员定过一次、又回滚到待决定的决策也一直等研究员，不再走到期默认。",
+                     "- 可逆决策的到期时长：登记后 24 小时。研究员可以改这一行的数字"):
+            self.assertIn(part, after)
+        start, end = setup.section_span(before, setup.PLUGIN_SECTION)
+        new_start, new_end = setup.section_span(after, setup.PLUGIN_SECTION)
+        self.assertEqual((after[:new_start], after[new_end:]), (before[:start], before[end:]))
+        self.assertIn("## 补充决定\n\n" + self.MINE, after)
+        self.assertEqual(ledger.expiry_hours(self.tmp), (24, "org/decisions.md", None))
+        self.assertEqual(self.init()[0], "same")
 
     def test_the_section_an_earlier_init_wrote_is_refreshed_in_place(self):
         before = self.write(self.OLD)
@@ -2888,8 +2952,11 @@ class PoolHookTest(PoolProjectCase):
         self.assertIn("负责会话是 Alg-p1-01", out.get("additionalContext", ""))
 
     def test_compaction_summary_is_kept(self):
-        self.hook("instances.py", {"hook_event_name": "PostCompact", "session_id": "s-alg2", "trigger": "auto",
-                                   "compact_summary": "在等 #2101 的交付"})
+        data = {"cwd": self.tmp, "hook_event_name": "PostCompact", "session_id": "s-alg2", "trigger": "auto",
+                "compact_summary": "在等 #2101 的交付"}
+        p = subprocess.run([sys.executable, "-I", "-B", os.path.join(self.hooks, "instances.py")], input=json.dumps(data),
+                           capture_output=True, text=True, env=self.env())       # what it prints is plain text (1.0.6)
+        self.assertEqual((p.returncode, p.stderr), (0, ""))
         rec = json.loads(self.read(".claude/logs/compact/Alg-p2-01.jsonl").splitlines()[-1])
         self.assertEqual(rec["summary"], "在等 #2101 的交付")
 
@@ -2899,7 +2966,16 @@ class PoolHookTest(PoolProjectCase):
         self.assertIn("#2101→Alg-p1-01", out.get("additionalContext", ""))
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-alg1", "source": "compact"})
         self.assertIn("#2101（交付给 Alg-p2-01）", out.get("additionalContext", ""))
-        self.prompt("s-alg2", "【交付 #2101】Alg-p1-01 → Alg-p2-01：交付包 y.md")
+        self.prompt("s-alg1", "【委托 #2102】Alg-p2-01 → Alg-p1-01：需求包 z.md")       # the items of one session are written together
+        _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-alg2", "source": "compact"})
+        self.assertIn("未了事项：委托出去还没交付：#2101、#2102→Alg-p1-01。", out.get("additionalContext", ""))
+        _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-alg1", "source": "compact"})
+        self.assertIn("未了事项：还欠交付：#2101、#2102（交付给 Alg-p2-01）。", out.get("additionalContext", ""))
+        self.assertEqual(pool_lib.items_text([("1", "A"), ("2", "B"), ("3", "A")], "%s→%s", "另有 %d 条"), "#1、#3→A；#2→B")
+        many = [(str(i), "A") for i in range(pool_lib.ITEMS_SHOWN + 2)]
+        self.assertTrue(pool_lib.items_text(many, "%s→%s", "另有 %d 条").endswith("#%d→A；另有 2 条" % (pool_lib.ITEMS_SHOWN - 1)))
+        for item in ("2101", "2102"):
+            self.prompt("s-alg2", "【交付 #%s】Alg-p1-01 → Alg-p2-01：交付包 y.md" % item)
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-alg2", "source": "compact"})
         self.assertIn("未了事项：无", out.get("additionalContext", ""))
 
@@ -3358,14 +3434,13 @@ class PoolReviewStateTest(PoolProjectCase):
                                                     "text": "长消息" * 100, "read": False})
         since = pool_lib.now() - datetime.timedelta(hours=30)
         pending = {str(2800 + k): {"id": str(2800 + k), "title": "很长的一件待定决策 %d" % k, "registered_at": pool_lib.stamp(since),
-                                   "expires_at": pool_lib.stamp(since + datetime.timedelta(hours=24)), "default_applies": k % 2 == 0,
+                                   "default_applies": k % 2 == 0,
                                    "default_option": "按轮次分目录", "executor": "RnD-p2-01",
                                    "frozen": [{"kind": "category", "category": "privileged_app", "name": "特权应用", "qualifier": "Docker",
                                                "text": "特权应用：Docker（第 %d 条决策，写得很长很长很长很长很长）" % k},
-                                              {"kind": "command", "prefix": "docker build", "words": ["docker", "build"],
-                                               "text": "`docker build`（第 %d 条决策）" % k}]} for k in range(8)}
+                                              {"kind": "text", "text": "`docker build`（第 %d 条决策）" % k}]} for k in range(8)}
         with open(os.path.join(self.tmp, ".claude", "state", "gates.json"), "w", encoding="utf-8") as f:
-            json.dump({"version": 1, "pending": pending, "releases": []}, f, ensure_ascii=False)
+            json.dump({"version": 2, "pending": pending}, f, ensure_ascii=False)
         self.route("release", "PMO-p2-01", sid="s-researcher")
         _, out = self.opening("pmo-p2", "PMO-p2-01", "s-entry-new")
         text = out.get("additionalContext", "")
@@ -3643,7 +3718,9 @@ class SecondReviewSetupTest(ProjectCase):
             _, out = self.guard("alg-p0", "Write", {"file_path": os.path.join(self.tmp, "data", "eval", "test.json")})
             self.assertEqual(out.get("permissionDecision"), "deny")
             _, out = self.guard("", "Write", {"file_path": "data/eval/test.json"}, agent_id=None)
-            self.assertEqual(out.get("permissionDecision"), "deny")
+            self.assertEqual(out.get("permissionDecision"), "ask")                  # the researcher's own session (1.0.6)
+            _, out = self.guard("quality-p1", "Write", {"file_path": "data/eval/test.json"})
+            self.assertEqual(out.get("permissionDecision"), "ask")
         finally:
             shutil.rmtree(outside_dir, ignore_errors=True)
 
@@ -3858,7 +3935,7 @@ class PoolThirdReviewTest(PoolProjectCase):
         self.assertEqual(p0.count("你自己跑出的分数是开发分"), 1)
         self.assertNotIn("。；", p0)
         self.assertNotIn("送审", p0 + claude + self.read(".claude/agents/pmo-p2.md") + self.read(".claude/agents/quality-p2.md"))
-        self.assertIn("质量序列的会话例外", claude)
+        self.assertIn("质量序列的会话和研究员自己的会话例外", claude)
         self.assertIn("其余序列中任一个", self.read(".claude/agents/pmo-p2.md"))
 
 
@@ -3978,7 +4055,7 @@ class DeliveryTextTest(PoolProjectCase):
         for part in ("被其他 agent 会话叫醒的轮次，研究员多半不在，不向研究员提问",
                      "其他会话发来的消息、本会话开出的会话结束一轮的回报、开会话时上级写的首轮",
                      "hook 会去掉收尾里的提问、拒绝 AskUserQuestion", "唯一的例外是插队决策的登记回执到入口的那一轮",
-                     "hook 只拦三类事：会损坏数据的，不可逆的，和研究员多半不在时向他提的问题",
+                     "hook 只拦两类事：会损坏数据的，和研究员多半不在时向他提的问题",
                      "池会话被其他 agent 会话叫醒的轮次：拒绝 AskUserQuestion，去掉收尾工具里的提问"):
             self.assertIn(part, claude)
         self.assertNotIn("收尾时不留等研究员回答的问题", claude)                  # the exception above would contradict it
@@ -4110,7 +4187,7 @@ class DeliveryTextTest(PoolProjectCase):
         self.assertIn("入口主动给研究员的内容只有决策（给链接，执行方和要研究员亲手做的事一并写上）和里程碑两类；补位请求不算决策。依据：研究员 2026-11-16 定。", decisions)
         self.assertIn("执行方、定下以后研究员要做的事", texts["org/org.md"])        # the package table
         for part in ("- 需要接收方做的事：拍板（决策队列）／确认记录无误（研究员主动发起）\n"
-                     "- 执行方：<研究员，或者执行这条决策的会话名，多半是发出方的会话名>\n"
+                     "- 执行方：<研究员，或者执行这条决策的会话名：各序列的 +2、入口或路由，多半是发出方；只要有一个选项要研究员亲手做，就写“研究员”>\n"
                      "- 研究员要做的事：<这条决策定下以后要研究员亲手做的事，比如整理数据、挂 API、维护沙箱、开 Docker、调设置；没有写“无”>\n",
                      "每条决策走三步：待决定、待执行、归档（已执行）",
                      "包检查要求决策包有这一行",
@@ -4179,360 +4256,368 @@ class DeliveryTextTest(PoolProjectCase):
 
 
 
-# ----------------------------------------------------------------- 1.0.4
-class IrreversibleGuardTest(PoolProjectCase):
-    """1.0.4, B6: each category of the irreversible list that a command or a path shows is denied in a pool
-    session and asked in the researcher's own until a decision the researcher made, whose option picked lists
-    it, releases it; guard.jsonl names that decision. A qualifier narrows a release to the commands it covers.
-    Protected paths are never released by a decision."""
+# ----------------------------------------------------------------- 1.0.6
+class HookScopeTest(PoolProjectCase):
+    """1.0.6 takes out the three layers 1.0.4 added to the hook: the commands of the irreversible list, shell
+    commands that delete or change protected paths, shell commands that overwrite what only the scripts write.
+    The hook gives those calls no answer (no deny, no prompt, no allow), whatever the local decision state holds,
+    and they go through Claude Code's own permission checks. That holds when a Feishu read or the scribe's write
+    stands on the same line: the hook answers allow only for a command it judged whole. What 1.0.3 guarded stays:
+    only the scribe writes Feishu and the ledger, and pool sessions do not switch branches in the shared
+    directory, however the command is wrapped."""
 
-    # one command for each category a command or a path shows, and the qualifier a release of it carries
-    COMMANDS = [("admin", "sudo port install htop", ""),
-                ("privileged_app", "open -a Docker", "Docker"),
-                ("system", "launchctl load -w ~/Library/LaunchAgents/com.example.agent.plist", ""),
-                ("permission", "chmod 600 ~/.ssh/id_ed25519", "~/.ssh"),
-                ("docker_resources", "echo '{\"memoryMiB\": 10240}' > ~/.docker/desktop/settings-store.json", "内存调到 10 GiB"),
-                ("send_out", "scp runs.tar campus-hpc:~/jobs/", "scp、ssh 到 campus-hpc")]
+    LISTED = ("sudo port install htop", "sudo -s", "echo ls | xargs sudo", "su -c 'launchctl unload x'", "doas -s",
+              "ssh campus-hpc sbatch run.sh", "scp runs.tar campus-hpc:~/jobs/", "rsync -av runs/ campus-hpc:/scratch/", "git push origin main",
+              "git subtree push --prefix dist origin gh-pages", "open -a Docker", "open -b com.docker.docker", "docker desktop start",
+              "launchctl load -w ~/Library/LaunchAgents/com.example.agent.plist", "networksetup -setdnsservers Wi-Fi 1.1.1.1",
+              "chmod 600 ~/.ssh/id_ed25519", "chown -R nobody /usr/local/lib", "mail -s 周报 advisor@example.edu < body.txt",
+              "echo '{\"memoryMiB\": 10240}' > ~/.docker/desktop/settings-store.json", "sudo echo 'unclosed")
+    PROTECTED = ("rm repo/eval/score.py", "rm -rf repo", "rm -rf ..", "mv data/eval/test.csv /tmp/test.csv", "echo 0 > repo/eval/score.py",
+                 "cp patch.py repo/eval/", "sed -i '' 's/0.5/0.4/' repo/eval/score.py", "chmod -R 777 data", "truncate -s 0 data/eval/test.csv",
+                 "git rm -r repo/eval", "find repo/eval -name '*.py' -delete", "rsync -a --delete /tmp/new/ repo/eval/")
+    OWNED = ("rm .claude/state/gates.json", "echo '{}' > .claude/state/gates.json", "cp /tmp/forged.json .claude/state/gates.json",
+             "mv .claude/state/gates.json /tmp/g.json", "rm .claude/state/pool.json", "echo x > .claude/hooks/policy.json",
+             "sed -i '' 's/x/y/' .claude/settings.json", "cat > .claude/hooks/guard.py <<'EOF'\nimport sys\nEOF", "rm -rf .claude")
+    LEDGER = "python3 -I .claude/solo-lab/bin/ledger.py archive 2101 --apply"
+    DOCS = "lark-cli docs +update --doc x --command append --content hi --as user"
+    MEEGLE = "meegle workitem update --params '{}'"
+    WRAPS = ("%s", "function f { %s; }; f", "function f\n{\n  %s\n}\nf", "f() { %s; }; f", "command %s", "command -p %s", "command -- %s",
+             "exec -a x %s", "exec -cl %s", "time -p %s", "nohup %s &", "env FOO=1 %s", "env -S %q", "env -S %n", "env -u FOO -S %q",
+             "env -vS %q", "env -0S %q", "env -u FOO -vS %q", "command env -iS%q",
+             "sshpass -p x %s", "sudo -u me %s", "timeout 30 %s", "sh -c %q", "eval %q", "if true; then %s; fi", "cd -- repo && %s",
+             "pushd repo && %s", "echo `%s`", "X=`%s`; echo $X", "echo $(%s)", "echo \"`%s`\"")
+    READ = "lark-cli docs +fetch --doc x --as user"
+    SEND = "lark-cli im +messages-send --user-id ou_me --text 收到 --as bot"
 
     def setUp(self):
         super().setUp()
         self.started_pool()
-        self.policy = json.loads(self.read(".claude/hooks/policy.json"))
-        self.cats = {c["id"]: c for c in self.policy["irreversible"]["categories"]}
 
-    def gates(self, pending=None, releases=()):
+    def gates(self, text):
         with open(os.path.join(self.tmp, ".claude", "state", "gates.json"), "w", encoding="utf-8") as f:
-            json.dump({"version": 1, "pending": pending or {}, "releases": list(releases)}, f, ensure_ascii=False)
-
-    def release(self, cid, qualifier="", decision="2201", option="A"):
-        name = self.cats[cid]["name"]
-        return {"category": cid, "name": name, "qualifier": qualifier, "text": name + ("：" + qualifier if qualifier else ""),
-                "decision": decision, "option": option, "at": pool_lib.stamp()}
-
-    def out(self, sid, command, **extra):
-        return self.bash(sid, command, **extra)[1]
+            f.write(text)
 
     def last(self):
         return json.loads(self.read(".claude/logs/guard.jsonl").splitlines()[-1])
 
-    def guard_module(self):
-        sys.path.insert(0, self.hooks)
-        import importlib
-        return importlib.import_module("guard")
+    def unanswered(self, sid, command, **extra):
+        """The hook leaves the call alone: exit 0 and nothing printed, so no deny, no prompt, no allow, no note."""
+        self.assertEqual(self.bash(sid, command, **extra), (0, {}), (sid, command))
+        last = self.last()
+        self.assertEqual((last["decision"], last["reason"], last["soft_hits"]), (None, "", []), (sid, command))
+        for key in ("irreversible", "released_by"):
+            self.assertNotIn(key, last, (sid, command))
 
-    def test_the_policy_and_org_md_hold_the_list(self):
-        self.assertEqual(self.policy["version"], setup.POLICY_VERSION)
-        with open(os.path.join(self.hooks, "guard.py"), encoding="utf-8") as f:
-            self.assertIn("POLICY_VERSION = %d\n" % setup.POLICY_VERSION, f.read())
-        self.assertEqual(sorted(self.cats), sorted([c for c, _, _ in self.COMMANDS] + ["protected"]))  # 花钱、付费运行的条件: the package check's
-        self.assertEqual(self.policy["irreversible"]["paths"]["protected"], ["repo/eval/**", "data/eval/**"])
-        self.assertEqual(self.cats["privileged_app"]["apps"][0]["name"], "Docker")
-        self.assertEqual(self.cats["protected"]["release"], "researcher_session")
+    def wrapped(self, command):
+        """The same write, written the ways a session may wrap it: %s as it is, %q quoted as one word, %n quoted
+        with nohup in front."""
+        return [w.replace("%s", command).replace("%q", shlex.quote(command)).replace("%n", shlex.quote("nohup " + command))
+                for w in self.WRAPS]
+
+    def test_the_policy_holds_no_list(self):
+        policy = json.loads(self.read(".claude/hooks/policy.json"))
+        self.assertEqual(policy["version"], setup.POLICY_VERSION)
+        self.assertGreaterEqual(setup.POLICY_VERSION, 7)                              # 6 was the policy with the list
+        self.assertNotIn("irreversible", policy)
+        self.assertEqual(policy["h_paths"], ["repo/eval/**", "data/eval/**"])             # the edit tools' rule keeps them
+        guard = self.read(".claude/hooks/guard.py")
+        self.assertIn("POLICY_VERSION = %d\n" % setup.POLICY_VERSION, guard)
+        for gone in ("gates.json", "load_gates", "check_irreversible", "released_by", "check_owned_writes", "path_targets"):
+            self.assertNotIn(gone, guard)
         org = self.read("org/org.md")
         self.assertLess(org.index("## 只能由人来做的事"), org.index("## 不可逆事项"))
-        self.assertIn(self.spec.irreversible_section(), org)
-        self.assertIn(setup.QUALIFIER_RULE, org)
-        self.assertIn("本项目登记的受保护路径（任务文件 `spec/task.json` 的 protected_paths）：`repo/eval/**`、`data/eval/**`。", org)
+        section = org.split("## 不可逆事项", 1)[1].split("\n## ", 1)[0]
+        self.assertIn(self.spec.irreversible_section(), section)
+        self.assertIn(orgspec.OrgSpec.IRREVERSIBLE_RULE, section)
+        self.assertIn("| 类别 | 包括 | 判据 |", section)
+        for name in self.spec.irreversible_names():
+            self.assertIn("\n| %s | " % name, section)
+        self.assertIn("本项目登记的受保护路径（任务文件 `spec/task.json` 的 protected_paths）：`repo/eval/**`、`data/eval/**`。", section)
+        for claim in ("识别方式", "放行条件", "限定怎么认", "池会话里没有这样的决策就拒绝", "弹窗确认", "guard 日志记下决策 ID"):
+            self.assertNotIn(claim, section)
         claude = self.read("CLAUDE.md")
-        self.assertIn("hook 只拦三类事：会损坏数据的，不可逆的，和研究员多半不在时向他提的问题", claude)
-        self.assertIn("不可逆事项清单（`org/org.md`）里能用命令或路径认出、还没有研究员批准的决策放行的动作", claude)
+        self.assertIn("hook 只拦两类事：会损坏数据的，和研究员多半不在时向他提的问题。", claude)
+        self.assertIn("不可逆事项清单（`org/org.md`）里的命令、删改文件的 shell 命令，hook 都不拦，权限照 Claude Code 自己的检查。"
+                      "规矩不变，靠规则、每轮提示和包检查：清单里的事要先有研究员批准的决策，待定决策“冻结的动作”谁都不做，"
+                      "评测协议的只读路径和 `.claude/` 下的文件用 shell 命令也不许改。", claude)
+        for claim in ("hook 只拦三类事", "用 shell 命令删除、移动、覆盖受保护路径或改它们的权限（质量序列的会话也是弹窗）",
+                      "还没有研究员批准的决策放行的动作"):
+            self.assertNotIn(claim, claude)
+        with open(os.path.join(ROOT, "orgspec", "irreversible.json"), encoding="utf-8") as f:
+            listed = json.load(f)
+        for key in ("release_rules", "computed_paths"):
+            self.assertNotIn(key, listed)
+        for cat in listed["categories"]:
+            self.assertFalse({"match", "paths", "how"} & set(cat), cat["name"])
         allow = json.loads(self.read(".claude/settings.json"))["permissions"]["allow"]
         self.assertIn("Bash(python3 -I .claude/solo-lab/bin/ledger.py revise *)", allow)
 
-    def test_every_category_without_and_with_a_release(self):
-        for k, (cid, cmd, qualifier) in enumerate(self.COMMANDS):
-            name, decision = self.cats[cid]["name"], str(2201 + k)
-            self.gates()
-            out = self.out("s-alg1", cmd)
-            self.assertEqual(out.get("permissionDecision"), "deny", cmd)
-            self.assertIn("属于不可逆事项清单里的“%s”，没有研究员批准、所选选项里列了它的决策。" % name, out["permissionDecisionReason"])
-            self.assertIn("要做就写决策包：选项表“要放行的不可逆动作”一列写“%s”" % name, out["permissionDecisionReason"])
-            self.assertEqual([(r["category"], r["result"]) for r in self.last()["irreversible"]], [(name, "no_release")], cmd)
-            self.assertNotIn("released_by", self.last())
-            self.assertEqual(self.out("s-researcher", cmd).get("permissionDecision"), "ask", cmd)
-            self.assertEqual(self.out("s-researcher", cmd, permission_mode="bypassPermissions").get("permissionDecision"), "deny", cmd)
-            self.assertEqual(self.out("s-researcher", cmd, agent_id="a1", agent_type="Explore").get("permissionDecision"), "deny", cmd)
-            self.gates(releases=[self.release(cid, qualifier, decision)])
-            for sid in ("s-alg1", "s-entry", "s-researcher"):
-                out = self.out(sid, cmd)
-                self.assertNotIn("permissionDecision", out, (sid, cmd))
-                self.assertIn("放行：", out.get("additionalContext", ""))
-                self.assertIn("由决策 #%s（选项“A”" % decision, out["additionalContext"])
-                self.assertEqual((self.last()["released_by"], self.last()["irreversible"][0]["result"]), ([decision], "released"), cmd)
+    def test_the_commands_1_0_4_stopped_get_no_answer(self):
+        for cmd in self.LISTED + self.PROTECTED + self.OWNED:
+            for sid in ("s-alg1", "s-researcher"):
+                self.unanswered(sid, cmd)
+        for cmd in ("sudo port install htop", "git push origin main", "open -a Docker", "rm repo/eval/score.py", "rm .claude/state/gates.json"):
+            for sid in ("s-alg0", "s-alg2", "s-q1", "s-entry", "s-scribe"):
+                self.unanswered(sid, cmd)
+            self.unanswered("s-researcher", cmd, permission_mode="bypassPermissions")
+            self.unanswered("s-researcher", cmd, agent_id="a1", agent_type="Explore")
+            self.assertEqual(self.guard("s-alg1", "Monitor", {"command": cmd}), (0, {}), cmd)
+        docker = os.path.expanduser("~/Library/Group Containers/group.com.docker/settings-store.json")
+        for sid in ("s-alg1", "s-researcher"):                                    # an edit of Docker Desktop's settings, too
+            self.assertNotIn("permissionDecision", self.guard(sid, "Edit", {"file_path": docker, "old_string": "8192", "new_string": "10240"})[1])
 
-    def test_an_edit_of_docker_desktops_settings(self):
-        path = os.path.expanduser("~/Library/Group Containers/group.com.docker/settings-store.json")
-        edit = {"file_path": path, "old_string": "8192", "new_string": "10240"}
-        self.gates()
-        self.assertEqual(self.guard("s-alg1", "Edit", edit)[1].get("permissionDecision"), "deny")
-        self.assertEqual(self.guard("s-researcher", "Write", {"file_path": path, "content": "{}"})[1].get("permissionDecision"), "ask")
-        self.gates(releases=[self.release("docker_resources", "内存调到 10 GiB", "2301")])
-        self.assertNotIn("permissionDecision", self.guard("s-alg1", "Edit", edit)[1])
-        self.assertEqual(self.last()["released_by"], ["2301"])
-        frozen = {"2302": {"id": "2302", "title": "内存给多少", "frozen": [
-            {"kind": "category", "category": "docker_resources", "name": "Docker 资源", "qualifier": "", "text": "Docker 资源"}]}}
-        self.gates(frozen, [self.release("docker_resources", "内存调到 10 GiB", "2301")])
-        out = self.guard("s-alg1", "Edit", edit)[1]
-        self.assertEqual(out.get("permissionDecision"), "deny")
-        self.assertIn("待定决策 #2302（内存给多少）冻结了“Docker 资源”", out["permissionDecisionReason"])
-        other = os.path.join(self.tmp, "runs", "alg", "settings-store.json")      # the same name elsewhere is no Docker setting
-        self.assertNotEqual(self.guard("s-alg1", "Write", {"file_path": other, "content": "{}"})[1].get("permissionDecision"), "deny")
-
-    def test_a_qualifier_narrows_a_release(self):
-        self.gates(releases=[self.release("send_out", "scp、ssh 到 campus-hpc", "2401", "CAMPUS-HPC"),
-                             self.release("privileged_app", "Docker Desktop", "2402"),
-                             self.release("admin", "装依赖", "2403")])
-        for cmd, decision in (("ssh campus-hpc sbatch run.sh", "2401"), ("scp runs.tar campus-hpc:~/jobs/", "2401"),
-                              ("open -a /Applications/Docker.app", "2402"), ("open -b com.docker.docker", "2402"),
-                              ("docker desktop start", "2402")):
-            self.assertNotIn("permissionDecision", self.out("s-alg1", cmd), cmd)
-            self.assertEqual(self.last()["released_by"], [decision], cmd)
-        for cmd in ("scp runs.tar login.other.edu:~/", "git push origin main", "rsync -av runs/ backup:/runs/"):
-            out = self.out("s-alg1", cmd)
-            self.assertEqual(out.get("permissionDecision"), "deny", cmd)
-            self.assertIn("决策 #2401 放行的是“对外发送：scp、ssh 到 campus-hpc”，这条命令不在里面。", out["permissionDecisionReason"])
-        out = self.out("s-alg1", "sudo port install htop")
-        self.assertEqual(out.get("permissionDecision"), "deny")
-        self.assertIn("决策 #2403 放行的是“管理员权限：装依赖”，限定里没有能和命令对上的词", out["permissionDecisionReason"])
-        guard = self.guard_module()
-        self.assertEqual(guard.qualifier_terms("scp、ssh 到 CAMPUS-HPC"), [[["scp"], ["ssh"]], [["campus-hpc"]]])
-        self.assertEqual(guard.qualifier_terms("发给导师的周报"), [])
-        send, app = self.cats["send_out"], self.cats["privileged_app"]
-        hit = {"cat": send, "text": "scp runs.tar CAMPUS-HPC:~/jobs", "app": None}
-        self.assertEqual([guard.covers(q, send, hit) for q in ("", "scp、ssh 到 campus-hpc", "git push", "发给导师")], [True, True, False, None])
-        docker = {"cat": app, "text": "open -a Docker", "app": "Docker"}
-        self.assertEqual([guard.covers(q, app, docker) for q in ("Docker Desktop", "com.docker.docker", "VirtualBox", "容器工具")],
-                         [True, True, None, None])                                  # no application of the list: nothing to compare
-        self.assertTrue(guard.covers("随手写的说明", self.cats["docker_resources"], {"text": "Edit x", "app": None}))
-
-    def test_a_waiting_decision_freezes_and_holds_releases_back(self):
+    def test_the_local_decision_state_changes_nothing(self):
+        """A decision that waits freezes nothing in the hook, and a release left by 1.0.4 or 1.0.5 is not read: the
+        hook does not open gates.json, readable or not."""
         pending = {"2501": {"id": "2501", "title": "隔离方式", "registered_at": pool_lib.stamp(), "frozen": [
             {"kind": "category", "category": "privileged_app", "name": "特权应用", "qualifier": "Docker", "text": "特权应用：Docker"},
-            {"kind": "category", "category": "send_out", "name": "对外发送", "qualifier": "git push", "text": "对外发送：git push"},
-            {"kind": "command", "prefix": "docker compose up", "words": ["docker", "compose", "up"], "text": "`docker compose up`"},
-            {"kind": "text", "text": "照某个选项改实验平台的内存闸"}]}}
-        releases = [self.release("privileged_app", "", "2401"), self.release("send_out", "", "2402"), self.release("send_out", "scp", "2403")]
-        self.gates(pending, releases)
-        for cmd, item in (("open -a Docker", "冻结了“特权应用：Docker”"), ("git push origin main", "冻结了“对外发送：git push”"),
-                          ("docker compose up -d", "冻结（冻结的动作：`docker compose up`）"),
-                          ("cd repo && nohup docker compose up", "冻结（冻结的动作：`docker compose up`）")):
-            out = self.out("s-alg2", cmd)
-            self.assertEqual(out.get("permissionDecision"), "deny", cmd)
-            self.assertIn("待定决策 #2501（隔离方式）" + item, out["permissionDecisionReason"])
-            self.assertIn("决策定下以前谁都不做", out["permissionDecisionReason"])
-            self.assertIn(("frozen", ["2501"]), [(r["result"], r["decisions"]) for r in self.last()["irreversible"]])
-            self.assertEqual(self.out("s-researcher", cmd).get("permissionDecision"), "ask", cmd)
-        out = self.out("s-alg2", "ssh campus-hpc ls")                 # 2402 overlaps the frozen 对外发送: held back
-        self.assertEqual(out.get("permissionDecision"), "deny")
-        self.assertIn("决策 #2402 放行的“对外发送”暂停：待定决策 #2501（隔离方式）冻结了和它重叠的“对外发送：git push”。", out["permissionDecisionReason"])
-        self.assertNotIn("permissionDecision", self.out("s-alg2", "scp runs.tar campus-hpc:~/"))     # 2403 (scp) does not overlap git push
-        self.assertEqual(self.last()["released_by"], ["2403"])
-        for cmd in ("docker compose ps", "docker build -t cand .", "ls"):
-            self.assertNotIn("permissionDecision", self.out("s-alg2", cmd), cmd)
-        self.gates({}, releases)                                     # decided: the freeze is lifted, the releases count again
-        for cmd, decision in (("open -a Docker", "2401"), ("git push origin main", "2402"), ("ssh campus-hpc ls", "2402")):
-            self.assertNotIn("permissionDecision", self.out("s-alg2", cmd), cmd)
-            self.assertEqual(self.last()["released_by"], [decision], cmd)
-        self.assertIsNone(self.out("s-alg2", "docker compose up -d").get("permissionDecision"))
-
-    def test_shell_commands_on_protected_paths(self):
-        self.gates(releases=[self.release(c, "", "2601") for c, _, _ in self.COMMANDS])    # no decision releases them
-        for cmd, where in (("rm repo/eval/score.py", "repo/eval/score.py"), ("rm -rf repo", "repo"),
-                           ("mv data/eval/test.csv /tmp/test.csv", "data/eval/test.csv"), ("echo 0 > repo/eval/score.py", "repo/eval/score.py"),
-                           ("cat fix.py >> repo/eval/score.py", "repo/eval/score.py"), ("cp patch.py repo/eval/", "repo/eval/patch.py"),
-                           ("sed -i '' 's/0.5/0.4/' repo/eval/score.py", "repo/eval/score.py"), ("chmod -R 777 data", "data"),
-                           ("python3 gen.py | tee data/eval/test.csv", "data/eval/test.csv"),
-                           ("truncate -s 0 data/eval/test.csv", "data/eval/test.csv"), ("cd repo && rm eval/score.py", "repo/eval/score.py"),
-                           ("chmod -w repo/eval/score.py", "repo/eval/score.py"), ("rm -rf ..", None)):
-            out = self.out("s-alg1", cmd)
-            self.assertEqual(out.get("permissionDecision"), "deny", cmd)
-            self.assertIn("不能用 shell 命令删除、移动、覆盖受保护路径，也不能改它们的权限", out["permissionDecisionReason"])
-            if where:
-                self.assertIn("动到了 %s。" % where, out["permissionDecisionReason"])
-            self.assertEqual(self.last()["irreversible"][-1]["result"], "protected", cmd)
-            self.assertEqual(self.out("s-researcher", cmd).get("permissionDecision"), "ask", cmd)
-            self.assertEqual(self.out("s-researcher", cmd, permission_mode="dontAsk").get("permissionDecision"), "deny", cmd)
-            self.assertEqual(self.out("s-q1", cmd).get("permissionDecision"), "ask", cmd)        # a quality session, as with an edit
-        for cmd in ("cp repo/eval/score.py /tmp/score.py", "cat repo/eval/score.py > runs/alg/score-copy.py", "rm -rf build runs/alg/old",
-                    "python3 repo/eval/score.py --split dev", "ls -la data/eval", "chmod +x scripts/run.sh", "cp a.py repo/src/"):
-            self.assertNotIn("permissionDecision", self.out("s-alg1", cmd), cmd)
-
-    def test_shell_commands_that_reach_protected_paths_another_way(self):
-        """Brace expansion, a copy into the protected directory itself, a wildcard on the way, git rm, git mv, find
-        -delete and rsync reach protected paths too."""
-        self.gates()
-        for cmd in ("mv data/{eval,eval_old}", "rm -rf repo/{eval,build}", "cp -R /tmp/new/. repo/eval", "cp -r /tmp/new/eval repo/",
-                    "mv /tmp/new/eval repo/", "rm -f data/*/test.csv", "rm -rf repo/ev*", "git rm -r repo/eval", "git mv repo/eval repo/eval2",
-                    "git -C repo rm -r eval", "find repo/eval -name '*.py' -delete", "find repo/eval -name '*.py' -exec rm {} +",
-                    "find data -name test.csv | xargs rm", "rsync -a --delete /tmp/new/ repo/eval/", "rsync -a /tmp/new/ data/eval/"):
-            out = self.out("s-alg1", cmd)
-            self.assertEqual(out.get("permissionDecision"), "deny", cmd)
-            self.assertIn("不能用 shell 命令删除、移动、覆盖受保护路径", out["permissionDecisionReason"], cmd)
-            self.assertEqual(self.out("s-researcher", cmd).get("permissionDecision"), "ask", cmd)
-        for cmd in ("rm -f data/*.tmp", "git rm -n -r repo/eval", "find runs -name '*.pyc' -delete", "cp a.py repo/", "rsync -a runs/ /tmp/backup/",
-                    "git rm --cached runs/alg/big.bin", "mv runs/{a,b}.log /tmp/"):
-            self.assertNotIn("permissionDecision", self.out("s-alg1", cmd), cmd)
-
-    def test_shell_writes_to_what_only_init_and_the_scripts_write(self):
-        """The hooks, settings, role definitions and the local state (the claims, gates.json) are not overwritten,
-        moved or deleted with a shell command in any session, as they are not edited: deleting gates.json would lift
-        every freeze, writing it would forge a release."""
-        self.gates()
-        for cmd, where in (("echo '{}' > .claude/state/gates.json", ".claude/state/gates.json"),
-                           ("cp /tmp/forged.json .claude/state/gates.json", ".claude/state/gates.json"),
-                           ("tee .claude/state/gates.json < /tmp/forged.json", ".claude/state/gates.json"),
-                           ("sed -i '' 's/x/y/' .claude/state/gates.json", ".claude/state/gates.json"),
-                           ("rm .claude/state/gates.json", ".claude/state/gates.json"), ("mv .claude/state/gates.json /tmp/g.json", ".claude/state/gates.json"),
-                           ("rm .claude/state/pool.json", ".claude/state/pool.json"), ("echo x > .claude/hooks/policy.json", ".claude/hooks/policy.json"),
-                           ("cat > .claude/hooks/guard.py <<'EOF'\nimport sys\nEOF", ".claude/hooks/guard.py"), ("rm -rf .claude", ".claude")):
-            for sid in ("s-alg1", "s-scribe", "s-researcher"):
-                out = self.out(sid, cmd)
-                self.assertEqual(out.get("permissionDecision"), "deny", (sid, cmd))
-                self.assertIn("不能用 shell 命令覆盖、挪走或删除 %s：" % where, out["permissionDecisionReason"])
-        for cmd in ("cat .claude/state/gates.json", "cp .claude/state/gates.json /tmp/gates-copy.json", "ls -la .claude/state",
-                    "python3 -I .claude/solo-lab/bin/route.py pool"):
-            self.assertNotIn("permissionDecision", self.out("s-alg1", cmd), cmd)
-
-    def test_a_qualifier_is_compared_word_by_word(self):
-        """A release's qualifier covers a command only as written: ~/.ssh is the files under ~/.ssh, not every path
-        with ssh in it; campus-hpc is the host a command reaches, not a part of a remote path."""
-        self.gates(releases=[self.release("permission", "~/.ssh", "3001"), self.release("send_out", "scp、ssh 到 campus-hpc", "3002")])
-        for cmd, decision in (("chmod 600 ~/.ssh/id_ed25519", "3001"), ("ssh campus-hpc sbatch run.sh", "3002"),
-                              ("scp runs.tar me@campus-hpc:~/jobs/", "3002"), ("/usr/bin/scp runs.tar campus-hpc:~/jobs/", "3002")):
-            self.assertNotIn("permissionDecision", self.out("s-alg1", cmd), cmd)
-            self.assertEqual(self.last()["released_by"], [decision], cmd)
-        for cmd in ("chmod 644 /etc/ssh/sshd_config", "chown -R nobody /usr/local/sshtools", "chmod 600 ~/.ssh/id_rsa /etc/passwd",
-                    "scp results.tar lab-server:/home/me/campus-hpc-results/", "ssh other-host 'ls /scratch/campus-hpc'",
-                    "scp runs/campus-hpc other-host:~/", "git push https://github.com/me/campus-hpc-notes.git"):
-            out = self.out("s-alg1", cmd)
-            self.assertEqual(out.get("permissionDecision"), "deny", cmd)
-            self.assertIn("这条命令不在里面", out["permissionDecisionReason"], cmd)
-        guard = self.guard_module()
-        self.assertEqual((guard.qualifier_terms("~/.ssh"), guard.qualifier_terms(".env")), ([[["~/.ssh"]]], [[[".env"]]]))
-        self.assertEqual(guard.qualifier_terms("ssh 或 scp 到 CAMPUS-HPC"), [[["ssh"], ["scp"]], [["campus-hpc"]]])
-
-    def test_a_frozen_application_is_found_in_its_qualifier(self):
-        """特权应用 frozen as 启动 Docker or Docker Desktop 的沙箱 freezes Docker and holds back a release of Docker; a
-        qualifier that names no application of the list freezes the whole category."""
-        for qualifier in ("启动 Docker", "Docker Desktop 的沙箱", "Docker、Podman", "容器工具"):
-            frozen = {"2701": {"id": "2701", "title": "隔离方式", "frozen": [
-                {"kind": "category", "category": "privileged_app", "name": "特权应用", "qualifier": qualifier, "text": "特权应用：" + qualifier}]}}
-            self.gates(frozen, [self.release("privileged_app", "Docker Desktop", "2601")])
-            out = self.out("s-alg1", "open -a Docker")
-            self.assertEqual(out.get("permissionDecision"), "deny", qualifier)
-            self.assertIn("待定决策 #2701（隔离方式）冻结了“特权应用：%s”" % qualifier, out["permissionDecisionReason"])
-        guard, app = self.guard_module(), self.cats["privileged_app"]
-        self.assertEqual(guard.qualifier_apps(app, "启动 Docker Desktop 的沙箱"), ["Docker"])
-        self.assertTrue(guard.overlaps({"qualifier": "Docker Desktop"}, {"qualifier": "启动 Docker"}, app))
-        self.assertTrue(guard.overlaps({"qualifier": "Docker"}, {"qualifier": "容器工具"}, app))
-
-    def test_a_root_shell_is_administrator_rights(self):
-        """sudo -s, sudo -i and su start a root shell: they are 管理员权限, and what they read on standard input or run
-        with -c is checked as commands; xargs sudo runs what comes in on its standard input."""
-        self.gates()
-        for cmd in ("sudo -i", "sudo -s", "sudo -E -s", "sudo --login", "sudo -u root -i", "doas -s", "echo ls | xargs sudo"):
-            out = self.out("s-alg1", cmd)
-            self.assertEqual(out.get("permissionDecision"), "deny", cmd)
-            self.assertIn("属于不可逆事项清单里的“管理员权限”", out["permissionDecisionReason"], cmd)
-        for cmd in ("echo 'launchctl unload x' | sudo -s", "sudo -s <<< 'networksetup -setdnsservers Wi-Fi 1.1.1.1'",
-                    "su -c 'launchctl unload x'", "echo 'launchctl unload x' | su"):
-            out = self.out("s-alg1", cmd)
-            self.assertEqual(out.get("permissionDecision"), "deny", cmd)
-            self.assertIn("属于不可逆事项清单里的“系统和账号”", out["permissionDecisionReason"], cmd)
-        out = self.out("s-alg1", "cat cmds.txt | xargs sudo")                      # what xargs runs comes from a file it cannot read
-        self.assertIn("看不清这条命令", out["permissionDecisionReason"])
-        self.assertIsNone(self.out("s-alg1", "ls | xargs -I{} echo {}").get("permissionDecision"))
-
-    def test_docker_settings_are_the_files_themselves(self):
-        """Docker 资源 is a write of Docker Desktop's settings files themselves: deleting or moving a directory that
-        holds them is not, and a release of Docker 资源 never covers it."""
-        self.gates(releases=[self.release("docker_resources", "内存调到 10 GiB", "3101")])
-        for cmd in ("rm -rf ~/Library", "mv ~/Library /tmp/lib", "rm -rf ~/.docker"):
-            self.assertNotIn("permissionDecision", self.out("s-alg1", cmd), cmd)
-            self.assertNotIn("irreversible", self.last(), cmd)
-        self.gates()
-        self.assertIsNone(self.out("s-alg1", "rm -rf ~/Library").get("permissionDecision"))
-        out = self.out("s-alg1", "rm ~/.docker/desktop/settings-store.json")
-        self.assertEqual(out.get("permissionDecision"), "deny")
-        self.assertIn("属于不可逆事项清单里的“Docker 资源”", out["permissionDecisionReason"])
-
-    def test_released_by_names_only_decisions_that_let_the_call_through(self):
-        """A call denied for another category is no release: guard.jsonl keeps each category's result under
-        irreversible, with no released_by, and the model is not told that something was released."""
-        self.gates(releases=[self.release("admin", "", "3001"), self.release("privileged_app", "Docker", "2201")])
-        for cmd in ("sudo git push origin main", "open -a Docker && git push origin main"):
-            out = self.out("s-alg1", cmd)
-            self.assertEqual(out.get("permissionDecision"), "deny", cmd)
-            self.assertNotIn("放行：", out.get("additionalContext", ""), cmd)
-            last = self.last()
-            self.assertNotIn("released_by", last, cmd)
-            self.assertEqual(sorted(r["result"] for r in last["irreversible"]), ["no_release", "released"], cmd)
-
-    def test_a_frozen_command_prefix_reads_paths_and_options(self):
-        """A frozen command prefix stops the same command written another way: a path from another directory or with
-        ./ in front, any python, options in between (with one value each)."""
-        pending = {"2150": {"id": "2150", "title": "运行记录怎么分目录", "frozen": [
-            {"kind": "command", "prefix": "python3 tools/relayout_runs.py", "words": ["python3", "tools/relayout_runs.py"],
-             "text": "`python3 tools/relayout_runs.py`"},
+            {"kind": "category", "category": "send_out", "name": "对外发送", "qualifier": "", "text": "对外发送"},
             {"kind": "command", "prefix": "docker compose up", "words": ["docker", "compose", "up"], "text": "`docker compose up`"}]}}
-        self.gates(pending)
-        for cmd in ("python3 tools/relayout_runs.py", "python3 -I tools/relayout_runs.py", "python tools/relayout_runs.py",
-                    "python3 ./tools/relayout_runs.py", "cd tools && python3 relayout_runs.py", "docker compose up -d",
-                    "docker compose -f infra.yml up -d", "docker --context remote compose up"):
-            out = self.out("s-alg1", cmd)
-            self.assertEqual(out.get("permissionDecision"), "deny", cmd)
-            self.assertIn("被待定决策 #2150（运行记录怎么分目录）冻结", out["permissionDecisionReason"], cmd)
-        for cmd in ("python3 tools/other.py", "docker compose run --rm svc up", "docker compose -f up.yml down", "docker compose ps"):
-            self.assertNotIn("permissionDecision", self.out("s-alg1", cmd), cmd)
+        releases = [{"category": "admin", "name": "管理员权限", "qualifier": "", "text": "管理员权限", "decision": "2401", "option": "A",
+                     "at": pool_lib.stamp()}]
+        commands = ("open -a Docker", "git push origin main", "docker compose up -d", "sudo port install htop", "ssh campus-hpc ls")
+        for state in (json.dumps({"version": 1, "pending": pending, "releases": releases}, ensure_ascii=False), "{broken", ""):
+            self.gates(state)
+            for cmd in commands:
+                for sid in ("s-alg1", "s-entry", "s-researcher"):
+                    self.unanswered(sid, cmd)
+        os.remove(os.path.join(self.tmp, ".claude", "state", "gates.json"))
+        for cmd in commands:
+            self.unanswered("s-alg1", cmd)
 
-    def test_a_message_to_the_researcher_alone_is_not_sent_out(self):
-        ids = json.loads(self.read("feishu/ids.json"))
-        ids["lark"] = dict(ids.get("lark") or {}, researcher_open_id="ou_me")
-        with open(os.path.join(self.tmp, "feishu", "ids.json"), "w", encoding="utf-8") as f:
-            json.dump(ids, f, ensure_ascii=False)
-        with open(os.path.join(self.tmp, "inbox", "feishu.jsonl"), "a", encoding="utf-8") as f:
-            f.write(json.dumps({"id": "om_mine", "ts": pool_lib.stamp(), "from": "研究员（飞书私聊）", "text": "在吗", "read": True}) + "\n")
-        send = "lark-cli im +messages-send --user-id %s --text 收到 --as bot"
-        reply = "lark-cli im +messages-reply --message-id %s --text 好 --as bot"
-        for cmd in (send % "ou_me", reply % "om_mine", send % "ou_advisor" + " --dry-run"):
-            self.assertEqual(self.out("s-entry", cmd).get("permissionDecision"), "allow", cmd)      # the entry's own writes
-            self.assertNotIn("irreversible", self.last(), cmd)
-        for cmd in (send % "ou_advisor", reply % "om_other", "lark-cli im +messages-send --chat-id oc_group --text 周报 --as bot",
-                    "lark-cli mail +send --to advisor@example.edu --subject 周报"):
-            out = self.out("s-entry", cmd)
+    def test_only_the_scribe_writes_feishu_however_the_command_is_wrapped(self):
+        """A ledger.py write, a lark-cli write and a meegle write, each plain and wrapped (a function written either
+        way, command -p, exec -a, time -p, env -S, sshpass, sudo, a shell, eval, after cd -- or pushd): denied in
+        every session but the scribe's, asked in the researcher's own."""
+        for write, why in ((self.LEDGER, "不能运行 ledger.py archive"), (self.DOCS, "不能执行写命令 docs +update"),
+                           (self.MEEGLE, "不能执行写命令 workitem update")):
+            for cmd in self.wrapped(write):
+                out = self.bash("s-alg1", cmd)[1]
+                self.assertEqual(out.get("permissionDecision"), "deny", cmd)
+                self.assertIn(why, out["permissionDecisionReason"], cmd)
+                self.assertEqual(self.bash("s-researcher", cmd)[1].get("permissionDecision"), "ask", cmd)
+            for sid in ("s-alg2", "s-alg0", "s-q1", "s-entry"):
+                self.assertEqual(self.bash(sid, write)[1].get("permissionDecision"), "deny", (sid, write))
+                self.assertEqual(self.bash(sid, "function f { %s; }; f" % write)[1].get("permissionDecision"), "deny", (sid, write))
+            self.assertEqual(self.bash("s-researcher", write, permission_mode="dontAsk")[1].get("permissionDecision"), "deny", write)
+        for cmd in (self.LEDGER, "command -p " + self.LEDGER, "cd %s && %s" % (shlex.quote(self.tmp), self.LEDGER), self.MEEGLE,
+                    "lark-cli docs +update --doc x --command append --content '[PMO+0] 登记' --as user"):
+            self.assertEqual(self.bash("s-scribe", cmd)[1].get("permissionDecision"), "allow", cmd)      # the scribe's own writes
+        for cmd in self.wrapped(self.DOCS + " --yes"):                              # --yes is the researcher's, the scribe included
+            out = self.bash("s-scribe", cmd)[1]
             self.assertEqual(out.get("permissionDecision"), "deny", cmd)
-            self.assertIn("属于不可逆事项清单里的“对外发送”", out["permissionDecisionReason"])
-        self.assertEqual(self.out("s-researcher", "git push origin main").get("permissionDecision"), "ask")
-        self.assertIsNone(self.out("s-alg1", "git log --oneline -3 && git diff").get("permissionDecision"))
+            self.assertIn("带 --yes 的命令只能由研究员本人执行", out["permissionDecisionReason"], cmd)
+        for cmd in ("command -v lark-cli", "command -V meegle", "python3 -I .claude/solo-lab/bin/ledger.py status 2101",
+                    "function f { python3 -I .claude/solo-lab/bin/ledger.py query queue; }; f"):
+            self.assertNotIn("permissionDecision", self.bash("s-alg1", cmd)[1], cmd)                  # reads and lookups
+        read = self.READ
+        for cmd in (read, "command -p " + read, "env -S %s" % shlex.quote(read), "env -vS %s" % shlex.quote(read)):
+            self.assertEqual(self.bash("s-alg1", cmd)[1].get("permissionDecision"), "allow", cmd)
+        send = self.SEND                                                           # the entry's own writes
+        for cmd in (send, "command -p " + send):
+            self.assertEqual(self.bash("s-entry", cmd)[1].get("permissionDecision"), "allow", cmd)
+        for cmd in (send, "function f { %s; }; f" % send, "command -p " + send):
+            self.assertEqual(self.bash("s-alg1", cmd)[1].get("permissionDecision"), "deny", cmd)
 
-    def test_odd_commands_and_state(self):
-        out = self.out("s-alg1", "sudo echo 'unclosed")
+    def left_to_claude_code(self, sid, command, **extra):
+        """The hook judged a Feishu or ledger call in the command as allowed and still gives the call no answer:
+        no decision and no rewritten input. guard.jsonl keeps why."""
+        code, out = self.bash(sid, command, **extra)
+        self.assertEqual(code, 0, (sid, command))
+        for key in ("permissionDecision", "permissionDecisionReason", "updatedInput"):
+            self.assertNotIn(key, out, (sid, command))
+        last = self.last()
+        self.assertIsNone(last["decision"], (sid, command))
+        self.assertTrue(last["reason"].startswith("命令里除了飞书和台账调用还有别的，hook 不替整条命令答允许"), (sid, command, last["reason"]))
+
+    def test_an_allow_is_only_for_a_command_the_hook_judged_whole(self):
+        """An allow from the hook lets the whole command past Claude Code's own permission checks. So a Feishu read,
+        a write on the session's own list or the scribe's ledger write keeps its allow only when nothing else is on
+        the line: with sudo, git push, ssh, rm or a redirect into a file next to it, with sudo in front, or inside
+        $(...), a shell or a function, the hook gives no answer and Claude Code decides. Deny and ask are as before."""
+        read, send, ledger_write = self.READ, self.SEND, self.LEDGER
+        comment = "meegle comment add --work-item-id 1 --content hi"
+        scribe_doc = "lark-cli docs +update --doc x --command append --content '[PMO+0] 登记' --as user"
+        cases = [("s-alg1", read + "; sudo ls"), ("s-alg1", read + " && sudo rm -rf /usr/local/lib/x"),
+                 ("s-alg1", read + "; git push --force origin main"), ("s-alg1", "meegle workitem get --work-item-id 2101; ssh campus-hpc 'rm -rf ~/runs'"),
+                 ("s-alg1", "lark-cli --help; open -a Docker"), ("s-alg1", read + "; rm -rf repo/eval; rm .claude/state/gates.json"),
+                 ("s-alg1", read + " > repo/eval/score.py"), ("s-alg1", read + " > .claude/state/gates.json"), ("s-alg1", read + " >> notes.md"),
+                 ("s-alg1", "sudo " + read), ("s-alg1", "doas " + read), ("s-alg1", "sshpass -p x " + read), ("s-alg1", "echo x | xargs " + read),
+                 ("s-alg1", "uv run " + read), ("s-alg1", comment + "; git push origin main"), ("s-alg1", "sudo " + comment),
+                 ("s-alg1", read + " | python3 -c 'import os'"), ("s-alg1", read + " | head -5"), ("s-alg1", "echo $(%s)" % read),
+                 ("s-alg1", "echo `%s`" % read), ("s-alg1", "X=`%s`" % read), ("s-alg1", "sh -c %s" % shlex.quote(read)),
+                 ("s-alg1", "function f { %s; }; f" % read), ("s-alg1", "if true; then %s; fi" % read),
+                 ("s-alg1", "OUT=`meegle comment add --work-item-id 2101 --content hi`; echo $OUT"),
+                 ("s-entry", send + " && sudo reboot"), ("s-entry", send + "; ssh campus-hpc ls"), ("s-entry", "function f { %s; }; f" % send),
+                 ("s-scribe", ledger_write + " && sudo ls"), ("s-scribe", ledger_write + " && rm -rf repo/eval"),
+                 ("s-scribe", scribe_doc + " && rm -rf repo/eval"), ("s-scribe", "sudo " + ledger_write),
+                 ("s-scribe", ledger_write + " > /tmp/out.txt"), ("s-scribe", "function f { %s; }; f" % ledger_write),
+                 ("s-scribe", "sh -c %s" % shlex.quote(ledger_write)), ("s-scribe", "python3 tools/ledger.py archive 2101 --apply"),
+                 ("s-researcher", read + " && sudo rm -rf /usr/local/lib/x"), ("s-researcher", "sudo " + read)]
+        for sid, cmd in cases:
+            self.left_to_claude_code(sid, cmd)
+        for sid, cmd in cases[:3] + cases[-10:-7]:                                  # the same in every permission mode
+            for mode in ("auto", "acceptEdits", "bypassPermissions"):
+                self.left_to_claude_code(sid, cmd, permission_mode=mode)
+        for tool in ("Monitor", "mcp__terminal__run_in_terminal"):                 # shell commands outside the Bash tool, too
+            self.assertEqual(self.guard("s-alg1", tool, {"command": read + "; sudo ls"}), (0, {}), tool)
+            self.assertEqual(self.guard("s-alg1", tool, {"command": read})[1].get("permissionDecision"), "allow", tool)
+        # nothing else on the line: the allow stands, with cd, other Feishu and ledger calls, and redirects that write no file
+        for sid, cmd in (("s-alg1", read), ("s-alg1", "cd repo && " + read), ("s-alg1", "pushd repo && %s; popd" % read),
+                         ("s-alg1", read + "; meegle workitem get --work-item-id 2101"), ("s-alg1", read + " 2>&1"),
+                         ("s-alg1", read + " 2>/dev/null"), ("s-alg1", read + " && python3 -I %s get 2101" % self.L),
+                         ("s-alg1", "timeout 30 env LANG=C " + read), ("s-alg1", "lark-cli docs +fetch --help"),
+                         ("s-alg1", comment), ("s-entry", send), ("s-entry", "cd %s && %s" % (shlex.quote(self.tmp), send)),
+                         ("s-scribe", ledger_write), ("s-scribe", "cd %s && %s" % (shlex.quote(self.tmp), ledger_write)),
+                         ("s-scribe", ledger_write + " 2>&1"), ("s-scribe", "%s && python3 -I %s get 2101" % (ledger_write, self.L)),
+                         ("s-scribe", "pushd repo && %s; popd" % self.MEEGLE), ("s-scribe", scribe_doc), ("s-researcher", read)):
+            self.assertEqual(self.bash(sid, cmd)[1].get("permissionDecision"), "allow", (sid, cmd))
+        out = self.bash("s-alg1", comment)[1]                                       # the rewrite goes with the allow
+        self.assertIn("[Alg+1]", out["updatedInput"]["command"])
+        # what the hook refuses is refused whatever else is on the line
+        for tail in ("; sudo ls", " && git push origin main", " > /tmp/out.txt"):
+            for write in (self.LEDGER, self.DOCS, self.MEEGLE):
+                self.assertEqual(self.bash("s-alg1", write + tail)[1].get("permissionDecision"), "deny", write + tail)
+                self.assertEqual(self.bash("s-researcher", write + tail)[1].get("permissionDecision"), "ask", write + tail)
+            self.assertEqual(self.bash("s-scribe", scribe_doc + " --yes" + tail)[1].get("permissionDecision"), "deny", tail)
+        self.assertEqual(self.bash("s-alg1", read + "; git stash")[1].get("permissionDecision"), "deny")
+        self.assertEqual(self.bash("s-researcher", read + "; git stash")[1].get("permissionDecision"), "ask")
+        sys.path.insert(0, self.hooks)
+        import importlib
+        fc = importlib.import_module("feishu_cmd")
+        fc.TRUSTED = {os.path.join(self.tmp, self.L)}
+        for cmd, plain in ((read, True), ("cd repo && " + read, True), (read + " 2>&1", True), ("python3 -I %s get 1" % self.L, True),
+                           (read + "; ls", False), ("sudo " + read, False), (read + " > x", False), ("echo $(%s)" % read, False),
+                           ("python3 -I tools/ledger.py get 1", False), ("npx -y @larksuite/cli docs +fetch --doc x", True),
+                           ("echo 'unclosed", False)):
+            self.assertEqual(fc.parse(cmd, self.tmp).plain, plain, cmd)
+
+    def test_calls_in_backticks_are_read_whole(self):
+        """A Feishu call inside backticks written without quotes was read as its first word alone: `meegle …` came
+        out as a meegle call with no subcommand, taken for a read and allowed. $(...) and backticks are now taken
+        out of the text before it is split into words, and a call with no subcommand is no read."""
+        for inner, why in (("meegle workitem update --work-item-id 2101 --fields '[]'", "不能执行写命令 workitem update"),
+                           ("meegle workitem create --work-item-type decision --fields '[]'", "不能执行写命令 workitem create"),
+                           ("meegle workflow transition --work-item-id 2101 --node-id started --action confirm", "不能执行写命令 workflow transition"),
+                           (self.DOCS, "不能执行写命令 docs +update"), (self.LEDGER, "不能运行 ledger.py archive")):
+            for cmd in ("echo `%s`", "X=`%s`", "`%s`", "OUT=`%s`; echo $OUT", "echo $(%s)", "echo \"`%s`\"", "cat <<EOF\n`%s`\nEOF"):
+                out = self.bash("s-alg1", cmd % inner)[1]
+                self.assertEqual(out.get("permissionDecision"), "deny", cmd % inner)
+                self.assertIn(why, out["permissionDecisionReason"], cmd % inner)
+                self.assertEqual(self.bash("s-researcher", cmd % inner)[1].get("permissionDecision"), "ask", cmd % inner)
+        out = self.bash("s-alg1", "echo `meegle auth login`")[1]
         self.assertEqual(out.get("permissionDecision"), "deny")
-        self.assertIn("看不清这条命令，里面像是有不可逆事项清单里的命令（管理员权限）", out["permissionDecisionReason"])
-        for cmd in ("echo 'run sudo make install yourself'", "grep -n 'git push' notes.md", "cat <<'EOF' > runs/alg/plan.md\nsudo ls\nEOF"):
-            self.assertIsNone(self.out("s-alg1", cmd).get("permissionDecision"), cmd)          # words, not commands
-        with open(os.path.join(self.tmp, ".claude", "state", "gates.json"), "w", encoding="utf-8") as f:
-            f.write("{broken")
-        code, out = self.bash("s-alg1", "open -a Docker")
-        self.assertEqual((code, out.get("permissionDecision")), (0, "deny"))
-        self.assertIn("本地决策状态 .claude/state/gates.json 读不出来，放行一律不算", out["permissionDecisionReason"])
-        self.assertIsNone(self.out("s-alg1", "ls").get("permissionDecision"))
+        self.assertIn("auth login 属于登录、诊断上报或配置类命令", out["permissionDecisionReason"])
+        for cmd in ("echo `%s`" % self.READ, "X=`meegle workitem get --work-item-id 2101`; echo $X",   # a read: left to Claude Code
+                    "echo '`%s`'" % self.MEEGLE, "echo \\`%s\\`" % self.MEEGLE.replace("'{}'", "x")):         # not run at all
+            self.assertNotIn("permissionDecision", self.bash("s-alg1", cmd)[1], cmd)
+        for cmd in ("echo `meegle workitem update --work-item-id 2101", "echo $(lark-cli docs +update --doc x"):
+            out = self.bash("s-alg1", cmd)[1]                                       # never closed: the shell would not run it either
+            self.assertEqual(out.get("permissionDecision"), "deny", cmd)
+            self.assertEqual(self.bash("s-researcher", cmd)[1].get("permissionDecision"), "ask", cmd)
+        out = self.bash("s-alg1", 'git commit -m "docs: `meegle` 的输出怎么读"')[1]     # in double quotes the shell runs it: said so
+        self.assertEqual(out.get("permissionDecision"), "deny")
+        self.assertIn("改用单引号，免得 shell 把它当命令执行", out["permissionDecisionReason"])
+        self.assertEqual(self.bash("s-alg1", "git commit -m 'docs: `meegle` 的输出怎么读'"), (0, {}))
+        out = self.bash("s-alg1", "echo `lark-cli docs +fetch --doc x")[1]
+        self.assertIn("看不到实际执行的飞书命令（反引号或 $( 没有闭合）", out["permissionDecisionReason"])
+        for cli in ("meegle", "lark-cli"):                                          # no subcommand: not taken for a read
+            out = self.bash("s-alg1", cli)[1]
+            self.assertEqual(out.get("permissionDecision"), "deny", cli)
+            self.assertEqual(out["permissionDecisionReason"], "看不出这条 %s 命令的子命令，没法判断它是读还是写：把子命令和参数直接写出来，查看帮助用 --help。"
+                             "它只是一段文字的话（比如写在双引号里的反引号之间），改用单引号，免得 shell 把它当命令执行。" % cli)
+            self.assertEqual(self.bash("s-researcher", cli)[1].get("permissionDecision"), "ask", cli)
+            for arg in ("--help", "--version"):
+                self.assertEqual(self.bash("s-alg1", "%s %s" % (cli, arg))[1].get("permissionDecision"), "allow", (cli, arg))
+        sys.path.insert(0, self.hooks)
+        import importlib
+        fc = importlib.import_module("feishu_cmd")
+        for cmd in ("echo `meegle workitem update --work-item-id 1 --fields '[]'`", "X=$(meegle workitem update --work-item-id 1 --fields '[]')"):
+            parsed = fc.parse(cmd, self.tmp)
+            self.assertEqual([i.args for i in parsed.invocations], [["workitem", "update", "--work-item-id", "1", "--fields", "[]"]], cmd)
+        parsed = fc.parse("lark-cli docs +fetch --doc `cat id.txt` --as user", self.tmp)   # the words after it stay with the call
+        self.assertEqual(parsed.invocations[0].args, ["docs", "+fetch", "--doc", "$(cat id.txt)", "--as", "user"])
+        self.assertEqual(fc.split_substitutions("a `b c` '$(d)' \"$(e f)\" \\`g"), ("a $__SUB1 '$(d)' \"$__SUB2\" \\`g", ["b c", "e f"]))
+        left = []
+        self.assertEqual(fc.split_substitutions("a `b c", unclosed=left), ("a $__SUB1", ["b c"]))
+        self.assertEqual(left, ["b c"])
+        self.assertEqual(fc.classify_meegle([])["tier"], "unknown")
+        self.assertEqual(fc.classify_meegle(["--version"])["tier"], "read")
+        self.assertEqual(fc._unwrap(["env", "-vS", "nohup meegle workitem update"])[0], ["meegle", "workitem", "update"])
+        self.assertEqual(fc._unwrap(["env", "-u", "S", "meegle"])[0], ["meegle"])           # -u takes the next word: no string to split
+
+    def test_git_in_the_shared_directory_however_it_is_written(self):
+        other = tempfile.mkdtemp(prefix="solo-lab-other-")
+        try:
+            for cmd in ("git stash", "function g { git stash; }; g", "g() { git stash; }; g", "command -p git stash", "exec -a x git stash",
+                        "env -S 'nohup git stash'", "sshpass -p x git pull", "cd -P repo && git checkout -b x", "cd -- repo && git stash",
+                        "pushd repo && git stash", "pushd %s && git status && popd && git stash" % other,
+                        "cd %s && pushd %s && git stash" % (other, self.tmp), "(pushd %s); git stash" % other,
+                        "pushd %s; pushd; git stash" % other):
+                out = self.bash("s-alg1", cmd)[1]
+                self.assertEqual(out.get("permissionDecision"), "deny", cmd)
+                self.assertIn("不能在共享工作区里运行 git", out["permissionDecisionReason"], cmd)
+                self.assertEqual(self.bash("s-researcher", cmd)[1].get("permissionDecision"), "ask", cmd)
+            for cmd in ("cd %s && git checkout main", "cd -P %s && git checkout main", "cd -L -- %s && git stash",
+                        "pushd %s && git checkout main && popd", "pushd %s && git pull; popd; git status",
+                        "pushd . && cd %s && git stash && popd && git log -1"):
+                self.assertEqual(self.bash("s-alg1", cmd % other), (0, {}), cmd)               # git in another tree is not the rule's
+            for cmd in ("function r { python3 -I .claude/solo-lab/bin/route.py release Alg-p1-01; }; r",
+                        "command -p python3 -I .claude/solo-lab/bin/route.py release Alg-p1-01"):
+                out = self.bash("s-alg1", cmd)[1]                                     # a claim command is seen behind the wrapper
+                self.assertEqual(out.get("permissionDecision"), "deny", cmd)
+                self.assertIn("route.py release 要写成单条简单命令", out["permissionDecisionReason"], cmd)
+        finally:
+            shutil.rmtree(other, ignore_errors=True)
+
+    def test_the_researcher_is_asked_before_an_edit_of_a_protected_path(self):
+        """1.0.6: an edit tool on the evaluation protocol's files asks in the researcher's own session, as it does
+        in a quality session; any other session is denied, and so is every session where no prompt can appear."""
+        for tool, tool_input in (("Write", {"file_path": "repo/eval/score.py", "content": "x"}),
+                                 ("Edit", {"file_path": os.path.join(self.tmp, "data", "eval", "test.csv"), "old_string": "a", "new_string": "b"}),
+                                 ("NotebookEdit", {"notebook_path": "repo/eval/check.ipynb", "new_source": "x"})):
+            for sid in ("s-researcher", "s-q1"):
+                out = self.guard(sid, tool, tool_input)[1]
+                self.assertEqual(out.get("permissionDecision"), "ask", (sid, tool))
+                self.assertEqual(out["permissionDecisionReason"], "评测协议用到的文件（评测脚本、评测集和接口），改动要研究员确认。")
+                for mode in pool_lib.BYPASS_MODES:
+                    out = self.guard(sid, tool, tool_input, permission_mode=mode)[1]
+                    self.assertEqual(out.get("permissionDecision"), "deny", (sid, tool, mode))
+                    self.assertIn("当前是 %s 模式，确认框弹不出来" % mode, out["permissionDecisionReason"])
+            for sid in ("s-alg2", "s-alg1", "s-alg0", "s-entry", "s-scribe"):
+                out = self.guard(sid, tool, tool_input)[1]
+                self.assertEqual(out.get("permissionDecision"), "deny", (sid, tool))
+                self.assertIn("只有质量序列能提出修改，并且要研究员签字", out["permissionDecisionReason"])
+            out = self.guard("s-researcher", tool, tool_input, agent_id="a1", agent_type="Explore")[1]      # its subagents are not the researcher
+            self.assertEqual(out.get("permissionDecision"), "deny", tool)
+        for sid in ("s-researcher", "s-q1", "s-alg1"):                               # .claude/ stays closed to every session
+            for rel in (".claude/state/gates.json", ".claude/hooks/guard.py", ".claude/agents/alg-p1.md"):
+                out = self.guard(sid, "Edit", {"file_path": rel, "old_string": "a", "new_string": "b"})[1]
+                self.assertEqual(out.get("permissionDecision"), "deny", (sid, rel))
+        self.assertIn("用编辑工具改评测协议的只读路径（质量序列的会话和研究员自己的会话例外：改动弹窗要研究员确认，bypass 和 dontAsk 模式下也拒绝）",
+                      self.read("CLAUDE.md"))
+
+    def test_revise_is_the_scribes(self):
         cmd = "python3 -I .claude/solo-lab/bin/ledger.py revise 2140 packages/drafts/infra/v2.md --note '去掉沙箱' --apply"
-        self.assertEqual(self.out("s-scribe", cmd).get("permissionDecision"), "allow")      # revise is the scribe's, like every write
-        self.assertEqual(self.out("s-alg2", cmd).get("permissionDecision"), "deny")
-        self.assertEqual(self.out("s-researcher", cmd).get("permissionDecision"), "ask")
-        guard = self.guard_module()
+        self.assertEqual(self.bash("s-scribe", cmd)[1].get("permissionDecision"), "allow")      # revise is the scribe's, like every write
+        self.assertEqual(self.bash("s-alg2", cmd)[1].get("permissionDecision"), "deny")
+        self.assertEqual(self.bash("s-researcher", cmd)[1].get("permissionDecision"), "ask")
+        sys.path.insert(0, self.hooks)
+        import importlib
+        guard = importlib.import_module("guard")
         self.assertEqual(guard.ledger_write("python3 tools/my_ledger.py revise 2140 v2.md --note x", self.tmp), "revise")
         self.assertEqual(guard.ledger_write("python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['python3', '.claude/solo-lab/bin/ledger.py', "
                                             "'revise', '2140', 'v2.md'])\nEOF", self.tmp), "（代码里调用了 ledger.py 的写命令）")
+        self.assertEqual(guard.ledger_write("function f { python3 .claude/solo-lab/bin/ledger.py revise 2140 v2.md; }; f", self.tmp), "revise")
+        self.assertEqual(guard.ledger_write("\"/opt/My Tools/python3\" .claude/solo-lab/bin/ledger.py archive 2140", self.tmp), "archive")
+        self.assertEqual(guard.command_runs("function g { git stash; }; cd -- repo && command -p git pull", self.tmp, self.tmp),
+                         [(["git", "stash"], self.tmp), (["git", "pull"], os.path.join(self.tmp, "repo"))])
 
 
-class FreezeToReleaseTest(PoolProjectCase):
-    """1.0.4, B5 with the ledger: a decision from the queue whose 冻结的动作 lists 特权应用：Docker is registered; any
-    pool session running open -a Docker is denied, the researcher's own session is asked, and every pool session
-    is told each turn what is frozen. The researcher picks the option that lists it, the scribe confirms with
-    --option: the same command goes through and guard.jsonl names the decision. A later decision that freezes
-    Docker again stops it, and takes the release back when the option picked does not keep it."""
+class FreezePromptTest(PoolProjectCase):
+    """A decision from the queue whose 冻结的动作 lists 特权应用：Docker and a command prefix is registered. The hook
+    stops neither (1.0.6): every pool session is told each turn what is frozen, and that with the rules is what
+    keeps it. Once the researcher has decided, the line is gone."""
 
     def setUp(self):
         super().setUp()
@@ -4555,58 +4640,581 @@ class FreezeToReleaseTest(PoolProjectCase):
             f.write(text)
         return self.quiet(ledger.register, self.lg(), path)
 
-    def confirm(self, item, option):
-        out = io.StringIO()
-        with contextlib.redirect_stdout(out):
-            ledger.confirm(self.lg(), item, "研究员", ["决定内容=" + option, "决定人=研究员"], option=option)
-        return out.getvalue()
-
-    def out(self, sid, command):
-        return self.bash(sid, command)[1]
-
-    def last(self):
-        return json.loads(self.read(".claude/logs/guard.jsonl").splitlines()[-1])
-
     def context(self, sid, text):
         return self.prompt(sid, text)[1].get("additionalContext", "")
 
-    def test_from_freeze_to_release(self):
+    def test_a_waiting_decision_is_told_each_turn_and_not_enforced_by_the_hook(self):
         first = self.register("实验平台用什么隔离候选代码", "p1.md")
-        for sid in ("s-alg2", "s-alg1", "s-alg0", "s-q1", "s-entry", "s-scribe"):
-            out = self.out(sid, "open -a Docker")
-            self.assertEqual(out.get("permissionDecision"), "deny", sid)
-            self.assertIn("待定决策 #%s（实验平台用什么隔离候选代码）冻结了“特权应用：Docker”" % first, out["permissionDecisionReason"])
-        self.assertEqual(self.out("s-researcher", "open -a Docker").get("permissionDecision"), "ask")
-        self.assertEqual(self.out("s-alg1", "docker build -t cand:1 .").get("permissionDecision"), "deny")     # a frozen command prefix
-        frozen = ("待定决策冻结的动作，决策定下以前谁都不做（能用命令认出的会被 hook 拦下），选项中立的准备照常做：#%s（实验平台用什么隔离候选代码）："
-                  "“特权应用：Docker”“`docker build`”“照某个选项改实验平台的计量和内存闸”。" % first)
+        frozen = "#%s（实验平台用什么隔离候选代码）：“特权应用：Docker”“`docker build`”“照某个选项改实验平台的计量和内存闸”。" % first
         for sid, text in (("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p1-01：需求包 x.md"), ("s-entry", "早"), ("s-q1", "继续")):
-            self.assertIn(frozen, self.context(sid, text), sid)
+            said = self.context(sid, text)
+            self.assertIn("待定决策冻结的动作，决策定下以前谁都不做", said, sid)
+            self.assertIn(frozen, said, sid)
         self.assertNotIn("冻结", self.context("s-researcher", "看看"))                     # only pool sessions
-        text = self.confirm(first, "本机 Docker")
-        self.assertIn("放行：特权应用：Docker（决策 #%s，选项“本机 Docker”）。" % first, text)
-        out = self.out("s-alg1", "open -a Docker")
-        self.assertNotIn("permissionDecision", out)
-        self.assertIn("由决策 #%s（选项“本机 Docker”：特权应用：Docker）放行" % first, out["additionalContext"])
-        last = self.last()
-        self.assertEqual((last["released_by"], last["irreversible"]),
-                         ([first], [{"category": "特权应用", "command": "open -a Docker", "qualifier": "Docker", "result": "released",
-                                     "decisions": [first]}]))
-        self.assertIsNone(self.out("s-alg1", "docker build -t cand:1 .").get("permissionDecision"))
+        for sid in ("s-alg2", "s-alg1", "s-alg0", "s-q1", "s-entry", "s-scribe", "s-researcher"):
+            for cmd in ("open -a Docker", "docker build -t cand:1 .", "scp jobs.tar campus-hpc:~/"):
+                self.assertEqual(self.bash(sid, cmd), (0, {}), (sid, cmd))
+        self.quiet(ledger.confirm, self.lg(), first, "研究员", ["决定内容=本机 Docker", "决定人=研究员"], option="本机 Docker")
         self.assertNotIn("冻结", self.context("s-alg1", "继续"))
-        # a later decision freezes Docker again: the release waits for it, and goes when the option picked drops it
-        later = self.register("内存不够，要不要改到 CAMPUS-HPC", "p2.md")
-        out = self.out("s-alg1", "open -a Docker")
-        self.assertEqual(out.get("permissionDecision"), "deny")
-        self.assertIn("待定决策 #%s（内存不够，要不要改到 CAMPUS-HPC）冻结了“特权应用：Docker”" % later, out["permissionDecisionReason"])
-        self.assertEqual(self.out("s-alg1", "scp jobs.tar campus-hpc:~/").get("permissionDecision"), "deny")    # not released yet
-        text = self.confirm(later, "CAMPUS-HPC")
-        self.assertIn("收回：特权应用：Docker（原来由决策 #%s 放行）。" % first, text)
-        out = self.out("s-alg1", "open -a Docker")
-        self.assertEqual(out.get("permissionDecision"), "deny")
-        self.assertIn("没有研究员批准、所选选项里列了它的决策", out["permissionDecisionReason"])
-        self.assertNotIn("permissionDecision", self.out("s-alg1", "scp jobs.tar campus-hpc:~/"))
-        self.assertEqual(self.last()["released_by"], [later])
+        self.assertEqual(self.bash("s-alg1", "open -a Docker"), (0, {}))
+
+
+class StatusBlockAfterCompactionTest(PoolProjectCase):
+    """1.0.6: a session whose context was compacted remembers the work items it holds, not where they sit in
+    their research task. Every role's text says to read the task's 状态包 before going on; what the hook injects
+    after a compaction names the research tasks of the items the session holds, by the registration receipts
+    alone, with the command that reads each; the entry keeps the 状态包 current; CLAUDE.md asks the summary to
+    keep the IDs."""
+
+    CMD = "python3 -I .claude/solo-lab/bin/ledger.py status"
+
+    def receipt(self, item_id, **values):
+        path = os.path.join(self.tmp, "packages", "sent", "%s.json" % item_id)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(dict({"work_item_id": str(item_id), "status": "registered"}, **values), f, ensure_ascii=False)
+
+    def compacted(self, sid, source="compact"):
+        _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": sid, "source": source})
+        return out.get("additionalContext", "")
+
+    def post_compact(self, sid):
+        """(exit code, stdout, stderr) of the PostCompact hook: what it prints is plain text, no JSON."""
+        data = {"cwd": self.tmp, "hook_event_name": "PostCompact", "session_id": sid, "trigger": "auto", "compact_summary": "摘要"}
+        p = subprocess.run([sys.executable, "-I", "-B", os.path.join(self.hooks, "instances.py")], input=json.dumps(data),
+                           capture_output=True, text=True, env=self.env())
+        return p.returncode, p.stdout, p.stderr
+
+    def test_every_role_text_says_to_read_the_status_block_first(self):
+        policy = json.loads(self.read(".claude/hooks/policy.json"))
+        self.assertEqual(setup.STATUS_CMD, self.CMD + " <研究任务 ID>")            # the role texts and the hook name one command
+        self.assertEqual(pool_lib.STATUS_CMD % "<研究任务 ID>", setup.STATUS_CMD)
+        self.assertEqual(pool_lib.TASK_TYPE, orgspec.Contract(self.spec).main_line())
+        self.assertEqual(len(policy["agents"]), 21)
+        for role, pol in policy["agents"].items():
+            text = self.read(".claude/agents/%s.md" % role)
+            for part in ("压缩上下文以后、接着干活之前，先读研究任务的状态包：",
+                         "手上工作项所属的研究任务（`ledger.py get <工作项 ID>` 的“所属研究任务”字段；"
+                         "没有这个字段的，用 `ledger.py trace <工作项 ID>` 沿“来源工作项”往上找到研究任务）",
+                         "运行 `%s <研究任务 ID>`，读完再继续。" % self.CMD,
+                         "状态包里已定的实验条件和暂停范围，和手上任务包的写法冲突时，以状态包和台账为准，并报给",
+                         "或者找不到所属研究任务，说一句“跳过”再继续；`ledger.py status` 读失败，报出失败原因后继续，不卡住。"):
+                self.assertIn(part, text, role)
+            upper = ("研究员" if role == "pmo-p2" else "入口" if pol["rank"] == 2 or pol["sequence"] == "pmo" else "上一级")
+            self.assertIn("以状态包和台账为准，并报给%s。" % upper, text, role)
+            self.assertIn("没有研究任务可读，或者" if role == "pmo-p2" else "手上没有工作项，或者", text, role)
+        entry = self.read(".claude/agents/pmo-p2.md")
+        self.assertIn("找出没归档的研究任务（`ledger.py query tasks`），和手上工作项所属的研究任务", entry)
+        for part in ("**状态包由你维护。** 研究任务主文档末尾的“状态包”记这条任务现在的状态：上游卡在哪条决策、哪些实验条件已经定死、哪些工作暂停了。",
+                     "工作项状态变化、研究员定下新决策、暂停或恢复某类工作时，你改写它：先 `ledger.py status <研究任务 ID>` 读现在的",
+                     "请书记员 `ledger.py status-block <研究任务 ID> --file <文件>` 整段替换。"):
+            self.assertIn(part, entry)
+        for other in ("alg-p2", "pmo-router", "pmo-scribe"):
+            self.assertNotIn("状态包由你维护", self.read(".claude/agents/%s.md" % other), other)
+        claude = self.read("CLAUDE.md")
+        compact = claude.split("## Compact Instructions", 1)[1]
+        self.assertIn("压缩上下文时保留：本会话的会话名和角色；", compact)
+        self.assertIn("手上工作项所属的研究任务 ID；", compact)
+        self.assertIn("压缩以后、接着干活之前，照角色说明先读所属研究任务的状态包（`%s <研究任务 ID>`）。" % self.CMD, compact)
+        with open(os.path.join(ROOT, "skills", "entry", "SKILL.md"), encoding="utf-8") as f:
+            skill = f.read()
+        self.assertIn("研究任务的状态包由你维护", skill)
+        self.assertIn("`ledger.py status-block <研究任务 ID> --file <文件>` 整段替换", skill)
+        self.assertIn("压缩上下文以后、接着干活之前，先读研究任务的状态包", skill)
+
+    def test_the_role_text_still_fits_with_the_line_after_a_compaction(self):
+        """The entry's role text is the longest: it is injected whole, also after a compaction, when the line
+        about the research tasks comes after it."""
+        policy = json.loads(self.read(".claude/hooks/policy.json"))
+        self.receipt(2000, type="research_task")
+        for role, pol in policy["agents"].items():
+            claim = {"name": pol.get("fixed_session") or "%s-p%d-01" % (pol["abbrev"], pol["rank"]), "role": role}
+            for current in (None, "2000", "2999"):
+                text = pool_lib.injection(self.tmp, policy, claim, "规则已更新。", compacted=True, current=current)
+                self.assertLessEqual(len(text), pool_lib.INJECT_LIMIT, role)
+                self.assertNotIn("下文略", text, role)
+                self.assertIn("上下文刚压缩过", text.rsplit("\n\n", 1)[1], role)       # the last paragraph, never cut
+            self.assertNotIn("上下文刚压缩过", pool_lib.injection(self.tmp, policy, claim, "规则已更新。"), role)
+
+    def test_the_hook_names_the_research_tasks_of_the_items_a_session_holds(self):
+        self.started_pool()
+        self.receipt(2000, type="research_task")
+        self.receipt(2101, type="same_seq", task="2000", source=None)
+        with open(os.path.join(self.tmp, "packages", "sent", "2102-x.md.json"), "w", encoding="utf-8") as f:
+            json.dump({"work_item_id": "2102", "type": "same_seq", "source": "2101"}, f)      # no task: up 来源工作项
+        self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p1-01：需求包 x.md")
+        line = "#2101 属于研究任务 #2000，运行 %s 2000。" % self.CMD
+        for sid in ("s-alg1", "s-alg2"):                     # the one that owes it, and the one that assigned it
+            text = self.compacted(sid)
+            self.assertIn("本会话是 Alg-p", text)
+            self.assertTrue(text.endswith("上下文刚压缩过，接着干活之前先读所属研究任务的状态包（规矩照角色说明里“压缩上下文以后”那一条）：" + line), text[-300:])
+        self.prompt("s-alg0", "【委托 #2102】Alg-p1-01 → Alg-p0-01：需求包 y.md\n会话名：Alg-p0-2102")
+        self.assertTrue(self.compacted("s-alg0").endswith("#2102 属于研究任务 #2000，运行 %s 2000。" % self.CMD))
+        self.assertTrue(self.compacted("s-alg1").endswith("#2101、#2102 属于研究任务 #2000，运行 %s 2000。" % self.CMD))   # what it owes first
+        for source in ("startup", "resume", "clear"):        # only a compaction adds the line
+            self.assertNotIn("上下文刚压缩过", self.compacted("s-alg1", source), source)
+        # an item the receipts say nothing about: how to find its task, and that it may be skipped; the rest still named
+        self.prompt("s-alg1", "【委托 #2103】Alg-p2-01 → Alg-p1-01：需求包 z.md")
+        with open(os.path.join(self.tmp, "packages", "sent", "2104.json"), "w", encoding="utf-8") as f:
+            f.write("{broken")
+        self.prompt("s-alg1", "【委托 #2104】Alg-p2-01 → Alg-p1-01：需求包 w.md")
+        text = self.compacted("s-alg1")
+        self.assertIn("#2101、#2102 属于研究任务 #2000，运行 %s 2000；" % self.CMD, text)
+        self.assertIn("#2103、#2104 在本地回执里查不到所属研究任务：用 ledger.py get <工作项 ID> 看“所属研究任务”字段，"
+                      "没有就用 ledger.py trace <工作项 ID> 沿“来源工作项”往上找，找到了运行 %s <研究任务 ID>；"
+                      "找不到就说一句“跳过”再继续。" % self.CMD, text)
+        # nothing held: said so, and nothing to read
+        text = self.compacted("s-q1")
+        self.assertTrue(text.endswith("上下文刚压缩过。派发记录里本会话没有未了的工作项：手上确实没有的，说一句“跳过”再继续；"
+                                      "有的，照角色说明里“压缩上下文以后”那一条找到它所属的研究任务，先运行 %s <研究任务 ID> 读状态包。" % self.CMD), text[-300:])
+        # the research task itself, and the item a 【继续】 named after it was handed back
+        self.prompt("s-q2", "【委托 #2000】PMO-p2-01 → Quality-p2-01：研究任务单 t.md")
+        self.assertIn("手上的是研究任务 #2000，运行 %s 2000。" % self.CMD, self.compacted("s-q2"))
+        self.prompt("s-alg2", "【交付 #2101】Alg-p1-01 → Alg-p2-01：交付包 d.md")
+        for item in ("2103", "2104"):
+            self.prompt("s-alg2", "【交付 #%s】Alg-p1-01 → Alg-p2-01：交付包 d.md" % item)
+        self.assertIn("派发记录里本会话没有未了的工作项", self.compacted("s-alg2"))
+        self.assertIn("：#2102 属于研究任务 #2000", self.compacted("s-alg1"))          # it has handed #2101 in
+        self.prompt("s-alg1", "【继续 #2101】Alg-p2-01 → Alg-p1-01：第 2 条验收标准没有证据")
+        self.assertIn("：#2101、#2102 属于研究任务 #2000", self.compacted("s-alg1"))    # the item its status file names
+        # a session nobody claimed gets no such line
+        self.assertNotIn("上下文刚压缩过", self.compacted("s-mine"))
+
+    def test_post_compact_prints_the_line_and_keeps_it(self):
+        self.started_pool()
+        self.receipt(2000, type="research_task")
+        self.receipt(2101, type="same_seq", task="2000")
+        self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p1-01：需求包 x.md")
+        code, out, err = self.post_compact("s-alg1")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out.strip(), "上下文刚压缩过，接着干活之前先读所属研究任务的状态包（规矩照角色说明里“压缩上下文以后”那一条）："
+                                      "#2101 属于研究任务 #2000，运行 %s 2000。" % self.CMD)
+        rec = json.loads(self.read(".claude/logs/compact/Alg-p1-01.jsonl").splitlines()[-1])
+        self.assertEqual((rec["summary"], rec["status_hint"]), ("摘要", out.strip()))
+        code, out, err = self.post_compact("s-q1")                                   # nothing held: told to skip
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("说一句“跳过”再继续", out)
+        code, out, err = self.post_compact("s-mine")                                 # the researcher's own session: nothing
+        self.assertEqual((code, out, err), (0, "", ""))
+        rec = json.loads(self.read(".claude/logs/compact/session-s-mine.jsonl").splitlines()[-1])
+        self.assertEqual((rec["summary"], rec["status_hint"]), ("摘要", None))
+
+    def test_the_line_is_a_hint_and_never_an_error(self):
+        """Receipts that cannot be read, a chain of sources that turns back on itself, many items: one paragraph
+        each time, within bounds; a failure inside becomes a line that says so."""
+        root = self.tmp
+        self.receipt(3000, type="research_task")
+        self.receipt(3001, type="same_seq", source="3002")
+        self.receipt(3002, type="same_seq", source="3001")                           # a loop
+        self.assertIsNone(pool_lib.research_task_of(root, "3001"))
+        chain = list(range(3010, 3010 + pool_lib.TASK_HOPS + 2))
+        for a, b in zip(chain, chain[1:]):
+            self.receipt(a, type="same_seq", source=str(b))
+        self.receipt(chain[-1], type="same_seq", task="3000")
+        self.assertIsNone(pool_lib.research_task_of(root, chain[0]))                 # too far up: not followed for ever
+        self.assertEqual(pool_lib.research_task_of(root, chain[-pool_lib.TASK_HOPS]), "3000")
+        self.assertEqual(pool_lib.research_task_of(root, "#3000"), "3000")
+        self.assertIsNone(pool_lib.research_task_of(root, "<新工作项 ID>"))
+        for task in range(4000, 4000 + pool_lib.TASKS_SHOWN + 2):                    # more tasks and items than one line shows
+            self.receipt(task, type="research_task")
+            for k in range(pool_lib.TASK_ITEMS_SHOWN + 3):
+                self.receipt(task * 100 + k, type="same_seq", task=str(task))
+        items = [t * 100 + k for t in range(4000, 4000 + pool_lib.TASKS_SHOWN + 2) for k in range(pool_lib.TASK_ITEMS_SHOWN + 3)]
+        text = pool_lib.status_hint(root, items)
+        self.assertEqual(text.count(self.CMD), 1)                                    # the command once, for all of them
+        self.assertIn("等 %d 条 属于研究任务 #4000；" % (pool_lib.TASK_ITEMS_SHOWN + 3), text)
+        self.assertTrue(text.endswith("；另有 2 条研究任务，用 ledger.py query tasks 列出；逐条运行 %s <研究任务 ID>。" % self.CMD), text[-200:])
+        self.assertEqual(pool_lib.status_hint(root, ["400001", "400101", "3001"]),
+                         "上下文刚压缩过，接着干活之前先读所属研究任务的状态包（规矩照角色说明里“压缩上下文以后”那一条）："
+                         "#400001 属于研究任务 #4000；#400101 属于研究任务 #4001；逐条运行 %s <研究任务 ID>；"
+                         "#3001 在本地回执里查不到所属研究任务：用 ledger.py get <工作项 ID> 看“所属研究任务”字段，"
+                         "没有就用 ledger.py trace <工作项 ID> 沿“来源工作项”往上找，找到了照上面的命令读；找不到就说一句“跳过”再继续。" % self.CMD)
+        self.assertNotIn("\n", text)
+        self.assertLess(len(text), 1200)
+        with mock.patch.object(pool_lib, "receipt_files", side_effect=OSError("磁盘读不了")):
+            text = pool_lib.status_hint(root, ["3000"])
+        self.assertEqual(text, "上下文刚压缩过。没能从本地回执查出手上工作项所属的研究任务（磁盘读不了）："
+                               "照角色说明里“压缩上下文以后”那一条自己找，找不到就说一句“跳过”再继续。")
+        self.assertIn("派发记录里本会话没有未了的工作项", pool_lib.status_hint(root, [None, "", "待建"]))
+        # the receipts folder is listed once, however many items; a reply's receipt is no registration receipt
+        with open(os.path.join(root, "packages", "sent", "reply-3000-back.md.json"), "w", encoding="utf-8") as f:
+            json.dump({"parent": "3000", "status": "registered", "version": 1}, f)
+        files = pool_lib.receipt_files(root)
+        self.assertEqual([os.path.basename(p) for p in files["3000"]], ["3000.json"])
+        with mock.patch.object(pool_lib.os, "listdir", wraps=os.listdir) as listing:
+            pool_lib.status_hint(root, items)
+        self.assertEqual(listing.call_count, 1)
+        self.assertIn("在本地回执里查不到所属研究任务", pool_lib.status_hint(os.path.join(root, "没有这个目录"), ["3000"]))
+
+    def test_the_budget_holds_with_many_open_items(self):
+        self.started_pool()
+        self.receipt(2000, type="research_task")
+        for i in range(60):
+            self.receipt(3000 + i, type="same_seq", task="2000")
+            self.prompt("s-alg2", "【委托 #%d】PMO-p2-01 → Alg-p2-01：需求包 x.md" % (3000 + i))
+        text = self.compacted("s-entry")
+        self.assertLessEqual(len(text), pool_lib.INJECT_LIMIT)
+        self.assertIn("## 怎么干活", text)
+        self.assertNotIn("下文略", text)
+        self.assertIn("#%d→Alg-p2-01；另有 40 条，用 route.py pool --recover 看全。" % (3000 + pool_lib.ITEMS_SHOWN - 1), text)
+        self.assertTrue(text.endswith("：未了事项属于研究任务 #2000；连同其余没归档的（ledger.py query tasks 列出），逐条运行 %s <研究任务 ID>。" % self.CMD), text[-200:])
+        text = self.compacted("s-alg2")                                              # the session that owes them: the first few named
+        self.assertTrue(text.endswith("等 60 条 属于研究任务 #2000，运行 %s 2000。" % self.CMD), text[-200:])
+
+    def test_the_entry_text_is_whole_with_many_open_items(self):
+        """The entry's role text is the longest, and the entry holds the most items. With IDs as long as a real
+        space gives (10 digits), 20 items assigned to three sessions in three research tasks leave the text whole
+        after a compaction, and so does any number assigned to one session; after a resume any number does. 1.0.5
+        cut the text from the 19th item on; 1.0.6 as first written, from the 4th to the 7th after a compaction: the
+        line about the research tasks named every item again and gave the command once for each task."""
+        self.started_pool()
+        policy = json.loads(self.read(".claude/hooks/policy.json"))
+        claim = {"name": "PMO-p2-01", "role": "pmo-p2"}
+        base = 7160000000
+        names = ("Alg-p2-01", "Quality-p2-01", "Infra-p2-01", "Product-p2-01", "Rnd-p2-01", "Liaison-p2-01", "PMO-p1-01")
+
+        def injected(n, sessions, tasks, compacted=True):
+            for k in range(tasks):
+                self.receipt(base + 900 + k, type="research_task")
+            sent = [(str(base + i), names[i % sessions]) for i in range(n)]
+            for i, (item, _) in enumerate(sent):
+                self.receipt(item, type="cross_request", task=str(base + 900 + i % tasks))
+            with mock.patch.object(pool_lib, "open_items", return_value=(sent, [])):
+                return pool_lib.injection(self.tmp, policy, claim, compacted=compacted)
+        for case in ((10, 3, 3), (18, 1, 1), (18, 3, 3), (20, 1, 1), (20, 3, 3), (60, 1, 1)):
+            text = injected(*case)
+            self.assertNotIn("下文略", text, case)
+            self.assertLessEqual(len(text), pool_lib.INJECT_LIMIT, case)
+            self.assertIn("**权限提示。**", text, case)                                # the last paragraph of the role text
+            self.assertIn("逐条运行 %s <研究任务 ID>。" % self.CMD, text.rsplit("\n\n", 1)[1], case)
+        for case in ((20, 7, 3), (60, 7, 4)):
+            self.assertNotIn("下文略", injected(*case, compacted=False), case)
+        # through the hooks, as the reviewers measured it: 18 items assigned to one session, one research task
+        self.receipt(base + 900, type="research_task")
+        for i in range(18):
+            self.receipt(base + 100 + i, type="cross_request", task=str(base + 900))
+            self.prompt("s-alg2", "【委托 #%d】PMO-p2-01 → Alg-p2-01：需求包 x.md" % (base + 100 + i))
+        for source in ("compact", "resume"):
+            text = self.compacted("s-entry", source)
+            self.assertNotIn("下文略", text, source)
+            self.assertIn("未了事项：委托出去还没交付：#7160000100、#7160000101、", text, source)
+            self.assertIn("、#7160000117→Alg-p2-01。台账和状态包是正本", text, source)
+        self.assertTrue(self.compacted("s-entry").endswith(
+            "：未了事项属于研究任务 #7160000900；连同其余没归档的（ledger.py query tasks 列出），逐条运行 %s <研究任务 ID>。" % self.CMD))
+
+    def test_the_entry_is_told_to_read_every_task_that_is_not_archived(self):
+        """The entry keeps the 状态包 of every research task that is not archived, so its role text has it read them
+        all after a compaction. The line the hook adds says the same, whatever the entry holds: it never tells the
+        entry to say 跳过 because it holds no item."""
+        self.started_pool()
+        self.receipt(2000, type="research_task")
+        head = "上下文刚压缩过，接着干活之前先读研究任务的状态包（规矩照角色说明里“压缩上下文以后”那一条）："
+        nothing = head + "用 ledger.py query tasks 列出没归档的研究任务，逐条运行 %s <研究任务 ID>；一条都没有，说一句“跳过”再继续。" % self.CMD
+        text = self.compacted("s-entry")
+        self.assertTrue(text.endswith(nothing), text[-300:])
+        self.assertIn("找出没归档的研究任务（`ledger.py query tasks`），和手上工作项所属的研究任务", text)     # the rule it points at
+        self.assertNotIn("派发记录里本会话没有未了的工作项", text)
+        code, out, err = self.post_compact("s-entry")
+        self.assertEqual((code, out.strip(), err), (0, nothing, ""))
+        self.prompt("s-entry", "【交付 #2101】Alg-p2-01 → PMO-p2-01：交付包 d.md")     # a report it received leaves it nothing open
+        self.assertTrue(self.compacted("s-entry").endswith(nothing))
+        self.receipt(2101, type="cross_request", task="2000")
+        self.receipt(2201, type="cross_request", task="2200")
+        self.receipt(2200, type="research_task")
+        self.prompt("s-alg2", "【委托 #2101】PMO-p2-01 → Alg-p2-01：需求包 x.md")
+        holds = head + "未了事项属于研究任务 #2000；连同其余没归档的（ledger.py query tasks 列出），逐条运行 %s <研究任务 ID>。" % self.CMD
+        self.assertTrue(self.compacted("s-entry").endswith(holds))
+        self.assertEqual(self.post_compact("s-entry")[1].strip(), holds)
+        self.prompt("s-q2", "【委托 #2201】PMO-p2-01 → Quality-p2-01：需求包 y.md")
+        self.prompt("s-q2", "【委托 #2999】PMO-p2-01 → Quality-p2-01：需求包 z.md")     # an item the receipts say nothing about
+        self.assertTrue(self.compacted("s-entry").endswith(holds.replace("#2000；", "#2000、#2200；")))
+        self.assertEqual(pool_lib.status_hint(self.tmp, ["2999"], entry=True), nothing)
+        self.assertEqual(pool_lib.status_hint(self.tmp, [], entry=True), nothing)
+        # every other session, the router and the scribe included, is told as before
+        for sid in ("s-scribe", "s-q1"):
+            self.assertTrue(self.compacted(sid).endswith("有的，照角色说明里“压缩上下文以后”那一条找到它所属的研究任务，先运行 %s <研究任务 ID> 读状态包。" % self.CMD), sid)
+        self.assertTrue(self.compacted("s-q2").endswith(
+            "：#2201 属于研究任务 #2200，运行 %s 2200；#2999 在本地回执里查不到所属研究任务：用 ledger.py get <工作项 ID> 看“所属研究任务”字段，"
+            "没有就用 ledger.py trace <工作项 ID> 沿“来源工作项”往上找，找到了运行 %s <研究任务 ID>；找不到就说一句“跳过”再继续。" % (self.CMD, self.CMD)))
+
+    def test_a_bad_byte_in_the_dispatch_log_loses_neither_the_summary_nor_the_line(self):
+        """PostCompact looks up the session's open items in dispatch.jsonl before it writes the compaction summary.
+        A byte in that log that is no UTF-8 stopped it there: no line, and the summary was not kept."""
+        self.started_pool()
+        self.receipt(2000, type="research_task")
+        self.receipt(2101, type="same_seq", task="2000")
+        self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p1-01：需求包 x.md")
+        with open(os.path.join(self.tmp, ".claude", "logs", "dispatch.jsonl"), "ab") as f:
+            f.write(b'{"event": "message", "kind": "notice", "note": "\xff\xfe"}\n{"event": "mess')
+        line = ("上下文刚压缩过，接着干活之前先读所属研究任务的状态包（规矩照角色说明里“压缩上下文以后”那一条）："
+                "#2101 属于研究任务 #2000，运行 %s 2000。" % self.CMD)
+        code, out, err = self.post_compact("s-alg1")
+        self.assertEqual((code, out.strip(), err), (0, line, ""))                    # the other records are read as before
+        rec = json.loads(self.read(".claude/logs/compact/Alg-p1-01.jsonl").splitlines()[-1])
+        self.assertEqual((rec["summary"], rec["status_hint"]), ("摘要", line))
+        text = self.compacted("s-alg1")
+        self.assertIn("本会话是 Alg-p1-01", text)
+        self.assertIn("未了事项：还欠交付：#2101（交付给 Alg-p2-01）。", text)
+        self.assertTrue(text.endswith(line))
+        self.assertTrue(any(r.get("id") == "2101" for r in pool_lib.read_events(self.tmp)))
+        # whatever else fails while the items are looked up becomes the line that says so, and the summary is kept
+        policy = json.loads(self.read(".claude/hooks/policy.json"))
+        with mock.patch.object(pool_lib, "open_items", side_effect=ValueError("派发记录读不了")):
+            hint = pool_lib.compaction_hint(self.tmp, policy, {"name": "Alg-p1-01", "role": "alg-p1"})
+        self.assertEqual(hint, "上下文刚压缩过。没能从本地回执查出手上工作项所属的研究任务（派发记录读不了）："
+                               "照角色说明里“压缩上下文以后”那一条自己找，找不到就说一句“跳过”再继续。")
+        self.assertIn("pool.compaction_hint(", self.read(".claude/hooks/instances.py"))
+
+
+class TextsAfterTheGatesTest(PoolProjectCase):
+    """1.0.6 took out the three layers of command checks 1.0.4 had added: the texts say what the hooks do now.
+    The rules stand (an irreversible action needs a decision the researcher approved; nobody does what a waiting
+    decision freezes; the evaluation protocol's files and .claude/ are not changed), kept by the rules, the line
+    each turn and the package check, and no text says a hook stops, releases or freezes those commands."""
+
+    SOURCES = ("skills/entry/SKILL.md", "skills/entry/references/routing.md", "skills/ledger/SKILL.md",
+               "skills/ledger/references/commands.md", "skills/packages/SKILL.md", "skills/packages/assets/decision.md",
+               "skills/packages/assets/delivery.md", "skills/packages/assets/request.md",
+               "skills/packages/references/examples.md", "skills/packages/references/principles.md",
+               "skills/packages/references/interfaces.md", "skills/spec/SKILL.md", "skills/charter/SKILL.md",
+               "skills/setup/references/mechanisms.md", "scaffold/hooks/inbox.py", "scaffold/CLAUDE.md.tmpl",
+               "orgspec/rules.json", "orgspec/irreversible.json")
+    DOCS = ("docs/使用说明.md", "docs/开发说明.md", "README.md", "feishu-template/README.md")
+
+    def texts(self):
+        out = {"CLAUDE.md": self.read("CLAUDE.md"), "org/org.md": self.read("org/org.md"),
+               "org/decisions.md": self.read("org/decisions.md"),
+               "templates/decision.md": self.read(".claude/solo-lab/templates/decision.md")}
+        for name in sorted(os.listdir(os.path.join(self.tmp, ".claude", "agents"))):
+            out[name] = self.read(os.path.join(".claude", "agents", name))
+        for rel in self.SOURCES:
+            with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
+                out[rel] = f.read()
+        for rel in self.DOCS:
+            with open(os.path.join(REPO, rel), encoding="utf-8") as f:
+                out[rel] = f.read()
+        return out
+
+    def changelog(self, version):
+        with open(os.path.join(REPO, "CHANGELOG.md"), encoding="utf-8") as f:
+            return f.read().split("\n## %s\n" % version, 1)[1].split("\n## ", 1)[0]
+
+    def test_no_text_says_a_hook_stops_releases_or_freezes(self):
+        texts = self.texts()
+        gone = ("hook 从此放行", "写进放行", "收回它的放行", "它放行过的", "不走决策放行", "由 hook 拦下", "由 hook 按它放行",
+                "没有放行时 hook", "hook 才放行", "照样拦", "旧放行暂停", "不放行任何不可逆", "到期默认从不放行", "到期默认不放行",
+                "按研究员选的选项放行", "要放行清单里的类别", "选项要放行", "hook 只拦三类事", "认不出命令，hook 不拦",
+                "一律先被拒", "要马上放行的", "写进本地决策状态以后才有拦截", "hook 不拦它们冻结的动作",
+                "用 shell 命令删除、移动、覆盖受保护路径或改它们的权限", "hook 按命令文本拦", "这类 shell 命令覆盖、挪走、删除）",
+                # 1.0.6 on: a decision rolled back to 待决定 waits for the researcher; nothing counts from the rollback
+                "从回滚时重新算", "从回滚时算", "回到待决定后", "从回到待决定时算",
+                # the frozen actions take no form a hook would match
+                "命令前缀用反引号写", "至少两个词",
+                # reversibility is the author's judgement by the criteria; the list is the floor
+                "清单以外的事算可逆", "清单以外的都算可逆")
+        for name, text in texts.items():
+            for old in gone:
+                self.assertNotIn(old, text, name)
+        former = "要放行的不可逆动作"                       # the column's name until 1.0.6: only where the renaming is told
+        for name, text in texts.items():
+            for line in [x for x in text.splitlines() if former in x]:
+                self.assertIn("改名“不可逆的动作”", line, name)
+        self.assertEqual(sorted(n for n, t in texts.items() if former in t), ["docs/使用说明.md", "skills/setup/references/mechanisms.md"])
+
+    def test_the_texts_say_what_the_hooks_do_now(self):
+        texts = self.texts()
+        org, claude, decisions = texts["org/org.md"], texts["CLAUDE.md"], texts["org/decisions.md"]
+        for part in ("- 批准不可逆的事：不可逆事项清单（在 `org/org.md`）里的事，要先有一条研究员批准、所选选项里列了它的决策再做；"
+                     "清单以外的事可逆不可逆，由决策包的作者按判据判断。",
+                     "“冻结的动作”里写的动作，决定以前谁都不做；hook 不拦这些动作，靠各会话照规则办；选项中立的准备照常做",
+                     "一件事可逆不可逆，由决策包的作者按下面的判据判断：满足任一条的算不可逆，到期只能等研究员；都不满足的算可逆，"
+                     "到期按决策包写的到期默认动作办。判据下面的清单是必须写不可逆的下限，清单以外的事由作者按判据判断。",
+                     "每个选项要做的不可逆的动作"):
+            self.assertIn(part, org)
+        self.assertIn("- 批准不可逆的事：", texts["pmo-p2.md"])                     # the entry carries what only people do
+        for part in ("hook 不拦清单里的命令，也不按待定决策冻结：命令的权限照会话自己的权限检查，这几条规矩靠各会话照规则办和包检查。",
+                     "一件事可逆不可逆由决策包的作者按判据判断，清单是必须写不可逆的下限。",
+                     "待定的决策记在本地决策状态 `.claude/state/gates.json`，由台账脚本维护。",
+                     "研究员定过一次、又回滚到待决定的决策也一直等研究员，不再走到期默认。",
+                     "依据：研究员 2026-11-16 定，2026-11-18 改成 hook 不拦。"):
+            self.assertIn(part, decisions)
+        self.assertIn("用编辑工具改它们由 hook 管；用 shell 命令删改 hook 不拦，照规则同样不许。", claude)
+        for name in ("alg-p2.md", "product-p2.md", "pmo-p2.md"):
+            self.assertNotIn("hook 在池会话里拒绝", texts[name], name)
+        self.assertIn("不可逆事项清单（`org/org.md`）里的事，要等研究员定了、所选选项里列了它才做。hook 不拦这些命令，也不按待定决策冻结，"
+                      "权限照 Claude Code 自己的检查。上面两条规矩不变，靠你照规则办、每轮的冻结提示和包检查。一件事可逆不可逆，你按判据判断，清单是必须写不可逆的下限。",
+                      texts["alg-p2.md"])
+        scribe = texts["pmo-scribe.md"]
+        for part in ("脚本核对选项名，把它记进回执，再加一条评论，写明这个选项列的不可逆的动作。这只是记录：不加也能确认，hook 不看它，"
+                     "不可逆事项清单里的命令 hook 都不拦。请求没写选项的照请求确认，不替研究员挑。",
+                     "本地决策状态 `.claude/state/gates.json` 只记待定的决策，跟着台账走",
+                     "回滚到“待决定”的重新写进去、重新冻结，并记下它回滚过：定过一次的决策不再走到期默认，一直等研究员。",
+                     "不用编辑工具改它，也不用 shell 命令改。",
+                     "confirm <决策 ID> --by 研究员 [--option '<选项>'] [--executor <会话名>] --set 决定内容=<…> --set 决定人=研究员"):
+            self.assertIn(part, scribe)
+        for rel, part in (
+                ("skills/ledger/SKILL.md", "它只是记录：脚本核对选项名，记进回执的 `option`，再加一条评论，带上这个选项列的不可逆的动作；不加也能确认。"),
+                ("skills/ledger/SKILL.md", "guard hook 不读它，冻结的动作和不可逆事项清单里的命令 hook 都不拦，靠各会话照规则办。"),
+                ("skills/ledger/SKILL.md", "1.0.4、1.0.5 写的文件里的放行记录读的时候忽略，下次写的时候丢掉。"),
+                ("skills/ledger/references/commands.md", "**决策的选项和执行方。** 确认决策的“决定”这一步，决策移出本地决策状态里的待定决策，冻结解除。"),
+                ("skills/ledger/references/commands.md", "它只是记录：hook 不看它，不可逆事项清单里的命令 hook 都不拦。"),
+                ("skills/ledger/references/commands.md", "| 没有回滚过 | 研究员定过一次、又回滚到待决定的决策不再走到期默认，一直等研究员 |"),
+                ("skills/entry/SKILL.md", "这只是记录，不写也能确认；hook 不看它，也不拦不可逆事项清单里的命令。"),
+                ("skills/entry/SKILL.md", "hook 不拦，靠各会话自己守住。"),
+                ("skills/packages/SKILL.md", "hook 不拦这些命令，也不按待定决策冻结，权限照会话自己的权限检查。上面两条规矩不变，靠各会话照规则办和包检查。"),
+                ("skills/packages/SKILL.md", "不可逆事项清单是必须写不可逆的下限，清单以外的事照判据判断。"),
+                ("skills/packages/assets/decision.md", "不可逆事项清单是必须写不可逆的下限，清单以外的事照判据判断："),
+                ("skills/packages/references/principles.md", "可逆不可逆由作者按判据判断，不可逆事项清单是必须写不可逆的下限"),
+                ("skills/packages/references/principles.md", "hook 不拦这些动作，命令的权限照会话自己的权限检查，守住它靠各会话照规则办"),
+                ("skills/setup/references/mechanisms.md", "hook 只拦两类事：会损坏数据的，和研究员多半不在时向他提的问题。不可逆事项清单里的命令、删改文件的 shell 命令，hook 都不拦，"
+                                                          "权限照 Claude Code 自己的检查。"),
+                ("skills/setup/references/mechanisms.md", "| 任何会话 | 不作答复 | 不可逆事项清单里的命令（`sudo`、`ssh`、`git push`、`open -a Docker` 这类）"),
+                ("skills/setup/references/mechanisms.md", "hook 不拦清单里的命令，也不按待定决策冻结：权限判断交给 Claude Code 自己的权限检查（研究员 2026-11-18 定）"),
+                ("docs/使用说明.md", "hook 只拦两类事：会损坏数据的，和你多半不在时向你提的问题。权限判断交给 Claude Code 自己"),
+                ("docs/使用说明.md", "- hook 不拦、也不弹窗的：不可逆事项清单里的命令（`sudo`、`ssh`、`git push`、`open -a Docker` 这类）"),
+                ("docs/使用说明.md", "用 shell 命令删改它们，hook 不拦；脚本自己在里面写文件也拦不住。"),
+                ("docs/开发说明.md", "它是写决策包和判断可逆性的依据，不给 hook 用：1.0.6 去掉了 1.0.4 加的命令拦截，guard hook 不读清单，也不读本地决策状态，`policy.json` 里没有它。"),
+                ("docs/开发说明.md", "inbox hook 照它出每轮的冻结提示和到期提示。"),
+                ("docs/开发说明.md", "命令的权限判断交给 Claude Code 自己：表以外的命令 hook 不作答复，不拦、不弹窗，也不答允许。"),
+                # the hook's own allow is for a command it judged whole: a Feishu call with anything else on the line gets no answer
+                ("docs/开发说明.md", "hook 答允许，整条命令就跳过 Claude Code 自己的权限检查，所以允许只答给它整条判过的命令（`feishu_cmd.py` 的 `Parsed.plain`）"),
+                ("docs/开发说明.md", "同一行里还有别的命令、写文件的重定向、`sudo` 这类包装或命令替换的，允许降成不作答复，`guard.jsonl` 记下原因；拒绝和弹窗照旧。"),
+                ("docs/开发说明.md", "Agent 调用的规则（派发不带 `name`，不用 Agent 工具派书记员）"),
+                ("docs/开发说明.md", "硬规则的全表在 `skills/setup/references/mechanisms.md`。"),
+                ("skills/setup/references/mechanisms.md", "hook 不拦、不弹窗，也不答允许，命令照 Claude Code 自己的权限检查；同一行里带着飞书读命令或书记员的写命令也一样。"),
+                ("skills/setup/references/mechanisms.md", "| 任何会话 | 允许 | 整条命令只有飞书读命令、会话自己白名单里的飞书写命令（带标签的评论、入口发的消息）或书记员的台账和飞书写命令，"
+                                                          "中间可以有 `cd`、`pushd`、`popd`。"),
+                ("skills/setup/references/mechanisms.md", "所以命令里还有别的就不答允许，交给 Claude Code："),
+                ("docs/使用说明.md", "和飞书读命令写在同一行也一样，hook 只对整条都是飞书、台账调用的命令答允许。")):
+            self.assertIn(part, texts[rel], rel)
+        # the researcher's own session is asked before an edit of a protected path (2026-11-16), like the quality sequence's
+        self.assertIn("质量序列的会话和研究员自己的会话弹窗，要研究员确认（bypass 和 dontAsk 模式下也拒绝）", texts["skills/setup/references/mechanisms.md"])
+        self.assertIn("质量序列的会话和研究员自己的会话例外，它们的改动弹窗要研究员确认，bypass 和 dontAsk 模式下也拒绝", texts["skills/setup/references/mechanisms.md"])
+        self.assertIn("质量序列的会话和你自己的会话例外，它们的改动弹窗要你确认", texts["docs/使用说明.md"])
+        self.assertIn("受保护路径用编辑工具改，池会话一律拒绝，质量序列的会话和你自己的会话弹窗问你。", texts["docs/使用说明.md"])
+        self.assertIn("质量序列的会话和研究员自己的会话例外：改动弹窗要研究员确认，bypass 和 dontAsk 模式下也拒绝", claude)
+
+    def test_who_carries_a_decision_out_is_written_everywhere(self):
+        """2026-11-16: 执行方 takes the researcher, a sequence's +2, the entry or the router; one option that needs
+        the researcher's hands makes it 研究员, and `confirm --executor` hands the decision to a session when the
+        researcher picked another. The template, the packages skill, the scribe's and the entry's role texts and
+        the ledger skill say so."""
+        texts = self.texts()
+        for name, part in (
+                ("templates/decision.md", "执行方写会话的，只收各序列的 +2、入口和路由。写 +1、+0 或书记员的，包检查会退回"),
+                ("templates/decision.md", "书记员确认“决定”时加 `--executor <会话名>`，把执行方改成那个会话"),
+                ("skills/packages/SKILL.md", "执行方写会话的，只收各序列的 +2、入口和路由，写 +1、+0 或书记员的包检查会退回"),
+                ("skills/packages/SKILL.md", "书记员确认“决定”时加 `--executor <会话名>` 把执行方改成那个会话"),
+                ("skills/packages/references/principles.md", "只要有一个选项要研究员亲手做，就写“研究员”，研究员选了不用他动手的选项，书记员确认“决定”时用 `--executor` 改成会话。"),
+                ("skills/packages/references/examples.md", "书记员确认“决定”时加 `--executor Infra-p2-01`，把执行方改成会话。"),
+                ("pmo-scribe.md", "确认“决定”时加 `--executor <会话名>`，只收各序列的 +2、入口和路由。"),
+                ("pmo-scribe.md", "要把执行方改成研究员的，脚本会拒绝：请发出方写下一版，用 `ledger.py revise`。"),
+                ("pmo-scribe.md", "先 `ledger.py rollback <ID> --to 决定 --reason '<原因>' --by 研究员`，再带 `--executor` 确认。"),
+                ("pmo-p2.md", "包头执行方是研究员、他选的选项却不用他动手的，请求里写明改由哪个会话执行（各序列的 +2、入口或路由），书记员确认时加 `--executor <会话名>`。"),
+                ("alg-p2.md", "执行方写会话的只收各序列的 +2、入口和路由，要下级干的活由你用需求包委托。"),
+                ("alg-p2.md", "入口请书记员确认“决定”时用 `--executor` 把执行方改成会话。"),
+                ("CLAUDE.md", "执行方写会话的只收各序列的 +2、入口和路由；只要有一个选项要研究员亲手做就写“研究员”，"
+                              "他选了不用他动手的选项，书记员确认“决定”时用 `--executor` 把执行方改成会话。"),
+                ("org/decisions.md", "书记员确认“决定”时用 `ledger.py confirm --executor <会话名>` 把执行方改成那个会话。"),
+                ("skills/ledger/SKILL.md", "可以加 `--executor <会话名>` 改执行方：包头“执行方”写的是研究员、研究员选的选项却不用他动手时用。"),
+                ("skills/ledger/SKILL.md", "`query queue` 不再把它列成等研究员执行。这条决策回滚到“待决定”时，执行方改回包头写的。"),
+                ("skills/ledger/references/commands.md", "| `--executor <会话名>` | 只用在决策的“决定”这一步，可以不加：把执行方改成这个会话 |"),
+                ("skills/ledger/references/commands.md", "`--executor` 不收“研究员”：要把执行方改成研究员，请发出方写下一版"),
+                ("skills/entry/SKILL.md", "- 执行方：<包头写的是研究员、他选的选项却不用他动手时，写改由哪个会话执行；别的情况不写这一行>"),
+                ("docs/使用说明.md", "书记员确认“决定”时把执行方改成它（`ledger.py confirm --executor`），这条决策就不再列成等你执行。")):
+            self.assertIn(part, texts[name], name)
+
+    def test_the_side_that_runs_the_experiment_has_its_own_word(self):
+        """2026-11-16: 执行方 names one thing only, the line in a decision package's header. Whoever runs the
+        experiment and reports development scores is 实验方, in every text but the changelog's earlier sections
+        and the Codex skills."""
+        old = re.compile(r"执行方[^。；;\n]{0,14}(?:开发分|开发集|正式集)|执行方(?:自己跑|只碰|报的)")
+        seen = 0
+        for base, _, files in repo_walk(skip=("skills-codex",)):
+            for name in files:
+                if not name.endswith((".md", ".json", ".py", ".tmpl")) or os.path.join(base, name) == os.path.abspath(__file__):
+                    continue
+                with open(os.path.join(base, name), encoding="utf-8") as f:
+                    text = f.read()
+                if name == "CHANGELOG.md":
+                    text = text.split("\n## 1.0.5\n", 1)[0]               # the earlier sections are history
+                seen += 1
+                hit = old.search(text)
+                self.assertIsNone(hit, "%s：%s" % (os.path.relpath(os.path.join(base, name), REPO), hit and hit.group(0)))
+        self.assertGreater(seen, 60)
+        texts = self.texts()
+        self.assertIn("实验方自己跑的是开发分，用来调试，不写进结论", texts["org/org.md"])
+        self.assertIn("Eval Set 分开发集和正式集：实验方只碰开发集", texts["org/org.md"])
+        self.assertIn("实验方自己跑的开发分不进结论", texts["quality-p2.md"])
+        for rel in ("skills/packages/SKILL.md", "skills/packages/references/interfaces.md", "skills/spec/SKILL.md",
+                    "skills/packages/assets/delivery.md", "skills/setup/references/mechanisms.md", "docs/使用说明.md", "README.md"):
+            self.assertIn("实验方", texts[rel], rel)
+
+    def test_upgrading_to_1_0_6_is_written_down(self):
+        texts = self.texts()
+        with open(os.path.join(ROOT, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["version"], "1.0.6")
+        note = next(x for x in texts["skills/setup/references/mechanisms.md"].splitlines() if x.startswith("- **升到 1.0.6。**"))
+        for part in ("这一版去掉了 1.0.4 加的三层命令拦截", "权限判断交给 Claude Code，插件做不到比它更好", "重跑 `init --apply`",
+                     "`guard.py` 的 `POLICY_VERSION` 从 6 升到 7，`policy.json` 不再带清单",
+                     "只换了 `ledger.py`、没换 `inbox.py` 的话，入口收不到到期提示", "请研究员退出并重开一次桌面应用",
+                     "升级以后不用登记放行", "旧文件里的放行记录读的时候忽略，书记员下一次写入时丢掉，不用手工处理",
+                     "选项表的“要放行的不可逆动作”一列改名“不可逆的动作”", "包头“执行方”写了 +1、+0 或书记员的，改写负责这件事的 +2",
+                     "升级前回滚过、还在待决定的也算", "先读所属研究任务的状态包（`ledger.py status <研究任务 ID>`）"):
+            self.assertIn(part, note)
+        self.assertEqual(setup.POLICY_VERSION, 7)
+        guide = next(x for x in texts["docs/使用说明.md"].splitlines() if x.startswith("**升到 1.0.6。**"))
+        for part in ("这一版去掉了 1.0.4 加的三层命令拦截", "请初始化会话重跑 `init --apply`", "请你退出并重开一次桌面应用",
+                     "升级以后不用登记放行", "选项表的“要放行的不可逆动作”一列改名“不可逆的动作”",
+                     "包头“执行方”写了 +1、+0 或书记员的，改写负责这件事的 +2"):
+            self.assertIn(part, guide)
+        for rel, head in (("skills/setup/references/mechanisms.md", "- **升到 1.0.4。**"), ("docs/使用说明.md", "**升到 1.0.4。**")):
+            old = next(x for x in texts[rel].splitlines() if x.startswith(head))       # what 1.0.4 added and 1.0.6 took out is said there too
+            self.assertIn("它另加的三层命令拦截和决策放行，1.0.6 去掉了", old, rel)
+            self.assertIn("选项表的“不可逆的动作”一列", old, rel)
+        log = self.changelog("1.0.6")
+        self.assertTrue(log.startswith("\n2026-11-18 发布。去掉 1.0.4 加的三层命令拦截：权限判断交给 Claude Code 自己，hook 只守和飞书项目有关的事。"), log[:80])
+        for part in ("- 去掉三层拦截，原因是研究员 2026-11-18 定的原则", "hook 对这些命令不作答复：不拒绝、不弹窗，也不答允许",
+                     "`POLICY_VERSION` 从 6 升到 7", "- 规则（研究员 2026-11-16 定）：确认“决定”时可以改执行方。",
+                     "- 压缩上下文以后先读状态包", "- 升级：请初始化会话重跑 `init --apply`。", "- 验证范围：离线回归。",
+                     # what the review of 1.0.6 corrected: the allow is for a whole command, guard.py is the hook that reads no
+                     # decision state, the two projects' sections differ by one line, and the entry's text was tightened in five places
+                     "允许只答给整条都是飞书、台账调用的命令（`lark-cli`、`meegle` 和本项目的 `ledger.py`，中间可以有 `cd`、`pushd`、`popd`）",
+                     "`guard.py` 不读本地决策状态（`inbox.py` 照旧读它，出每轮的冻结提示和到期提示）。",
+                     "Claude 项目和 Codex 项目的这一节不再有拦不拦的差别；Claude 项目多一行本项目登记的受保护路径。",
+                     "为此收紧了五处，都是和别处重复的话", "没加引号的反引号里的飞书命令整条读得到",
+                     "这两件用现有的离线测试核对过，没有发现问题。",
+                     "补救命令补上必填的 `--reason`（`ledger.py rollback <ID> --to 决定 --reason '<原因>' --by 研究员`）"):
+            self.assertIn(part, log)
+        for gone in ("hook 不读本地决策状态。", "这一节不再有差别。", "收紧了两处"):
+            self.assertNotIn(gone, log)
+        self.assertIn("本项目登记的受保护路径（任务文件 `spec/task.json` 的 protected_paths）", texts["org/org.md"])   # the one line a Codex project lacks
+        self.assertIn("清单以外的事算可逆", self.changelog("1.0.4"))                 # the earlier sections are left as they were written
+
+    def test_a_space_brought_up_to_2_2_0_is_told_the_same_step_in_four_places(self):
+        """What an old project does once its space has the two fields, the renamed state and the view of template
+        2.2.0: read the snapshot again for the fields, bind again for the renamed state. The four places that
+        tell it name the same two commands and who runs each."""
+        places = {}
+        for rel in ("feishu-template/README.md", "feishu-template/更新记录.md", "docs/使用说明.md"):
+            with open(os.path.join(REPO, rel), encoding="utf-8") as f:
+                places[rel] = f.read()
+        with open(os.path.join(ROOT, "skills", "setup", "references", "mechanisms.md"), encoding="utf-8") as f:
+            places["mechanisms.md"] = next(x for x in f.read().splitlines() if x.startswith("- **升到 1.0.5。**"))
+        places["docs/使用说明.md"] = next(x for x in places["docs/使用说明.md"].splitlines() if x.startswith("**升到 1.0.5。**"))
+        for rel, text in places.items():
+            for part in ("python3 -I .claude/solo-lab/bin/space.py snapshot --target . --apply", "setup.py feishu --target <项目目录> --live",
+                         "核对后加 `--apply`", "任何会话", "重新绑定"):
+                self.assertIn(part, text, rel)
+            self.assertIn("研究员的会话" if rel != "docs/使用说明.md" else "初始化会话", text, rel)
+            self.assertNotIn("绑定不用重做", text, rel)
+        for rel in ("feishu-template/README.md", "mechanisms.md"):
+            for part in ("`ledger.py query queue` 列不出待执行的决策", "确认“决定”以后不打印执行方", "签字核对",
+                         "空间里现在是 “待执行”，绑定记的是 “已决定”"):
+                self.assertIn(part, places[rel], rel)
+        self.assertIn("## 老空间补到 2.2.0", places["feishu-template/README.md"])
+        self.assertIn("[README.md](README.md) 的“老空间补到 2.2.0”", places["feishu-template/更新记录.md"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)

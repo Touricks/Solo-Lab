@@ -177,7 +177,7 @@ class CodexTest(unittest.TestCase):
     def test_layout_rules_and_eight_project_entrypoints(self):
         self.assertFalse((self.root / ".claude").exists())
         self.assertFalse((self.root / "CLAUDE.md").exists())
-        self.assertEqual(self.plan.manifest["upstream_version"], "1.0.5")
+        self.assertEqual(self.plan.manifest["upstream_version"], "1.0.6")
         self.assertEqual(len(self.pool.slots), 21)
         priority = [s["role"] for s in self.pool.config["slots"] if s["priority"]]
         self.assertEqual(priority, list(codex_setup.PRIORITY_ROLES))
@@ -554,12 +554,15 @@ class CodexTest(unittest.TestCase):
         self.assertIn("同一请求只有一个执行者", (self.root / "AGENTS.md").read_text())
 
     def test_the_irreversible_list_says_codex_hooks_do_not_check_it(self):
-        """The shared org/org.md has the irreversible list, but a Codex project's hooks do not check it: the section says
-        so instead of the Claude hook's release rules, and the local decision state is the Codex project's."""
+        """The shared org/org.md has the irreversible list. No hook checks it, a Claude project's or a Codex one's
+        (1.0.6): the section is the same in both, says so, and names nothing only a Claude project has; the local
+        decision state is the Codex project's."""
         org = (self.root / "org/org.md").read_text()
         section = org.split("## 不可逆事项", 1)[1].split("\n## ", 1)[0]
-        self.assertIn(orgspec.OrgSpec.UNENFORCED, section)
-        for claim in ("池会话里没有这样的决策就拒绝", "研究员自己的会话里弹窗确认", "限定怎么认"):
+        self.assertEqual(section.strip(), orgspec.OrgSpec().irreversible_section())
+        self.assertIn(orgspec.OrgSpec.IRREVERSIBLE_RULE, section)
+        self.assertIn("hook 不拦这些命令，也不按待定决策冻结", section)
+        for claim in ("池会话里没有这样的决策就拒绝", "研究员自己的会话里弹窗确认", "限定怎么认", "放行条件", "识别方式", "Claude", "每轮提示"):
             self.assertNotIn(claim, section)
         decisions = (self.root / "org/decisions.md").read_text()
         self.assertIn(".agent-org/state/gates.json", decisions)

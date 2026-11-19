@@ -24,7 +24,7 @@ import orgspec  # noqa: E402
 
 EXAMPLES = os.path.join(ROOT, "skills", "packages", "references", "examples.md")
 ASSIGN, DELIVERY, CROSS, EXECUTE, EXECUTE_DELIVERY, DECISION, DECIDED, BY_HAND = 0, 1, 2, 5, 6, 7, 8, 9   # blocks of examples.md
-PERMISSION, REVERSIBLE = 10, 11    # blocks of examples.md: an irreversible decision with releases and frozen actions; a reversible one
+PERMISSION, REVERSIBLE = 10, 11    # blocks of examples.md: an irreversible decision whose options list irreversible actions, with frozen actions; a reversible one
 # BY_HAND's 研究员要做的事: the same whichever option the researcher picks
 API_KEY = "用自己的账号在模型服务的控制台建一个 API key，照定下的金额设好每天的花费上限，再把 key 填进 gpu-01 上实验平台的配置"
 SESSION_DOES = "- 执行方：Alg-p2-01\n- 研究员要做的事：无\n"             # DECISION's two lines: its sender carries it out
@@ -449,7 +449,7 @@ class RegisterTest(LedgerCase):
         with open(os.path.join(ROOT, "skills", "packages", "assets", "decision.md"), encoding="utf-8") as f:
             template = orgspec.template_block(f.read())
         self.assertIn("\n- 需要接收方做的事：拍板（决策队列）／确认记录无误（研究员主动发起）\n"
-                      "- 执行方：<研究员，或者执行这条决策的会话名，多半是发出方的会话名>\n- 研究员要做的事：<", template)
+                      "- 执行方：<研究员，或者执行这条决策的会话名：各序列的 +2、入口或路由，多半是发出方；只要有一个选项要研究员亲手做，就写“研究员”>\n- 研究员要做的事：<", template)
 
     def test_a_decision_package_names_who_carries_it_out(self):
         """2026-11-16: a decision package's header says who carries it out once it is decided (执行方): 研究员, or
@@ -473,9 +473,9 @@ class RegisterTest(LedgerCase):
                             ("研究员", "把真实数据放进 data/raw/"), ("研究员", "（今晚以前）把真实数据放进 data/raw/")):
             self.assertEqual(lint(good.replace(SESSION_DOES, "- 执行方：%s\n- 研究员要做的事：%s\n" % (who, action))), [], who)
         self.assertEqual(lint(example(BY_HAND)), [])
-        hint = "写“研究员”，或者执行这条决策的那个会话的名字（多半是发出方的会话名），只写名字、不加说明，比如 Alg-p2-01"
+        hint = "写“研究员”，或者执行这条决策的那个会话的名字：各序列的 +2、入口或路由（多半是发出方的会话名），只写名字、不加说明，比如 Alg-p2-01"
         self.assertEqual(lint(good.replace("- 执行方：Alg-p2-01\n", "")), ["包头缺“执行方”：" + hint])
-        for value, why in (("", "没写内容"), ("<研究员，或者执行这条决策的会话名，多半是发出方的会话名>", "还是模板里的占位"),
+        for value, why in (("", "没写内容"), ("<研究员，或者执行这条决策的会话名：各序列的 +2、入口或路由，多半是发出方；只要有一个选项要研究员亲手做，就写“研究员”>", "还是模板里的占位"),
                            ("发出方", "写的是“发出方”"), ("Alg-p2-01（发出方）", "写的是“Alg-p2-01（发出方）”"),
                            ("研究员和 Alg-p2-01", "写的是“研究员和 Alg-p2-01”")):
             errors = lint(good.replace("- 执行方：Alg-p2-01\n", "- 执行方：%s\n" % value))
@@ -496,10 +496,41 @@ class RegisterTest(LedgerCase):
             self.assertEqual(lint(who), ["包头“执行方”写的是“%s”：%s" % (who, why)], who)
         self.assertIn("草稿没通过检查", self.fails(ledger.register, self.lg(), self.write(good.replace("Alg-p2-01\n- 研究员", "Algo-p2-01\n- 研究员"))))
         self.assertEqual(self.fake.items, {})
-        for who, name in (("alg-p2-01", "Alg-p2-01"), ("算法 +2（alg-p2-01）", "Alg-p2-01"), ("项目管理 +2（PMO-p2-01）", "PMO-p2-01"),
-                          ("Quality-p0-2106", "Quality-p0-2106")):
+        for who, name in (("alg-p2-01", "Alg-p2-01"), ("算法 +2（alg-p2-01）", "Alg-p2-01"), ("项目管理 +2（PMO-p2-01）", "PMO-p2-01")):
             self.assertEqual(lint(who), [], who)
             self.assertEqual(orgspec.executor_of(self.spec, who), name, who)
+
+    def test_the_executor_is_a_p2_the_entry_or_the_router(self):
+        """1.0.6 (the researcher, 2026-11-16): the session a decision package names as 执行方 answers for the matter:
+        a sequence's +2, the entry (项目管理 +2) or the router (项目管理 +1). A +1, a +0 and the scribe are sent back
+        with what to write instead, and nothing is registered. A receipt that names another session from before
+        is read and archived as it is."""
+        good = example(DECISION)
+        named = lambda who: good.replace(SESSION_DOES, "- 执行方：%s\n- 研究员要做的事：无\n" % who)
+        lint = lambda who: orgspec.lint_text(self.spec, named(who))[0]
+        for who in ("Alg-p2-01", "Quality-p2-01", "Liaison-p2-01", "PMO-p2-01", "项目管理 +1（PMO-p1-01）", "pmo-p1-01"):
+            self.assertEqual(lint(who), [], who)
+        self.assertEqual(orgspec.executor_of(self.spec, "pmo-p1-01"), "PMO-p1-01")
+        only = "执行方只收研究员、各序列的 +2、入口和路由。"
+        how = "；要下级干的活，由 +2 用需求包委托"
+        for who, name, what, p2 in (("Alg-p1-01", "Alg-p1-01", "算法 +1 的会话", "Alg-p2-01"),
+                                    ("算法 +1（Alg-p1-02）", "Alg-p1-02", "算法 +1 的会话", "Alg-p2-01"),
+                                    ("Quality-p0-2106", "Quality-p0-2106", "质量 +0 的会话", "Quality-p2-01"),
+                                    ("rnd-p0-01", "RnD-p0-01", "工程 +0 的会话", "RnD-p2-01"),
+                                    ("PMO-p0-01", "PMO-p0-01", "书记员", "PMO-p2-01")):
+            self.assertEqual(lint(who), ["包头“执行方”写的是“%s”：%s 是%s：%s改写负责这件事的 +2 的会话名（比如 %s）%s" % (
+                who, name, what, only, p2, how)], who)
+            self.assertIsNone(orgspec.executor_of(self.spec, who), who)
+        self.assertIn("草稿没通过检查", self.fails(ledger.register, self.lg(), self.write(named("Alg-p1-01"))))
+        self.assertEqual(self.fake.items, {})
+        # registered before 1.0.6 with a +1 as 执行方: its receipt is read as it is, in the queue's list and at the archive
+        old = self.quiet(ledger.register, self.lg(), self.draft(DECISION, "old.md"))
+        self.edit_receipt(old, executor="Alg-p1-01")
+        _, out = self.out(ledger.confirm, self.lg(), old, "研究员", ["决定内容=移进评测协议", "决定人=研究员"])
+        self.assertEqual(out.splitlines()[-1], "执行方：Alg-p1-01。")
+        self.assertEqual(self.quiet(ledger.query, self.lg("preview"), "queue"), [])          # a session carries it out
+        self.quiet(ledger.archive, self.lg(), old)
+        self.assertEqual(self.state(old), "归档")
 
     def test_a_researcher_who_carries_it_out_is_never_told_to_write_nothing(self):
         """When 执行方 is 研究员, a 研究员要做的事 that is missing, empty, the template's placeholder or nothing written
@@ -538,7 +569,7 @@ class RegisterTest(LedgerCase):
         said = {}
         for item_id in (mine, theirs, old_hand, old_none, older, odd):
             _, out = self.out(ledger.confirm, self.lg(), item_id, "研究员", ["决定内容=照建议办", "决定人=研究员"],
-                              option="每天 30 美元" if item_id == mine else None)     # BY_HAND releases 花钱
+                              option="每天 30 美元" if item_id == mine else None)     # the option picked, for the record
             said[item_id] = out.splitlines()[-1]
         self.assertEqual(said, {mine: "执行方：研究员。", theirs: "执行方：Alg-p2-01。", old_hand: "执行方：研究员。",
                                 old_none: "执行方：Alg-p2-01。", older: "执行方：Alg-p2-01。", odd: "执行方：Alg-p2-01。"})
@@ -647,6 +678,149 @@ class Template220Test(LedgerCase):
         self.assertEqual(self.receipt(item)["version"], 2)
         self.assertIn("`work_item_status` IN ('待决定', '已决定')", ledger.mql_text(self.lg("offline"), "queue")[0])
 
+    def test_a_space_brought_up_to_2_2_0_while_the_project_keeps_its_old_files(self):
+        """What an old project sees once its space was brought up to 2.2.0 by hand (two fields added, 已决定 renamed
+        待执行), step by step. Nothing done: the two header lines are written nowhere, and the ledger still asks
+        the space for 已决定, so a decided decision the researcher carries out is missing from the queue, the
+        confirmation does not say who carries it out, and a signature that names it is refused. The snapshot read
+        again (space.py snapshot --apply, any session): the two fields are written; the state is still asked for
+        by its old name. Bound again (setup.py feishu --live --apply, the researcher's session): everything."""
+        new = fake_space.template_220()
+        self.fake = fake_space.FakeSpace(new)                         # the space is 2.2.0; feishu/ids.json and space.json are old
+        task = self.task()
+        hand, out = self.out(ledger.register, self.lg(), self.draft(BY_HAND, "hand.md"))
+        self.assertNotIn("跳过字段", out)
+        self.assertEqual(self.fields(hand), (None, None))
+        _, out = self.out(ledger.confirm, self.lg(), hand, "研究员", ["决定内容=每天上限 30 美元", "决定人=研究员"])
+        self.assertEqual(self.state(hand), "待执行")
+        self.assertNotIn("执行方：", out)                              # the binding calls this state 已决定
+        self.assertEqual(self.quiet(ledger.query, self.lg("preview"), "queue"), [])
+        self.assertIn("状态是“待执行”，要是“已决定”或“归档”", self.fails(self.walk, task, 5))
+        with open(os.path.join(self.tmp, "feishu", "space.json"), "w", encoding="utf-8") as f:
+            json.dump(new, f, ensure_ascii=False)                     # what space.py snapshot --apply writes
+        other = self.quiet(ledger.register, self.lg(), self.draft(DECISION, "q.md"))
+        self.assertEqual(self.fields(other), ("Alg-p2-01", "无"))
+        self.assertIn("`work_item_status` IN ('待决定', '已决定')", ledger.mql_text(self.lg("offline"), "queue")[0])
+        rows = self.quiet(ledger.query, self.lg("preview"), "queue")
+        self.assertEqual([str(r["work_item_id"]) for r in rows], [other])                 # the decided one is still missing
+        with open(os.path.join(self.tmp, "feishu", "ids.json"), "w", encoding="utf-8") as f:
+            json.dump(fake_space.bound_ids(new), f, ensure_ascii=False)                   # what setup.py feishu --live --apply writes
+        rows = self.quiet(ledger.query, self.lg("preview"), "queue")
+        self.assertEqual([(str(r["work_item_id"]), r["stage"]) for r in rows], [(hand, "待执行"), (other, "待决定")])
+        self.walk(task, 5)
+        self.assertEqual(self.state(task), "设计实验方案")
+
+    def test_confirming_may_hand_the_decision_to_a_session(self):
+        """1.0.6 (the researcher, 2026-11-16): a package one of whose options needs the researcher's own hands says
+        执行方：研究员. When the researcher picks an option that does not, the scribe confirms 决定 with --executor
+        <会话名>: the receipt's executor becomes that session and its researcher_action null, the space's two fields
+        follow where it has them, a comment records it, and from then on the decision goes as one a session
+        carries out: query queue no longer lists it as waiting for the researcher. Without --executor the header
+        stands. A rollback to 待决定 puts back what the header says."""
+        decided = ["决定内容=每天上限 30 美元，Infra-p2-01 用现成的 key", "决定人=研究员"]
+        for with_fields in (True, False):
+            if with_fields:
+                self.use_220()
+            else:
+                self.fake = fake_space.FakeSpace()
+                fake_space.install(self.tmp)
+            task = self.task(name="task-%s.md" % with_fields)
+            name = "hand-%s.md" % with_fields
+            hand = self.quiet(ledger.register, self.lg(), self.draft(BY_HAND, name))
+            done = "已决定" if not with_fields else "待执行"
+            # what --executor takes: a session's name, under the package header's check
+            text = self.fails(ledger.confirm, self.lg(), hand, "研究员", decided, executor="研究员")
+            self.assertIn("--executor 只收会话名：要把 #%s 的执行方改成研究员，请发出方写下一版（包头“执行方”写“研究员”，“研究员要做的事”写清楚要他做什么），"
+                          "书记员用 ledger.py revise 换主文档以后再确认" % hand, text)
+            text = self.fails(ledger.confirm, self.lg(), hand, "研究员", decided, executor="Infra-p1-01")
+            self.assertIn("--executor 写的是“Infra-p1-01”：Infra-p1-01 是基础设施 +1 的会话：执行方只收研究员、各序列的 +2、入口和路由。"
+                          "改写负责这件事的 +2 的会话名（比如 Infra-p2-01）；要下级干的活，由 +2 用需求包委托", text)
+            self.assertIn("--executor 写的是“PMO-p0-01”：PMO-p0-01 是书记员", self.fails(ledger.confirm, self.lg(), hand, "研究员", decided, executor="PMO-p0-01"))
+            self.assertIn("序列的简写只有", self.fails(ledger.confirm, self.lg(), hand, "研究员", decided, executor="Infro-p2-01"))
+            self.assertIn("执行方用 --executor 改：去掉 --set 里的“执行方”和“研究员要做的事”" if with_fields else "没有字段“执行方”",
+                          self.fails(ledger.confirm, self.lg(), hand, "研究员", decided + ["执行方=Infra-p2-01"], executor="Infra-p2-01"))
+            self.assertEqual((self.state(hand), self.receipt(hand)["executor"]), ("待决定", "研究员"))
+            before = len(self.fake.comments)
+            _, out = self.out(ledger.confirm, self.lg("preview"), hand, "研究员", decided, option="每天 30 美元", executor="infra-p2-01")
+            note = ("研究员选的选项：每天 30 美元（不可逆的动作：花钱：模型服务每天最多 30 美元）；"
+                    "执行方改成 Infra-p2-01（包头写的是研究员），“研究员要做的事”记“无”")
+            self.assertIn("[PMO+0] " + note, out)
+            self.assertEqual((self.state(hand), self.receipt(hand)["executor"], len(self.fake.comments)), ("待决定", "研究员", before))
+            lg = self.lg()
+            _, out = self.out(ledger.confirm, lg, hand, "研究员", decided, option="每天 30 美元", executor="infra-p2-01")
+            self.assertIn(note + "。已记进回执和评论。", out)
+            self.assertEqual(out.splitlines()[-1], "执行方：Infra-p2-01。")              # the scribe tells that session
+            self.assertIn((hand, "[PMO+0] " + note), self.fake.comments)
+            rec = self.receipt(hand)
+            self.assertEqual((rec["executor"], rec["researcher_action"], rec["as_packaged"], rec["option"], rec["decided_by"]),
+                             ("Infra-p2-01", None, {"executor": "研究员", "researcher_action": API_KEY}, "每天 30 美元", "研究员"))
+            self.assertEqual(self.state(hand), done)
+            if with_fields:
+                self.assertEqual(self.fields(hand), ("Infra-p2-01", "无"))             # the view 待定决策 no longer shows it
+                self.assertEqual(len(lg.wrote("workitem", "update")), 1)                # with the step's own values, in one write
+            else:
+                self.assertEqual(self.fields(hand), (None, None))                       # a space without the two fields: skipped
+            self.assertEqual(self.quiet(ledger.query, self.lg("preview"), "queue"), [])    # a session carries it out: not the researcher's
+            # --executor is for the 决定 step only
+            text = self.fails(ledger.confirm, self.lg(), hand, "研究员", executor="Infra-p2-01")
+            self.assertIn("--executor 只用在确认决策的“决定”这一步：#%s 是决策，现在是“%s”；这一步已经确认过（比如研究员在网页上定的），"
+                          "要改执行方，先 ledger.py rollback %s --to 决定 --reason '<原因>' --by 研究员，再带 --executor 确认“决定”" % (hand, done, hand), text)
+            self.assertIn("--executor 只用在确认决策的“决定”这一步：#%s 是研究任务" % task,
+                          self.fails(ledger.confirm, self.lg(), task, "Product-p2-01", ["成功标准=x"], executor="Infra-p2-01"))
+            # rolled back to 待决定: the header's 执行方 is back, in the receipt, the local state and the fields
+            _, out = self.out(ledger.rollback, self.lg(), hand, "决定", "研究员改主意了", by="研究员")
+            self.assertIn("执行方改回包头写的研究员。", out)
+            rec = self.receipt(hand)
+            self.assertEqual((rec["executor"], rec["researcher_action"], rec["as_packaged"]), ("研究员", API_KEY, None))
+            entry = ledger.load_gates(self.tmp)["pending"][hand]
+            self.assertEqual((entry["executor"], entry["researcher_action"]), ("研究员", API_KEY))
+            if with_fields:
+                self.assertEqual(self.fields(hand), ("研究员", API_KEY))
+            rows = self.quiet(ledger.query, self.lg("preview"), "queue")
+            self.assertEqual([(str(r["work_item_id"]), r["stage"], r["executor"]) for r in rows], [(hand, "待决定", "研究员")])
+            # without --executor the header stands, as before: the researcher carries it out and it stays listed
+            _, out = self.out(ledger.confirm, self.lg(), hand, "研究员", decided)
+            self.assertEqual(out.splitlines()[-1], "执行方：研究员。")
+            self.assertEqual([(str(r["work_item_id"]), r["stage"]) for r in self.quiet(ledger.query, self.lg("preview"), "queue")], [(hand, "待执行")])
+            self.quiet(ledger.archive, self.lg(), hand)
+            # the header's own session: nothing changes, nothing is recorded
+            other = self.quiet(ledger.register, self.lg(), self.draft(DECISION, "q-%s.md" % with_fields))
+            _, out = self.out(ledger.confirm, self.lg(), other, "研究员", ["决定内容=移进评测协议", "决定人=研究员"], executor="Alg-p2-01")
+            self.assertEqual(out.splitlines()[-1], "执行方：Alg-p2-01。")
+            self.assertNotIn("as_packaged", self.receipt(other))
+            self.assertNotIn("执行方改成", out)
+            # one session in place of another
+            third = self.quiet(ledger.register, self.lg(), self.draft(DECISION, "r-%s.md" % with_fields))
+            _, out = self.out(ledger.confirm, self.lg(), third, "研究员", ["决定内容=移进评测协议", "决定人=研究员"], executor="Quality-p2-01")
+            self.assertIn("执行方改成 Quality-p2-01（包头写的是Alg-p2-01），“研究员要做的事”记“无”。已记进回执和评论。", out)
+            self.assertEqual((out.splitlines()[-1], self.receipt(third)["executor"]), ("执行方：Quality-p2-01。", "Quality-p2-01"))
+            # a revision's header says anew who carries it out
+            fourth = self.quiet(ledger.register, self.lg(), self.draft(BY_HAND, "s-%s.md" % with_fields))
+            self.quiet(ledger.confirm, self.lg(), fourth, "研究员", decided, executor="Infra-p2-01")
+            self.quiet(ledger.rollback, self.lg(), fourth, "决定", "再想想", by="研究员")
+            self.quiet(ledger.revise, self.lg(), fourth, self.draft(BY_HAND, "s2-%s.md" % with_fields, edit=lambda t: t.replace(
+                "第 1 版（2026-11-20）", "第 2 版（2026-11-21）")), "补背景")
+            self.assertEqual((self.receipt(fourth)["executor"], self.receipt(fourth)["as_packaged"]), ("研究员", None))
+            shutil.rmtree(os.path.join(self.tmp, "packages", "sent"))          # the next space starts from nothing
+            os.remove(ledger.gates_path(self.tmp))
+
+    def test_the_cli_hands_a_decision_over(self):
+        os.environ["CLAUDE_PROJECT_DIR"] = self.tmp
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = ledger.main(["--offline", "confirm", "2130", "--by", "研究员", "--option", "每天 30 美元", "--executor", "Infra-p2-01",
+                                    "--type", "decision"])
+            self.assertEqual(code, 0, buf.getvalue())
+            self.assertIn("workflow transition --work-item-id 2130", buf.getvalue())
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                code = ledger.main(["--offline", "confirm", "2130", "--by", "研究员", "--executor", "Infra-p0-01", "--type", "decision"])
+            self.assertEqual(code, 1)
+            self.assertIn("出错：--executor 写的是“Infra-p0-01”：Infra-p0-01 是基础设施 +0 的会话", buf.getvalue())
+        finally:
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+
 
 class LinkLineTest(unittest.TestCase):
     def line(self, value, item_id="2106"):
@@ -689,6 +863,76 @@ class ReplyTest(LedgerCase):
         self.assertEqual(self.fake.doc_by(link.rsplit("/", 1)[1])["parent"], parent)
         self.assertIn("“交付包”字段已填", text)
         self.assertIn("不要重复登记", self.fails(ledger.reply, self.lg(), path))
+
+    def test_a_delivery_that_was_not_accepted_is_handed_in_again(self):
+        """The delivery template says a delivery changed after it was not accepted is handed in again with its
+        version one higher. reply takes it, from the same file or another: a new document under the request, the
+        交付包 field on the new link, the earlier document where it was. The same version again, and a number that
+        does not follow, stop with the number to write."""
+        self.task()
+        request = self.quiet(ledger.register, self.lg(), self.draft(ASSIGN, edit=lambda t: t.replace("- 接收方：产品 +1", "- 接收方：产品 +1（Product-p1-02）")))
+        self.quiet(ledger.confirm, self.lg(), request, "Product-p1-02")
+        first = example(DELIVERY).replace("- 关联工作项：#2001", "- 关联工作项：#%s" % request)
+        path = self.write(first, "back.md")
+        v1 = self.quiet(ledger.reply, self.lg(), path)
+        receipt = "packages/sent/reply-%s-back.md.json" % request
+        with open(os.path.join(self.tmp, receipt), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["version"], 1)
+        self.quiet(ledger.confirm, self.lg(), request, "Product-p1-02")
+        self.assertEqual(self.state(request), "待验收")
+        self.quiet(ledger.rollback, self.lg(), request, "执行", "第 2 条没有证据", by="Product-p2-01")
+        self.assertEqual((self.state(request), self.value(request, "same_seq", "delivery_link")), ("执行中", ""))
+        again = "验收不通过、改好后重新交的，包头“版本”写第 2 版，再 reply"
+        self.assertEqual(self.fails(ledger.reply, self.lg(), path),                      # unchanged: the way out is said
+                         "这份交付包（第 1 版）已经挂到 #%s 下了（回执 %s），不要重复登记；%s" % (request, receipt, again))
+        other = self.write(first, "back-again.md")                                       # another file, the number not raised
+        self.assertEqual(self.fails(ledger.reply, self.lg(), other),
+                         "#%s 已经收过第 1 版交付包（回执 %s），这一份写的是第 1 版：%s" % (request, receipt, again))
+        self.write(first.replace("第 1 版（2026-11-02）", "第 3 版（2026-11-05）"), "back.md")
+        self.assertIn("这一份写的是第 3 版：" + again, self.fails(ledger.reply, self.lg(), path))
+        docs = len(self.fake.docs)
+        self.write(first.replace("第 1 版（2026-11-02）", "第 2 版（2026-11-04）"), "back.md")
+        _, out = self.out(ledger.reply, self.lg("preview"), path)
+        self.assertEqual((len(self.fake.docs), self.value(request, "same_seq", "delivery_link")), (docs, ""))
+        v2, out = self.out(ledger.reply, self.lg(), path)
+        self.assertIn("交付包第 2 版已挂到 #%s 下，“交付包”字段已填，上一版的文档留在原处。" % request, out)
+        self.assertNotEqual(v1, v2)
+        self.assertEqual((len(self.fake.docs), self.value(request, "same_seq", "delivery_link")), (docs + 1, v2))
+        self.assertIn("第 2 版（2026-11-04）", self.fake.doc_by(v2.rsplit("/", 1)[1])["body"])
+        self.assertIn("第 1 版（2026-11-02）", self.fake.doc_by(v1.rsplit("/", 1)[1])["body"])      # the earlier one stays
+        self.assertIn((request, "[PMO+0] 收到交付包第 2 版：%s" % v2), self.fake.comments)
+        with open(os.path.join(self.tmp, receipt), encoding="utf-8") as f:
+            rec = json.load(f)
+        self.assertEqual((rec["version"], rec["status"], rec["doc"], rec["earlier"]), (2, "registered", v2, [{"version": 1, "doc": v1}]))
+        self.assertIn("这份交付包（第 2 版）已经挂到 #%s 下了" % request, self.fails(ledger.reply, self.lg(), path))
+        # a third version from another file, after a run that failed once the document existed
+        third = self.write(first.replace("第 1 版（2026-11-02）", "第 3 版（2026-11-06）"), "back-3.md")
+        docs = len(self.fake.docs)
+        text = self.fails(ledger.reply, self.lg(replies=[(("workitem", "update"), ledger.LedgerError("down"))]), third)
+        self.assertIn("文档已经建好", text)
+        lg = self.lg()
+        v3, out = self.out(ledger.reply, lg, third)
+        self.assertIn("交付包第 3 版已挂到", out)
+        self.assertEqual((lg.wrote("docs", "+create"), len(self.fake.docs), self.value(request, "same_seq", "delivery_link")), ([], docs + 1, v3))
+        # a receipt from before 1.0.6 keeps no version: the next one only has to be higher than the first
+        self.quiet(ledger.confirm, self.lg(), request, "Product-p1-02")
+        self.quiet(ledger.confirm, self.lg(), request, "Product-p2-01")
+        self.assertEqual(self.state(request), "已验收")
+        fourth = self.write(first.replace("第 1 版（2026-11-02）", "第 4 版（2026-11-07）"), "back-4.md")
+        self.assertIn("#%s 已经是“已验收”：工作项关闭以后不再重新交交付包" % request, self.fails(ledger.reply, self.lg(), fourth))
+        old = self.quiet(ledger.register, self.lg(), self.draft(ASSIGN, "old.md"))
+        old_path = self.write(example(DELIVERY).replace("- 关联工作项：#2001", "- 关联工作项：#%s" % old), "old-back.md")
+        self.quiet(ledger.reply, self.lg(), old_path)
+        old_receipt = os.path.join(self.tmp, "packages", "sent", "reply-%s-old-back.md.json" % old)
+        with open(old_receipt, encoding="utf-8") as f:
+            rec = json.load(f)
+        del rec["version"]
+        with open(old_receipt, "w", encoding="utf-8") as f:
+            json.dump(rec, f, ensure_ascii=False)
+        self.assertIn("不要重复登记；" + again, self.fails(ledger.reply, self.lg(), old_path))
+        self.write(example(DELIVERY).replace("- 关联工作项：#2001", "- 关联工作项：#%s" % old).replace(
+            "第 1 版（2026-11-02）", "第 3 版（2026-11-09）"), "old-back.md")
+        self.quiet(ledger.reply, self.lg(), old_path)
 
     def test_only_a_delivery_is_a_reply(self):
         self.task()
@@ -1520,9 +1764,10 @@ def without_sandbox(text):
 
 
 class DecisionStateTest(LedgerCase):
-    """The local decision state .claude/state/gates.json (1.0.4): what a decision from the queue freezes
-    and how it may end while it waits, and what decided decisions released. Only ledger.py --apply
-    writes it; the guard and inbox hooks read it."""
+    """The local decision state .claude/state/gates.json (1.0.4): the decisions from the queue that still wait,
+    with what each freezes and how it may end. Only ledger.py --apply writes it; the inbox hook reads it. From
+    1.0.6 nothing is released to a hook: the state keeps no releases, and no expiry time either (it is worked
+    out from org/decisions.md whenever it is needed)."""
 
     def gates(self):
         path = ledger.gates_path(self.tmp)
@@ -1532,11 +1777,20 @@ class DecisionStateTest(LedgerCase):
             return json.load(f)
 
     def age(self, item_id, hours):
-        """The pending decision as if it had been registered that many hours ago."""
+        """The pending decision as if it had been registered that many hours ago: in the local state and in its receipt."""
+        since = (ledger.now_at() - datetime.timedelta(hours=hours)).isoformat(timespec="seconds")
         data = self.gates()
-        data["pending"][str(item_id)]["registered_at"] = (ledger.now_at() - datetime.timedelta(hours=hours)).isoformat(timespec="seconds")
+        data["pending"][str(item_id)]["registered_at"] = since
+        self.put_gates(data)
+        self.edit_receipt(item_id, registered_at=since)
+
+    def put_gates(self, data):
         with open(ledger.gates_path(self.tmp), "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
+
+    def stages(self):
+        """What query queue lists: [(ID, stage)]."""
+        return [(str(r["work_item_id"]), r["stage"]) for r in self.quiet(ledger.query, self.lg("preview"), "queue")]
 
     def doc(self, item_id, wid="decision"):
         return self.fake.doc_by(self.value(item_id, wid, "main_doc").rsplit("/", 1)[1])
@@ -1554,18 +1808,21 @@ class DecisionStateTest(LedgerCase):
         self.assertEqual((entry["default"], entry["default_option"], entry["default_applies"], entry["executor"],
                           entry["researcher_action"], entry["due"], entry["sender"]),
                          ("等研究员", None, False, "Infra-p2-01", None, "2026-11-22", "Infra-p2-01"))
-        self.assertEqual(entry["frozen"], [
+        self.assertEqual(entry["frozen"], [                                   # a category of the list, or a sentence
             {"kind": "category", "category": "privileged_app", "name": "特权应用", "qualifier": "Docker", "text": "特权应用：Docker"},
-            {"kind": "command", "prefix": "docker build", "words": ["docker", "build"], "text": "`docker build`"},
+            {"kind": "text", "text": "`docker build`"},
             {"kind": "text", "text": "照某个选项改实验平台的计量和内存闸"}])
-        self.assertEqual([(o["name"], [r["text"] for r in o["releases"]]) for o in entry["options"]],
+        self.assertEqual([(o["name"], [r["text"] for r in o["irreversible"]]) for o in entry["options"]],
                          [("本机 Docker", ["特权应用：Docker"]), ("同账号沙箱", []), ("CAMPUS-HPC", ["对外发送：scp、ssh 到 CAMPUS-HPC"])])
-        self.assertEqual(entry["options"][0]["releases"][0],
+        self.assertEqual(entry["options"][0]["irreversible"][0],
                          {"category": "privileged_app", "name": "特权应用", "qualifier": "Docker", "text": "特权应用：Docker"})
+        self.assertEqual(entry["options"][2]["irreversible"][0]["qualifier"], "scp、ssh 到 CAMPUS-HPC")     # the note, whole
         since = ledger.parse_stamp(entry["registered_at"])
         self.assertLess(abs((ledger.now_at() - since).total_seconds()), 60)
-        self.assertEqual(ledger.parse_stamp(entry["expires_at"]) - since, datetime.timedelta(hours=24))
-        self.assertEqual((g["version"], g["expiry_hours"], g["expiry_from"], g["releases"]), (1, 24, "默认", []))
+        # 1.0.6: the waiting decisions and nothing else; no releases, and no expiry time kept beside org/decisions.md
+        self.assertEqual((sorted(g), g["version"]), (["pending", "updated_at", "version"], 2))
+        for gone in ("expires_at", "rolled_back_at", "reopened_at"):
+            self.assertNotIn(gone, entry)
         rec = self.receipt(item)
         self.assertEqual((rec["version"], rec["reversible"], rec["default"], rec["options"], rec["frozen"]),
                          (1, False, "等研究员", entry["options"], entry["frozen"]))
@@ -1576,105 +1833,153 @@ class DecisionStateTest(LedgerCase):
         self.assertEqual(self.receipt(request)["version"], 1)
         self.assertNotIn("reversible", self.receipt(request))
 
-    def test_from_freeze_to_release(self):
-        """B5 on the ledger's side: while the decision waits, its frozen actions are in the local state and
-        nothing is released. The researcher picks the option that lists 特权应用：Docker; the scribe confirms
-        with --option and the release is written with the decision's ID. A later decision whose options name
-        the same category takes the release back when the option picked does not keep it."""
+    def test_the_option_picked_is_a_record_and_releases_nothing(self):
+        """1.0.6: while the decision waits its frozen actions are in the local state. Once the researcher decides
+        the scribe confirms 决定; --option is optional and only records which option was picked, in the receipt
+        and a comment, with the irreversible actions that option lists. Nothing is released and nothing is taken
+        back: the local state keeps the waiting decisions only."""
         self.task()
-        first = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION))
         decided = ["决定内容=用本机 Docker", "决定人=研究员"]
-        text = self.fails(ledger.confirm, self.lg(), first, "研究员", decided)
-        self.assertIn("本机 Docker：特权应用：Docker；CAMPUS-HPC：对外发送：scp、ssh 到 CAMPUS-HPC", text)
-        self.assertIn("加 --option <选项>；研究员没有选表里的任何一个，加 --option 无", text)
-        self.assertIn("没有“Podman”，有：本机 Docker、同账号沙箱、CAMPUS-HPC", self.fails(ledger.confirm, self.lg(), first, "研究员", decided, option="Podman"))
+        plain = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION, "plain.md"))
+        _, out = self.out(ledger.confirm, self.lg(), plain, "研究员", decided)       # without --option, though options list actions
+        self.assertEqual((self.state(plain), out.splitlines()[-1]), ("已决定", "执行方：Infra-p2-01。"))
+        self.assertNotIn("研究员选的选项", out)
+        self.assertEqual((self.receipt(plain)["option"], self.receipt(plain)["decided_by"]), (None, "研究员"))
+        self.assertFalse([c for c in self.fake.comments if c[0] == plain and "选项" in c[1]])
+        first = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION))
+        text = self.fails(ledger.confirm, self.lg(), first, "研究员", decided, option="Podman")
+        self.assertIn("没有“Podman”，有：本机 Docker、同账号沙箱、CAMPUS-HPC；研究员没有选表里的任何一个，写 --option 无，或者不加 --option", text)
+        note = "研究员选的选项：本机 Docker（不可逆的动作：特权应用：Docker）"
         _, out = self.out(ledger.confirm, self.lg("preview"), first, "研究员", decided, option="本机 Docker")
-        self.assertIn("预览：会放行特权应用：Docker（决策 #%s，选项“本机 Docker”）。" % first, out)
-        self.assertEqual((self.state(first), sorted(self.gates()["pending"]), self.gates()["releases"]), ("待决定", [first], []))
+        self.assertIn("[PMO+0] " + note, out)                                         # the comment a preview would add
+        self.assertEqual((self.state(first), sorted(self.gates()["pending"])), ("待决定", [first]))
         _, out = self.out(ledger.confirm, self.lg(), first, "研究员", decided, option="本机 Docker")
-        self.assertIn("放行：特权应用：Docker（决策 #%s，选项“本机 Docker”）。" % first, out)
+        self.assertIn(note + "。已记进回执和评论。", out)
         self.assertEqual(out.splitlines()[-1], "执行方：Infra-p2-01。")
+        self.assertIn((first, "[PMO+0] " + note), self.fake.comments)
+        for word in ("放行", "收回"):
+            self.assertNotIn(word, out)
         g = self.gates()
-        self.assertEqual(g["pending"], {})
-        self.assertEqual([(r["category"], r["name"], r["qualifier"], r["text"], r["decision"], r["option"]) for r in g["releases"]],
-                         [("privileged_app", "特权应用", "Docker", "特权应用：Docker", first, "本机 Docker")])
-        self.assertTrue(ledger.parse_stamp(g["releases"][0]["at"]))
-        self.assertEqual((self.receipt(first)["option"], self.receipt(first)["decided_by"]), ("本机 Docker", "研究员"))
-        self.quiet(ledger.archive, self.lg(), first)                                # archived: the release stays
-        self.assertEqual([r["decision"] for r in self.gates()["releases"]], [first])
+        self.assertEqual((g["pending"], "releases" in g), ({}, False))
+        rec = self.receipt(first)
+        self.assertEqual((rec["option"], rec["decided_by"]), ("本机 Docker", "研究员"))
+        self.assertTrue(ledger.parse_stamp(rec["decided_at"]))
+        # the step is confirmed already (here by the scribe, or by the researcher on the web page): the option is a comment
+        text = self.fails(ledger.confirm, self.lg(), first, "研究员", decided, option="本机 Docker")
+        self.assertIn("--option 只用在确认决策的“决定”这一步：#%s 是决策，现在是“已决定”；这一步已经确认过（比如研究员在网页上定的），"
+                      "选的选项用 ledger.py comment 记一条评论" % first, text)
         request = self.quiet(ledger.register, self.lg(), self.draft(ASSIGN, "a.md"))
-        self.assertIn("--option 只用在确认决策的“决定”这一步", self.fails(ledger.confirm, self.lg(), request, "Product-p1-03", option="本机 Docker"))
-        # a later decision freezes Docker again (meanwhile the guard holds the release back), then picks CAMPUS-HPC
+        text = self.fails(ledger.confirm, self.lg(), request, "Product-p1-03", option="本机 Docker")
+        self.assertTrue(text.endswith("--option 只用在确认决策的“决定”这一步：#%s 是同序列需求，现在是“待开工”" % request), text)
+        # another decision names the same category and the researcher picks an option without it: nothing is taken back
         later = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION, "later.md", edit=lambda t: t.replace(
             "# 决策包：实验平台用什么隔离候选代码", "# 决策包：内存不够，要不要改到 CAMPUS-HPC")))
-        g = self.gates()
-        self.assertEqual((sorted(g["pending"]), [r["decision"] for r in g["releases"]]), ([later], [first]))
-        self.assertEqual(g["pending"][later]["frozen"][0]["text"], "特权应用：Docker")
+        self.assertEqual(self.gates()["pending"][later]["frozen"][0]["text"], "特权应用：Docker")
         _, out = self.out(ledger.confirm, self.lg(), later, "研究员", ["决定内容=改到 CAMPUS-HPC", "决定人=研究员"], option="CAMPUS-HPC")
-        self.assertIn("收回：特权应用：Docker（原来由决策 #%s 放行）。" % first, out)
-        self.assertIn("放行：对外发送：scp、ssh 到 CAMPUS-HPC（决策 #%s，选项“CAMPUS-HPC”）。" % later, out)
-        self.assertEqual([(r["category"], r["decision"]) for r in self.gates()["releases"]], [("send_out", later)])
-        # none of the options: nothing released, nothing taken back
+        self.assertIn("研究员选的选项：CAMPUS-HPC（不可逆的动作：对外发送：scp、ssh 到 CAMPUS-HPC）。已记进回执和评论。", out)
+        self.assertNotIn("收回", out)
+        sandbox = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION, "sandbox.md"))
+        _, out = self.out(ledger.confirm, self.lg(), sandbox, "研究员", ["决定内容=同账号沙箱", "决定人=研究员"], option="同账号沙箱")
+        self.assertIn("研究员选的选项：同账号沙箱。已记进回执和评论。", out)          # an option that lists none
         third = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION, "third.md"))
         _, out = self.out(ledger.confirm, self.lg(), third, "研究员", ["决定内容=先都不做", "决定人=研究员"], option="无")
-        self.assertNotIn("放行", out)
-        self.assertEqual(([(r["category"], r["decision"]) for r in self.gates()["releases"]], self.gates()["pending"]),
-                         ([("send_out", later)], {}))
-        self.assertEqual(self.receipt(third)["option"], "无")
+        self.assertIn("研究员没有选选项表里的选项。已记进回执和评论。", out)
+        self.assertEqual((self.receipt(third)["option"], self.gates()["pending"]), ("无", {}))
+        # a comment that fails leaves the step confirmed and says how to add it
+        fourth = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION, "fourth.md"))
+        _, out = self.out(ledger.confirm, self.lg(replies=[(("comment", "add"), ledger.LedgerError("502"))]), fourth, "研究员", decided,
+                          option="本机 Docker")
+        self.assertIn("已记进回执；评论没写上（502），用 ledger.py comment %s --text '%s' 补。" % (fourth, note), out)
+        self.assertEqual((self.state(fourth), self.receipt(fourth)["option"], self.gates()["pending"]), ("已决定", "本机 Docker", {}))
 
-    def test_a_decision_rolled_back_waits_again(self):
-        self.task()
-        item = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION))
-        self.quiet(ledger.confirm, self.lg(), item, "研究员", ["决定内容=用本机 Docker", "决定人=研究员"], option="本机 Docker")
-        self.assertEqual(len(self.gates()["releases"]), 1)
-        _, out = self.out(ledger.rollback, self.lg(), item, "决定", "研究员改主意了", by="研究员")
-        self.assertIn("收回：特权应用：Docker（决策 #%s 回到待决定）。" % item, out)
-        g = self.gates()
-        self.assertEqual((sorted(g["pending"]), g["releases"]), ([item], []))
-        self.assertEqual([f["text"] for f in g["pending"][item]["frozen"]][:2], ["特权应用：Docker", "`docker build`"])
-        self.assertEqual(g["pending"][item]["registered_at"], self.receipt(item)["registered_at"])
-
-    def test_a_decision_rolled_back_waits_its_expiry_again(self):
-        """A reversible decision the researcher decided a day after registration and then rolled back to 待决定 is not
-        taken by 到期默认 at once: its wait starts again at the rollback (reopened_at in the local state and the receipt)."""
+    def test_a_state_written_before_1_0_6_loses_its_releases(self):
+        """A local decision state as 1.0.4 or 1.0.5 left it: releases, an expiry time, options that say releases, a
+        frozen command prefix, a decision rolled back. It is read as far as it still applies, the releases are
+        ignored, and the next write drops what is no longer kept."""
         self.task()
         item = self.quiet(ledger.register, self.lg(), self.draft(REVERSIBLE))
-        self.age(item, 30)
-        self.quiet(ledger.confirm, self.lg(), item, "研究员", ["决定内容=按变体分目录", "决定人=研究员"], option="按变体分目录")
-        _, out = self.out(ledger.rollback, self.lg(), item, "决定", "研究员想再看看", by="研究员")
-        self.assertIn("本地决策状态：#%s 回到待决定，冻结的动作重新生效，到期从现在重新算。" % item, out)
-        entry = self.gates()["pending"][item]
-        since = ledger.parse_stamp(entry["reopened_at"])
-        self.assertLess(abs((ledger.now_at() - since).total_seconds()), 60)
-        self.assertEqual(ledger.parse_stamp(entry["expires_at"]) - since, datetime.timedelta(hours=24))
-        self.assertEqual(self.receipt(item)["reopened_at"], entry["reopened_at"])
-        self.assertIn("回到待决定了 0 小时，还没满到期时长 24 小时", self.fails(ledger.confirm, self.lg(), item, ledger.BY_DEFAULT))
-        self.assertEqual(self.state(item), "待决定")
-        data = self.gates()                                                        # a day after the rollback
-        data["pending"][item]["reopened_at"] = (ledger.now_at() - datetime.timedelta(hours=25)).isoformat(timespec="seconds")
-        with open(ledger.gates_path(self.tmp), "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
-        self.quiet(ledger.confirm, self.lg(), item, ledger.BY_DEFAULT)
-        self.assertEqual(self.value(item, "decision", "决定内容"),
-                         "到期默认：按轮次分目录：runs/rnd/<轮次>/<变体>/（回到待决定后 24 小时内研究员没有决定）")
+        new = self.gates()["pending"][item]
+        old = dict(new, expires_at="2026-11-27T10:00:00+08:00", reopened_at="2026-11-26T12:00:00+08:00", default_applies=True,
+                   options=[{"name": o["name"], "approach": o["approach"], "releases": o["irreversible"]} for o in new["options"]],
+                   frozen=[{"kind": "command", "prefix": "python3 tools/relayout_runs.py", "words": ["python3", "tools/relayout_runs.py"],
+                            "text": "`python3 tools/relayout_runs.py`"}])
+        release = {"category": "admin", "name": "管理员权限", "qualifier": "", "text": "管理员权限", "decision": "2401", "option": "A",
+                   "at": "2026-11-20T10:00:00+08:00"}
+        self.put_gates({"version": 1, "updated_at": "2026-11-26T12:00:00+08:00", "expiry_hours": 24, "expiry_from": "默认",
+                        "pending": {item: old, "junk": "not a decision"}, "releases": [release]})
+        g = ledger.load_gates(self.tmp)
+        self.assertEqual((sorted(g), g["version"], sorted(g["pending"])), (["pending", "updated_at", "version"], 2, [item]))
+        entry = g["pending"][item]
+        self.assertEqual((entry["rolled_back_at"], entry["default_applies"]), ("2026-11-26T12:00:00+08:00", False))
+        self.assertEqual([sorted(o) for o in entry["options"]], [["approach", "irreversible", "name"]] * 2)
+        self.assertEqual(entry["frozen"][0]["text"], "`python3 tools/relayout_runs.py`")       # still shown each turn
+        self.assertIn("releases", self.gates())                                               # reading writes nothing
+        other = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION, "p.md"))        # the next write
+        g = self.gates()
+        self.assertEqual((sorted(g), sorted(g["pending"])), (["pending", "updated_at", "version"], sorted([item, other])))
+        for gone in ("expires_at", "reopened_at"):
+            self.assertNotIn(gone, g["pending"][item])
+        self.assertEqual(g["pending"][item]["rolled_back_at"], "2026-11-26T12:00:00+08:00")
 
-    def test_a_release_named_by_another_name_of_its_application_is_taken_back(self):
-        """特权应用：Docker Desktop and 特权应用：Docker are one application: a later decision whose options name Docker
-        takes back the release written as Docker Desktop when the option picked does not keep it, as the guard reads them."""
+    def test_a_decision_rolled_back_waits_for_the_researcher(self):
+        """1.0.6 (the researcher, 2026-11-16): a decision that was decided once and rolled back to 待决定 waits for
+        the researcher, however long: 到期默认 is refused with the reason, the local state and the receipt say when
+        it was rolled back, and query queue lists it first once it is past its expiry, which still counts from its
+        registration. Nothing is taken back, there being nothing released."""
         self.task()
-        first = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION, "first.md", edit=lambda t: t.replace(
-            "| 特权应用：Docker |", "| 特权应用：Docker Desktop |")))
-        self.quiet(ledger.confirm, self.lg(), first, "研究员", ["决定内容=用本机 Docker", "决定人=研究员"], option="本机 Docker")
-        self.assertEqual([(r["qualifier"], r["text"], r["decision"]) for r in self.gates()["releases"]],
-                         [("Docker", "特权应用：Docker Desktop", first)])                   # kept by the application's name
-        later = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION, "later.md"))
-        _, out = self.out(ledger.confirm, self.lg(), later, "研究员", ["决定内容=同账号沙箱", "决定人=研究员"], option="同账号沙箱")
-        self.assertIn("收回：特权应用：Docker Desktop（原来由决策 #%s 放行）。" % first, out)
-        self.assertEqual(self.gates()["releases"], [])
-        app = {"category": "privileged_app"}
-        self.assertTrue(ledger.overlaps(dict(app, qualifier="Docker Desktop"), dict(app, qualifier="com.docker.docker"), self.spec))
-        self.assertFalse(ledger.overlaps(dict(app, qualifier="Docker Desktop"), dict(app, qualifier="com.docker.docker")))   # no list: by the words
-        self.assertFalse(ledger.overlaps({"category": "send_out", "qualifier": "scp"}, {"category": "send_out", "qualifier": "git push"}, self.spec))
+        item = self.quiet(ledger.register, self.lg(), self.draft(REVERSIBLE))
+        self.assertIs(self.gates()["pending"][item]["default_applies"], True)
+        self.age(item, 30)
+        registered = self.gates()["pending"][item]["registered_at"]
+        self.quiet(ledger.confirm, self.lg(), item, "研究员", ["决定内容=按变体分目录", "决定人=研究员"], option="按变体分目录")
+        self.assertEqual(self.receipt(item)["option"], "按变体分目录")
+        _, out = self.out(ledger.rollback, self.lg(), item, "决定", "研究员想再看看", by="研究员")
+        self.assertIn("本地决策状态：#%s 回到待决定，冻结的动作重新生效；它定过一次，不再走到期默认，一直等研究员。" % item, out)
+        for word in ("放行", "收回", "重新算"):
+            self.assertNotIn(word, out)
+        entry = self.gates()["pending"][item]
+        back = ledger.parse_stamp(entry["rolled_back_at"])
+        self.assertLess(abs((ledger.now_at() - back).total_seconds()), 60)
+        self.assertEqual((entry["default_applies"], entry["default_option"], entry["registered_at"]), (False, "按轮次分目录", registered))
+        self.assertNotIn("reopened_at", entry)
+        self.assertEqual([f["text"] for f in entry["frozen"]], ["`python3 tools/relayout_runs.py`", "把已有的运行记录挪到新的目录结构下"])
+        rec = self.receipt(item)
+        self.assertEqual((rec["rolled_back_at"], rec["option"], rec["decided_by"], rec["decided_at"]), (entry["rolled_back_at"], None, None, None))
+        text = self.fails(ledger.confirm, self.lg(), item, ledger.BY_DEFAULT)
+        self.assertIn("#%s 定过一次，又回滚到了待决定（%s）：不再走到期默认，一直等研究员，他来谈时排在清单最前" % (
+            item, back.strftime("%Y-%m-%d %H:%M")), text)
+        self.assertEqual((self.state(item), self.stages()), ("待决定", [(item, "待决定（已到期，继续等研究员）")]))
+        self.age(item, 2000)                                                       # however long it waits
+        self.assertIn("不再走到期默认", self.fails(ledger.confirm, self.lg(), item, ledger.BY_DEFAULT))
+        self.assertFalse(any("到期默认" in text for _, text in self.fake.comments))
+        # a revision keeps that it was rolled back
+        self.quiet(ledger.revise, self.lg(), item, self.draft(REVERSIBLE, "v2.md", edit=lambda t: t.replace(
+            "第 1 版（2026-11-26）", "第 2 版（2026-11-27）")), "补一句背景")
+        entry = self.gates()["pending"][item]
+        self.assertEqual((entry["version"], entry["rolled_back_at"], entry["default_applies"]), (2, rec["rolled_back_at"], False))
+        self.assertIn("不再走到期默认", self.fails(ledger.confirm, self.lg(), item, ledger.BY_DEFAULT))
+        # one rolled back before its expiry is listed like any other until the expiry time has passed
+        fresh = self.quiet(ledger.register, self.lg(), self.draft(REVERSIBLE, "fresh.md"))
+        self.quiet(ledger.confirm, self.lg(), fresh, "研究员", ["决定内容=按变体分目录", "决定人=研究员"])
+        self.quiet(ledger.rollback, self.lg(), fresh, "决定", "再想想", by="研究员")
+        self.assertEqual(self.stages(), [(item, "待决定（已到期，继续等研究员）"), (fresh, "待决定")])
+        self.age(fresh, 25)
+        self.assertEqual(dict(self.stages())[fresh], "待决定（已到期，继续等研究员）")
+        # one that took its default and is rolled back takes no default again either
+        late = self.quiet(ledger.register, self.lg(), self.draft(REVERSIBLE, "late.md"))
+        self.age(late, 25)
+        self.quiet(ledger.confirm, self.lg(), late, ledger.BY_DEFAULT)
+        self.assertEqual(self.receipt(late)["decided_by"], "到期默认")
+        self.quiet(ledger.rollback, self.lg(), late, "决定", "研究员不同意默认的选项", by="研究员")
+        self.assertIn("不再走到期默认", self.fails(ledger.confirm, self.lg(), late, ledger.BY_DEFAULT))
+        # an irreversible one goes back with what it froze
+        perm = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION, "perm.md"))
+        self.quiet(ledger.confirm, self.lg(), perm, "研究员", ["决定内容=用本机 Docker", "决定人=研究员"], option="本机 Docker")
+        self.assertNotIn(perm, self.gates()["pending"])
+        self.quiet(ledger.rollback, self.lg(), perm, "决定", "研究员改主意了", by="研究员")
+        entry = self.gates()["pending"][perm]
+        self.assertEqual([f["text"] for f in entry["frozen"]][:2], ["特权应用：Docker", "`docker build`"])
+        self.assertEqual(entry["registered_at"], self.receipt(perm)["registered_at"])
 
     def test_a_revision_whose_urgency_the_space_has_no_option_for(self):
         """revise reads the fields it writes before it writes anything: an urgency the space has no option for is
@@ -1770,6 +2075,135 @@ class DecisionStateTest(LedgerCase):
         self.assertEqual(self.receipt(request)["version"], 2)
         self.assertNotIn(request, self.gates()["pending"])
 
+    def test_a_revision_copied_from_the_main_document_keeps_its_title(self):
+        """The template has a revision start from the main document's opening, which has no title line. The item
+        keeps the title it has, in the receipt and in the line every pool session is shown; it is never the name
+        of the draft file. A revision that does carry a title line changes it."""
+        self.task()
+        item = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION))
+        opening = self.doc(item)["body"].split("## 状态包", 1)[0]
+        self.assertFalse(ledger.title_of(opening))
+        v2 = self.write(opening.replace("第 1 版（2026-11-21）", "第 2 版（2026-11-22）"), "v2.md")
+        self.assertEqual(self.quiet(ledger.revise, self.lg(), item, v2, "只改日期"), 2)
+        self.assertEqual((self.receipt(item)["title"], self.gates()["pending"][item]["title"]), ("实验平台用什么隔离候选代码",) * 2)
+        self.edit_receipt(item, "title")                                           # a receipt without it: the work item's name says it
+        v3 = self.write(opening.replace("第 1 版（2026-11-21）", "第 3 版（2026-11-23）"), "v3.md")
+        self.quiet(ledger.revise, self.lg(), item, v3, "再改日期")
+        self.assertEqual(self.gates()["pending"][item]["title"], "实验平台用什么隔离候选代码")
+        v4 = self.draft(PERMISSION, "v4.md", edit=version(4, "2026-11-24", lambda t: t.replace(
+            "# 决策包：实验平台用什么隔离候选代码", "# 决策包：候选代码在哪里跑")))
+        self.quiet(ledger.revise, self.lg(), item, v4, "改事项")
+        self.assertEqual((self.receipt(item)["title"], self.gates()["pending"][item]["title"]), ("候选代码在哪里跑",) * 2)
+
+    def test_a_revision_that_fails_half_way_is_run_again(self):
+        """revise writes the fields first, then the document's opening, then the line in 交接记录, and the receipt
+        and the local state last. A step that fails says what is written already; the same command run again goes
+        on, and 交接记录 has one line for the version, also when the line was added and only its answer was lost."""
+        self.task()
+        item = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION))
+        urgent = version(2, "2026-11-22", lambda t: t.replace("- 紧急程度：今天", "- 紧急程度：插队"))
+        v2 = self.draft(PERMISSION, "v2.md", edit=urgent)
+        log = lambda: re.findall(r"第 2 版（2026-11-22）：", self.doc(item)["body"].split("## 交接记录", 1)[1])
+        versions = lambda: (self.receipt(item)["version"], self.gates()["pending"][item]["version"])
+        urgency = self.lg().field("decision", "urgency")["field_key"]
+        shown = lambda: self.fake.shown(self.fake.item(item)["type_key"], urgency, self.value(item, "decision", "urgency"))["label"]
+        # the fields fail: nothing has changed anywhere
+        text = self.fails(ledger.revise, self.lg(replies=[(("workitem", "update"), ledger.LedgerError("命令失败：502 Bad Gateway"))]), item, v2, "改成插队")
+        self.assertEqual(text, "命令失败：502 Bad Gateway\n工作项和主文档都还没改；修好后重跑同一条命令")
+        self.assertTrue(self.doc(item)["body"].startswith("- 包类型：决策包\n- 版本：第 1 版（2026-11-21）\n"))
+        self.assertEqual((log(), versions(), shown()), ([], (1, 1), "今天"))
+        # the opening fails: the fields are written, the document is not
+        text = self.fails(ledger.revise, self.lg(replies=[(("docs", "+update", "block_replace"), ledger.LedgerError("down"))]), item, v2, "改成插队")
+        self.assertEqual(text, "down\n工作项的字段已经按第 2 版写了；回执和本地决策状态还是第 1 版。修好后重跑同一条命令接着做，交接记录不会多出一行")
+        self.assertEqual((log(), versions(), shown()), ([], (1, 1), "插队"))
+        # the line in 交接记录 fails: the opening is the new version already
+        text = self.fails(ledger.revise, self.lg(replies=[(("docs", "+update", "append"), ledger.LedgerError("down"))]), item, v2, "改成插队")
+        self.assertIn("\n工作项的字段已经按第 2 版写了，主文档开头已经换成第 2 版；回执和本地决策状态还是第 1 版。", text)
+        self.assertTrue(self.doc(item)["body"].startswith("- 包类型：决策包\n- 版本：第 2 版（2026-11-22）\n"))
+        self.assertEqual((log(), versions()), ([], (1, 1)))
+        # the line is added but its answer never comes: the next run finds it and adds no second one
+        lg = self.lg()
+
+        def lost(argv):
+            self.fake.answer(argv, lg.calls[-1][2])
+            raise ledger.WriteMaybeDone("写命令超时（120 秒）")
+        lg.replies.append((("docs", "+update", "append"), lost))
+        with self.assertRaises(ledger.WriteMaybeDone) as e, contextlib.redirect_stdout(io.StringIO()):
+            ledger.revise(lg, item, v2, "改成插队")
+        self.assertIn("主文档开头已经换成第 2 版；回执和本地决策状态还是第 1 版", str(e.exception))
+        self.assertEqual((len(log()), versions()), (1, (1, 1)))
+        _, out = self.out(ledger.revise, self.lg(), item, v2, "改成插队")
+        self.assertIn("修订：#%s 的主文档开头换成第 2 版（文档链接不变），交接记录里已经有这一版的一行，没有再加。" % item, out)
+        self.assertEqual((len(log()), versions(), self.gates()["pending"][item]["urgency"]), (1, (2, 2), "插队"))
+        # the order of the writes, on a run with nothing in its way
+        lg = self.lg()
+        self.quiet(ledger.revise, lg, item, self.draft(PERMISSION, "v3.md", edit=version(3, "2026-11-23")), "改回今天")
+        wrote = [("fields" if "workitem" in argv else argv[argv.index("--command") + 1]) for argv, write, _ in lg.calls if write]
+        self.assertEqual(wrote, ["fields", "block_replace", "append"])
+
+    def test_another_sessions_note_is_not_the_line_of_the_revision(self):
+        """交接记录 may name the version a revision brings before it is there: a session wrote “准备出第 2 版（日期）：…”.
+        Only the line revise itself writes, the one that starts with the scribe's tag, says the revision is logged;
+        with another session's note in the way the line is added all the same (it was not, and what the revision
+        changed was missing from 交接记录)."""
+        self.task()
+        item = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION))
+        self.quiet(ledger.append, self.lg(), item, self.write("[Infra+2] 准备出第 2 版（2026-11-22）：先和算法对一下口径\n", "note.md"))
+        _, out = self.out(ledger.revise, self.lg(), item, self.draft(PERMISSION, "v2.md", edit=version(2, "2026-11-22")), "改日期")
+        self.assertIn("修订：#%s 的主文档开头换成第 2 版（文档链接不变），交接记录追加了一行。" % item, out)
+        log = self.doc(item)["body"].split("## 交接记录", 1)[1]
+        self.assertEqual(len(re.findall(r"^\[PMO\+0\] 第 2 版（2026-11-22）：改日期$", log, re.M)), 1)
+        self.assertIn("[Infra+2] 准备出第 2 版（2026-11-22）：先和算法对一下口径", log)
+        # the line itself is found as an export may write it: brackets escaped, in a list, in a quote; not inside another line
+        lg = self.lg()
+        url = lg.doc_url(item)
+        heads = ledger.heading_ids(lg, url)
+        for text, found in (("[PMO+0] 第 3 版（2026-11-23）：改回今天", True), ("\\[PMO+0\\] 第 3 版（2026-11-23）：改回今天", True),
+                            ("- [PMO+0] 第 3 版 (2026-11-23): 改回今天", True), ("> [PMO+0] 第 3 版（2026-11-23）：改回今天", True),
+                            ('<p id="b1">一行</p><p id="b2">[PMO+0] 第 3 版（2026-11-23）：改回今天</p>', True),
+                            ('<ul><li id="b3">[Infra+2] 等 [PMO+0] 第 3 版（2026-11-23）：再说</li></ul>', False),
+                            ("[Infra+2] 第 3 版（2026-11-23）：我来改", False), ("[Infra+2] 等 [PMO+0] 第 3 版（2026-11-23）：再说", False),
+                            ("[PMO+0] 第 3 版（2026-11-24）：改回今天", False), ("[PMO+0] 第 13 版（2026-11-23）：改回今天", False)):
+            reader = self.lg(replies=[(("docs", "+fetch", "section"), {"data": {"document": {"content": "## 交接记录\n\n一行\n\n%s\n" % text}}})])
+            self.assertEqual(ledger.revision_logged(reader, url, heads, 3, "2026-11-23"), found, text)
+
+    def test_the_next_revision_keeps_the_link_to_its_item(self):
+        """revise writes the bare ID back into the draft, and the next version is written from that file: the main
+        document's 关联工作项 still links to the work item."""
+        self.task()
+        item = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION))
+        linked = "- 关联工作项：[#%s](https://project.feishu.cn/" % item
+        self.assertIn(linked, self.doc(item)["body"])
+        v2 = self.draft(PERMISSION, "v2.md", edit=version(2, "2026-11-22"))
+        self.quiet(ledger.revise, self.lg(), item, v2, "改日期")
+        with open(v2, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("- 关联工作项：#%s\n" % item, text)
+        self.write(text.replace("第 2 版（2026-11-22）", "第 3 版（2026-11-23）"), "v2.md")
+        self.quiet(ledger.revise, self.lg(), item, v2, "再改日期")
+        body = self.doc(item)["body"]
+        self.assertTrue(body.startswith("- 包类型：决策包\n- 版本：第 3 版（2026-11-23）\n"))
+        self.assertIn(linked, body)
+        self.assertNotIn("- 关联工作项：#%s\n" % item, body)
+        self.assertEqual(ledger.link_line("- 关联工作项：#7\n", "[#7](u)", "7"), "- 关联工作项：#7\n")        # elsewhere a line that names its item is left alone
+        self.assertEqual(ledger.link_line("- 关联工作项：#7；来源工作项 #5\n", "[#7](u)", "7", relink=True), "- 关联工作项：[#7](u)；来源工作项 #5\n")
+
+    def test_a_revision_does_not_change_the_relation(self):
+        """A request package revised into another relation is another work item: the error says which relation
+        the revision would register as, instead of calling both sides a request package."""
+        self.task()
+        request = self.quiet(ledger.register, self.lg(), self.draft(ASSIGN, "a.md"))
+        second = lambda t: re.sub(r"第 1 版（", "第 2 版（", t, 1)
+        text = self.fails(ledger.revise, self.lg(), request, self.draft(CROSS, "c2.md", edit=second), "改成跨序列")
+        self.assertEqual(text, "修订稿登记出来是跨序列需求（关系“跨序列”），#%s 是同序列需求：包类型和关系都不变才能修订；要改关系，另写一份登记" % request)
+        text = self.fails(ledger.revise, self.lg(), request, self.draft(EXECUTE, "e2.md", edit=lambda t: second(t).replace("；来源工作项 #2100", "")), "改成执行")
+        self.assertEqual(text, "修订稿的关系是“执行”，#%s 登记的是“下发”：包类型和关系都不变才能修订；要改关系，另写一份登记" % request)
+        cross = self.quiet(ledger.register, self.lg(), self.draft(CROSS, "c.md"))
+        text = self.fails(ledger.revise, self.lg(), cross, self.draft(ASSIGN, "a2.md", edit=second), "改成下发")
+        self.assertEqual(text, "修订稿登记出来是同序列需求（关系“下发”），#%s 是跨序列需求：包类型和关系都不变才能修订；要改关系，另写一份登记" % cross)
+        self.assertEqual((self.receipt(request)["version"], self.receipt(cross)["version"]), (1, 1))
+        self.assertEqual(self.quiet(ledger.revise, self.lg(), request, self.draft(ASSIGN, "a3.md", edit=second), "补一条验收标准"), 2)
+
     def test_a_decision_registered_before_1_0_4_is_held_once_revised(self):
         """Upgrading: a decision still waiting from before 1.0.4 has no record in the local state; its sender
         writes version 2 on the new template and the scribe revises it. From then on it is held, its
@@ -1788,8 +2222,8 @@ class DecisionStateTest(LedgerCase):
 
     def test_a_reversible_decision_past_its_expiry_takes_its_default(self):
         """B8: a reversible decision registered 24 hours ago and still undecided. confirm --by 到期默认 records the
-        option its package names: 决定内容 starts with 到期默认：, 决定人 is the researcher, a comment says the
-        same, and nothing is released. The decision goes on to 待执行 like one the researcher decided."""
+        option its package names: 决定内容 starts with 到期默认：, 决定人 is the researcher, and a comment says the
+        same. The decision goes on to 待执行 like one the researcher decided."""
         self.task()
         item = self.quiet(ledger.register, self.lg(), self.draft(REVERSIBLE))
         entry = self.gates()["pending"][item]
@@ -1798,7 +2232,8 @@ class DecisionStateTest(LedgerCase):
         self.assertIn("还没满到期时长 24 小时（默认值）", self.fails(ledger.confirm, self.lg(), item, ledger.BY_DEFAULT))
         self.age(item, 23)
         self.assertIn("登记了 23 小时，还没满到期时长 24 小时", self.fails(ledger.confirm, self.lg(), item, ledger.BY_DEFAULT))
-        self.assertIn("去掉 --set、--option 和 --decision", self.fails(ledger.confirm, self.lg(), item, ledger.BY_DEFAULT, ["决定内容=按轮次分目录"]))
+        self.assertIn("去掉 --set、--option、--executor 和 --decision", self.fails(ledger.confirm, self.lg(), item, ledger.BY_DEFAULT, ["决定内容=按轮次分目录"]))
+        self.assertIn("去掉 --set、--option、--executor 和 --decision", self.fails(ledger.confirm, self.lg(), item, ledger.BY_DEFAULT, executor="RnD-p2-01"))
         self.assertEqual(self.state(item), "待决定")
         self.age(item, 25)
         _, out = self.out(ledger.confirm, self.lg(), item, ledger.BY_DEFAULT)
@@ -1806,17 +2241,18 @@ class DecisionStateTest(LedgerCase):
         self.assertEqual((self.state(item), self.value(item, "decision", "决定内容"), self.value(item, "decision", "决定人")),
                          ("已决定", content, fake_space.ME))
         self.assertIn((item, "[PMO+0] " + content), self.fake.comments)
-        self.assertIn("到期默认：照选项“按轮次分目录”办，执行完请书记员归档；没有放行任何不可逆动作。", out)
+        self.assertIn("到期默认：照选项“按轮次分目录”办，执行完请书记员归档。", out)
+        self.assertNotIn("放行", out)
         self.assertEqual(out.splitlines()[-1], "执行方：RnD-p2-01。")
-        self.assertEqual((self.gates()["pending"], self.gates()["releases"]), ({}, []))
+        self.assertEqual(self.gates()["pending"], {})
         self.assertEqual((self.receipt(item)["option"], self.receipt(item)["decided_by"]), ("按轮次分目录", "到期默认"))
         self.assertIn("现在是“已决定”，不在“待决定”", self.fails(ledger.confirm, self.lg(), item, ledger.BY_DEFAULT))
         self.assertEqual([str(r["work_item_id"]) for r in self.quiet(ledger.query, self.lg("preview"), "queue")], [])
 
     def test_what_waits_for_the_researcher_never_takes_a_default(self):
         """B8: an irreversible decision, one the researcher carries out and one that signs are refused by
-        confirm --by 到期默认 however long they waited: no decision is recorded and nothing is released, so
-        what they would release stays blocked. They are not even marked as taking a default."""
+        confirm --by 到期默认 however long they waited: no decision is recorded. They are not even marked as
+        taking a default."""
         self.task()
         perm = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION))
         hand = self.quiet(ledger.register, self.lg(), self.draft(BY_HAND, "hand.md"))
@@ -1828,8 +2264,7 @@ class DecisionStateTest(LedgerCase):
         self.assertIn("#%s 是不可逆的决策（判据 2、3），到期只能等研究员" % perm, self.fails(ledger.confirm, self.lg(), perm, ledger.BY_DEFAULT))
         self.assertIn("#%s 的执行方是研究员（或者要研究员亲手做事），到期继续等研究员" % hand, self.fails(ledger.confirm, self.lg(), hand, ledger.BY_DEFAULT))
         self.assertIn("#%s 是不可逆的决策（判据 4）" % signing, self.fails(ledger.confirm, self.lg(), signing, ledger.BY_DEFAULT))
-        g = self.gates()
-        self.assertEqual((sorted(g["pending"]), g["releases"]), (sorted([perm, hand, signing]), []))
+        self.assertEqual(sorted(self.gates()["pending"]), sorted([perm, hand, signing]))
         self.assertEqual([self.state(i) for i in (perm, hand, signing)], ["待决定"] * 3)
         self.assertFalse(any("到期默认" in text for _, text in self.fake.comments))
         talk = self.quiet(ledger.register, self.lg(), self.draft(DECIDED, "talk.md"))
@@ -1837,6 +2272,7 @@ class DecisionStateTest(LedgerCase):
         self.assertIn("--by 到期默认 只用在决策上", self.fails(ledger.confirm, self.lg(), self.task(name="t2.md"), ledger.BY_DEFAULT))
 
     def test_the_expiry_time_comes_from_decisions_md(self):
+        import pool
         import setup
         path = os.path.join(self.tmp, "org", "decisions.md")
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1849,23 +2285,60 @@ class DecisionStateTest(LedgerCase):
         self.assertIn("- 可逆决策的到期时长：登记后 24 小时。研究员可以改这一行的数字", text)       # the plugin's section, as init writes it
         write(text)
         self.assertEqual(ledger.expiry_hours(self.tmp), (24, "org/decisions.md", None))
+        self.assertEqual(pool.expiry_hours(self.tmp), ledger.expiry_hours(self.tmp))       # one reader, for the ledger and the inbox hook
         for written, hours in (("登记后 48 小时", 48), ("登记后 2 天", 48), ("登记后 1.5 小时", 1.5)):
             write(text.replace("登记后 24 小时", written))
             self.assertEqual(ledger.expiry_hours(self.tmp)[:2], (hours, "org/decisions.md"), written)
-        write(text.replace("（暂无）", "- 2026-11-20：可逆决策的到期时长改成登记后 36 小时。决策 #7001。"))
-        self.assertEqual(ledger.expiry_hours(self.tmp)[0], 36)                      # the researcher's later decision wins
+        # the researcher's later decision wins, in the words people use for a change: the time it changes to is read
+        for said, hours in (("可逆决策的到期时长改成登记后 36 小时", 36), ("可逆决策的到期时长从 24 小时改成 36 小时", 36),
+                            ("可逆决策的到期时长由登记后 24 小时延长到 48 小时", 48), ("可逆决策的到期时长不再用 24 小时，改成 2 天", 48),
+                            ("可逆决策的到期时长：登记后 24 小时缩短到 12 小时", 12), ("可逆决策的到期时长改为：登记后 3 天", 72)):
+            write(text.replace("（暂无）", "- 2026-11-20：%s。决策 #7001。" % said))
+            self.assertEqual(ledger.expiry_hours(self.tmp), (hours, "org/decisions.md", None), said)
+        # what cannot be read without guessing is not guessed at: 24 hours and a reminder
+        # another unit, or none, is a time stated all the same (1.0.6: such a line was passed over without a word)
+        for said in ("可逆决策的到期时长：登记后 24 小时或者 48 小时", "可逆决策的到期时长改成两天", "可逆决策的到期时长：登记后两天",
+                     "可逆决策的到期时长：48h", "可逆决策的到期时长：72", "可逆决策的到期时长：一周", "可逆决策的到期时长：登记后 48 hours",
+                     "可逆决策的到期时长：2d（研究员 2026-11-20 定）", "可逆决策的到期时长改成 48h", "可逆决策的到期时长是 2d",
+                     "可逆决策的到期时长为一周", "可逆决策的到期时长 = 36", "可逆决策的到期时长 48h"):
+            write(text.replace("（暂无）", "- 2026-11-20：%s。" % said))
+            hours, source, note = ledger.expiry_hours(self.tmp)
+            self.assertEqual((hours, source), (24, "默认"), said)
+            self.assertIn("读不出时长", note, said)
+        # a line that only mentions the key states no time: the plugin's line stands, with the number the researcher put there
+        for said in ("可逆决策的到期时长先不动，下个月再看", "可逆决策的到期时长见上", "可逆决策的到期时长是否要改，下周再定",
+                     "入口要在周报里写可逆决策的到期时长有没有改过。决策 #7001"):
+            write(text.replace("（暂无）", "- 2026-11-20：%s。" % said))
+            self.assertEqual(ledger.expiry_hours(self.tmp), (24, "org/decisions.md", None), said)
+            write(text.replace("登记后 24 小时", "登记后 48 小时").replace("（暂无）", "- 2026-11-20：%s。" % said))
+            self.assertEqual(ledger.expiry_hours(self.tmp), (48, "org/decisions.md", None), said)
         write(text.replace("登记后 24 小时", "登记后两天"))
         hours, source, note = ledger.expiry_hours(self.tmp)
         self.assertEqual((hours, source), (24, "默认"))
         self.assertIn("读不出时长", note)
+        write(text)
         self.task()
         item = self.quiet(ledger.register, self.lg(), self.draft(REVERSIBLE))
-        write(text.replace("登记后 24 小时", "登记后 48 小时"))
+        waits = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION, "p.md"))
         self.age(item, 30)
-        self.assertIn("还没满到期时长 48 小时（org/decisions.md）", self.fails(ledger.confirm, self.lg(), item, ledger.BY_DEFAULT))
+        self.age(waits, 30)
+        self.assertEqual(ledger.past_due_waiting(self.lg("preview")), {waits})
+        # the researcher changes the time: the queue's list and 到期默认 follow at once, with no write in between
+        before = self.gates()
+        write(text.replace("登记后 24 小时", "登记后 48 小时"))
+        self.assertEqual(ledger.past_due_waiting(self.lg("preview")), set())
+        self.assertIn("登记了 30 小时，还没满到期时长 48 小时（org/decisions.md）", self.fails(ledger.confirm, self.lg(), item, ledger.BY_DEFAULT))
+        self.assertEqual(self.gates(), before)
         self.age(item, 49)
+        self.age(waits, 49)
+        self.assertEqual(ledger.past_due_waiting(self.lg("preview")), {waits})
         self.quiet(ledger.confirm, self.lg(), item, ledger.BY_DEFAULT)
         self.assertTrue(self.value(item, "decision", "决定内容").endswith("（登记后 48 小时内研究员没有决定）"))
+        write(text.replace("登记后 24 小时", "登记后 12 小时"))                                # shorter: also at once
+        short = self.quiet(ledger.register, self.lg(), self.draft(REVERSIBLE, "short.md"))
+        self.age(short, 13)
+        self.quiet(ledger.confirm, self.lg(), short, ledger.BY_DEFAULT)
+        self.assertTrue(self.value(short, "decision", "决定内容").endswith("（登记后 12 小时内研究员没有决定）"))
 
     def test_the_cli_takes_the_new_arguments(self):
         os.environ["CLAUDE_PROJECT_DIR"] = self.tmp
@@ -1910,8 +2383,10 @@ class RunConditionsTest(LedgerCase):
 
 class PackageCheckTest(LedgerCase):
     """The package check on what 1.0.4 added: 版本 on every package; on a decision package 可逆性, 到期默认动作,
-    the options table's 要放行的不可逆动作, 冻结的动作, 已发生的偏向性工作, 没有列入的选项 and 约束的出处,
-    and how they agree."""
+    the options table's 不可逆的动作 (要放行的不可逆动作 until 1.0.6), 冻结的动作, 已发生的偏向性工作, 没有列入的选项
+    and 约束的出处, and how they agree. From 1.0.6 no hook reads what a package lists, so a note after a category
+    and a frozen action are free text; what the check keeps: a category is one of the list, and a decision one
+    of whose options lists a category, or that signs, says 不可逆."""
 
     def lint(self, text):
         return orgspec.lint_text(self.spec, text)[0]
@@ -1965,9 +2440,12 @@ class PackageCheckTest(LedgerCase):
         self.assertEqual(lint(rev.replace("- 可逆性：可逆", "- 可逆性：不可逆（判据 9）")),
                          ["包头“可逆性”写的是“不可逆（判据 9）”：没有判据 9；写“可逆”，或者“不可逆（判据 N）”，" + crit])
         self.assertEqual(lint(rev.replace("- 可逆性：可逆", "- 可逆性：大概可逆")), ["包头“可逆性”写的是“大概可逆”：写“可逆”，或者“不可逆（判据 N）”"])
-        # an option that releases a category of the list, or a decision that signs, is irreversible
-        released = rev.replace("| 续跑脚本要改 | 无 |", "| 续跑脚本要改 | 特权应用：Docker |")
-        self.assertEqual(lint(released), ["选项“按变体分目录”（特权应用：Docker）要放行不可逆事项清单里的类别，包头“可逆性”要写不可逆，并写判据号"])
+        # a decision one of whose options lists a category of the list, or that signs, is irreversible
+        listed = rev.replace("| 续跑脚本要改 | 无 |", "| 续跑脚本要改 | 特权应用：Docker |")
+        self.assertEqual(lint(listed), ["选项“按变体分目录”（特权应用：Docker）列了不可逆事项清单里的类别，包头“可逆性”要写不可逆，并写判据号"])
+        both = rev.replace("| 无 | 无 |", "| 无 | 受保护路径：repo/eval/split.py |").replace("| 续跑脚本要改 | 无 |", "| 续跑脚本要改 | 花钱；对外发送：git push |")
+        self.assertEqual(lint(both), ["选项“按轮次分目录”（受保护路径：repo/eval/split.py）、“按变体分目录”（花钱；对外发送：git push）"
+                                      "列了不可逆事项清单里的类别，包头“可逆性”要写不可逆，并写判据号"])
         signing = rev.replace("## 待签版本\n无。", "## 待签版本\n规格 v3（链接），签的是研究任务 #2000 第 4 步。")
         self.assertEqual(lint(signing), ["这条决策用来签字（“待签版本”写了要签的版本），包头“可逆性”要写不可逆：签字关不走到期默认"])
         # what an irreversible decision, and one the researcher has a hand in, waits for: the researcher
@@ -1994,102 +2472,159 @@ class PackageCheckTest(LedgerCase):
         self.assertEqual(lint(talk), [])
         self.assertEqual(lint(talk.replace("- 到期默认动作：无", "- 到期默认动作：从搜索开始计时")),
                          ["研究员主动发起的决策已经定了，不会到期：包头“到期默认动作”写“无”"])
-        table = ("## 选项\n| 选项 | 做法 | 代价 | 风险 | 要放行的不可逆动作 |\n| --- | --- | --- | --- | --- |\n"
+        table = ("## 选项\n| 选项 | 做法 | 代价 | 风险 | 不可逆的动作 |\n| --- | --- | --- | --- | --- |\n"
                  "| 从搜索开始计时 | 四周从搜索开始，试点期另设两周 | 试点观察期变短 | 两周可能看不出工程师是否主动使用 | 无 |\n"
                  "| 从试点开始计时 | 四周从试点开始 | 算法预算要多覆盖约一周 | 超出已签的 300 GPU 小时 | 无 |")
         self.assertIn(table, talk)
         self.assertEqual(lint(talk.replace(table, "## 选项\n无。")), [])               # options not compared in the talk
 
-    def test_the_options_table_says_what_each_option_releases(self):
+    def test_the_options_table_says_what_each_option_does_of_the_list(self):
+        """The column 不可逆的动作: the categories of the list an option does, each with a note if wanted, 无 for
+        none. Every one of the nine categories may be written, 受保护路径 included; a part that opens with no
+        category is sent back; the column's name before 1.0.6 is sent back with the new one."""
         rev, lint = example(REVERSIBLE), self.lint
         names = "管理员权限、特权应用、系统和账号、权限、Docker 资源、对外发送、受保护路径、花钱、付费运行的条件"
-        self.assertEqual(lint(rev.replace("| 续跑脚本要改 | 无 |", "| 续跑脚本要改 | 特权程序：Docker |")),
-                         ["选项“按变体分目录”要放行的“特权程序：Docker”不在不可逆事项清单里：清单里的类别是%s；几类之间用“；”隔开" % names])
-        self.assertEqual(lint(rev.replace("| 续跑脚本要改 | 无 |", "| 续跑脚本要改 | 受保护路径：repo/eval/split.py |")),
-                         ["选项“按变体分目录”要放行的“受保护路径：repo/eval/split.py”：受保护路径不走决策放行，照原来的规则由研究员在自己的会话里确认；这一格去掉它"])
-        self.assertEqual(lint(rev.replace("| 续跑脚本要改 | 无 |", "| 续跑脚本要改 |  |")),
-                         ["选项“按变体分目录”的“要放行的不可逆动作”是空的：写不可逆事项清单里的类别，可以加限定，比如“特权应用：Docker”；没有写“无”"])
-        no_column = rev.replace(" | 要放行的不可逆动作 |\n| --- | --- | --- | --- | --- |", " |\n| --- | --- | --- | --- |").replace(" | 无 | 无 |", " | 无 |").replace(
+        cell = lambda written: rev.replace("- 可逆性：可逆", "- 可逆性：不可逆（判据 2）").replace(
+            "- 到期默认动作：按轮次分目录", "- 到期默认动作：等研究员").replace("| 续跑脚本要改 | 无 |", "| 续跑脚本要改 | %s |" % written)
+        self.assertEqual(lint(cell("无")), [])
+        not_listed = "不在不可逆事项清单里：清单里的类别是%s；先写类别，说明写在“：”后面，几类之间用“；”隔开" % names
+        self.assertEqual(lint(cell("特权程序：Docker")), ["选项“按变体分目录”的不可逆的动作“特权程序：Docker”" + not_listed])
+        self.assertEqual(lint(cell("对外发送：scp；先打包再传")), ["选项“按变体分目录”的不可逆的动作“先打包再传”" + not_listed])
+        self.assertEqual(lint(cell("")),
+                         ["选项“按变体分目录”的“不可逆的动作”是空的：写这个选项要做的、不可逆事项清单里的事，先写类别，可以带一句说明，"
+                          "比如“特权应用：启动 Docker Desktop”；没有写“无”"])
+        for name in self.spec.irreversible_names():                                # all nine, 受保护路径 too
+            self.assertEqual(lint(cell(name)), [], name)
+            self.assertEqual(lint(cell("%s：随便一句说明，hook 不看" % name)), [], name)
+        read = lambda written: [(r["name"], r["qualifier"], r["text"]) for r in
+                                orgspec.decision_parts(self.spec, cell(written), ledger.header_of(cell(written)))[0]["options"][1]["irreversible"]]
+        self.assertEqual(read("受保护路径：repo/eval/split.py"), [("受保护路径", "repo/eval/split.py", "受保护路径：repo/eval/split.py")])
+        # a note is kept whole: a comma, brackets or a full stop cut nothing off (it used to end at the first of them)
+        self.assertEqual(read("对外发送：scp，ssh 到 CAMPUS-HPC"), [("对外发送", "scp，ssh 到 CAMPUS-HPC", "对外发送：scp，ssh 到 CAMPUS-HPC")])
+        self.assertEqual(read("特权应用：Docker；Docker 资源：内存调到 10 GiB（研究员同意过）"),
+                         [("特权应用", "Docker", "特权应用：Docker"), ("Docker 资源", "内存调到 10 GiB（研究员同意过）", "Docker 资源：内存调到 10 GiB（研究员同意过）")])
+        # no application has to be named, and a note may be Chinese only, or sit in brackets
+        self.assertEqual(read("特权应用：Podman"), [("特权应用", "Podman", "特权应用：Podman")])
+        self.assertEqual(read("对外发送：作业送到集群上"), [("对外发送", "作业送到集群上", "对外发送：作业送到集群上")])
+        self.assertEqual(read("花钱（约 8 美元）; 付费运行的条件"), [("花钱", "（约 8 美元）", "花钱（约 8 美元）"), ("付费运行的条件", "", "付费运行的条件")])
+        former = rev.replace(" | 不可逆的动作 |", " | 要放行的不可逆动作 |")
+        self.assertEqual(lint(former), ["选项表的“要放行的不可逆动作”一列改名“不可逆的动作”了（1.0.6）：把表头改过来；格子里照旧写这个选项要做的、"
+                                        "不可逆事项清单里的类别，可以带一句说明，没有写“无”"])
+        no_column = rev.replace(" | 不可逆的动作 |\n| --- | --- | --- | --- | --- |", " |\n| --- | --- | --- | --- |").replace(" | 无 | 无 |", " | 无 |").replace(
             "| 续跑脚本要改 | 无 |", "| 续跑脚本要改 |")
-        self.assertEqual(lint(no_column), ["选项表少了“要放行的不可逆动作”一列：写选了这个选项以后要做的、不可逆事项清单里的类别，可以加限定，比如“特权应用：Docker”；没有写“无”"])
+        self.assertEqual(lint(no_column), ["选项表少了“不可逆的动作”一列：写这个选项要做的、不可逆事项清单里的事，先写类别，可以带一句说明，"
+                                           "比如“特权应用：启动 Docker Desktop”；没有写“无”"])
         one = rev.replace("| 按变体分目录 | runs/rnd/<变体>/<轮次>/ | 工程续跑时要跨目录找同一轮 | 续跑脚本要改 | 无 |\n", "")
         self.assertEqual(lint(one), ["决策队列的决策包，选项写成表，至少两个选项，其中一个可以是“不做”"])
-        two = example(PERMISSION).replace("| 特权应用：Docker |", "| 特权应用：Docker；Docker 资源：内存调到 10 GiB（研究员同意过） |")
-        parts = orgspec.decision_parts(self.spec, two, ledger.header_of(two))[0]
-        self.assertEqual([(r["name"], r["qualifier"]) for r in parts["options"][0]["releases"]],
-                         [("特权应用", "Docker"), ("Docker 资源", "内存调到 10 GiB")])
+        self.task()
+        self.assertIn("一列改名“不可逆的动作”了（1.0.6）", self.fails(ledger.register, self.lg(), self.write(former)))   # a draft from before the upgrade
+        self.assertEqual(len(self.fake.items), 1)
+        with open(os.path.join(ROOT, "skills", "packages", "assets", "decision.md"), encoding="utf-8") as f:
+            template = f.read()
+        self.assertIn("| 选项 | 做法 | 代价 | 风险 | 不可逆的动作 |", orgspec.template_block(template))
+        self.assertNotIn("要放行", template)
+        self.assertEqual(orgspec.option_actions({"name": "A", "releases": [{"text": "花钱"}]}), [{"text": "花钱"}])     # a receipt from 1.0.4 or 1.0.5
 
-    def test_a_privileged_application_is_named_by_the_list(self):
-        """特权应用 is compared by application: a qualifier that names one of the list's applications keeps its name
-        (启动 Docker Desktop is Docker); one that names none is sent back in the options table, and frozen as the whole
-        category with a reminder."""
-        perm, lint = example(PERMISSION), self.lint
-        text = perm.replace("| 特权应用：Docker |", "| 特权应用：启动 Docker Desktop |")
-        parts = orgspec.decision_parts(self.spec, text, ledger.header_of(text))[0]
-        self.assertEqual([(r["qualifier"], r["text"]) for r in parts["options"][0]["releases"]], [("Docker", "特权应用：启动 Docker Desktop")])
-        self.assertEqual(lint(perm.replace("| 特权应用：Docker |", "| 特权应用：Podman |")), [
-            "选项“本机 Docker”要放行的“特权应用：Podman”认不出应用：特权应用的限定写应用名单里的应用（Docker），hook 按应用名放行；不写限定就是放行整类"])
-        frozen = perm.replace("- 特权应用：Docker\n", "- 特权应用：容器工具\n- 花钱：调用模型服务的付费接口\n")
-        parts, errors, warnings = orgspec.decision_parts(self.spec, frozen, ledger.header_of(frozen))
-        self.assertEqual(errors, [])
-        self.assertEqual([(f["category"], f["qualifier"]) for f in parts["frozen"] if f["kind"] == "category"],
-                         [("privileged_app", "容器工具"), ("spend", "调用模型服务的付费接口")])
-        self.assertIn("冻结的动作“特权应用：容器工具”认不出应用（特权应用的应用名单：Docker），hook 按整类冻结“特权应用”", warnings)
-        self.assertIn("冻结的动作“花钱：调用模型服务的付费接口”：“花钱”认不出命令，hook 不拦，只靠每轮提示约束", warnings)
+    def test_the_package_check_says_nothing_about_hooks(self):
+        """1.0.6: no hook matches what a package lists, so the check no longer asks for an application of a list, a
+        word a command would show or a command prefix, and none of its messages says what a hook does."""
+        perm = example(PERMISSION)
+        text = perm.replace("| 特权应用：Docker |", "| 特权应用：容器工具 |").replace(
+            "- 特权应用：Docker\n", "- 特权应用：容器工具\n- 花钱：调用模型服务的付费接口\n- `rsync`\n- 发给导师的周报先不发\n")
+        parts, errors, warnings = orgspec.decision_parts(self.spec, text, ledger.header_of(text))
+        self.assertEqual((errors, warnings), ([], []))
+        self.assertEqual(orgspec.lint_text(self.spec, text), ([], []))
+        self.assertEqual([(f["kind"], f.get("category"), f["text"]) for f in parts["frozen"]][:4], [
+            ("category", "privileged_app", "特权应用：容器工具"), ("category", "spend", "花钱：调用模型服务的付费接口"),
+            ("text", None, "`rsync`"), ("text", None, "发给导师的周报先不发")])
+        for name in ("qualifier_apps", "app_names", "read_releases", "RELEASE_KINDS", "RELEASE_COLUMN", "BACKTICKED"):
+            self.assertFalse(hasattr(orgspec, name), name)
+        with open(os.path.join(ROOT, "scripts", "orgspec.py"), encoding="utf-8") as f:
+            source = f.read()
+        for said in ("hook 按", "hook 不拦，只靠", "要 hook 拦下", "不走决策放行"):
+            self.assertNotIn(said, source)
 
-    def test_frozen_actions_are_categories_command_prefixes_or_sentences(self):
+    def test_frozen_actions_are_categories_or_sentences(self):
+        """冻结的动作, a line each: a category of the list, with a note if wanted, or a sentence. Nothing about how
+        it is written is sent back (a command prefix needed two words until 1.0.6). A line that names several
+        categories is read as each of them; before, only the first was."""
         rev, lint = example(REVERSIBLE), self.lint
         prefix = "- `python3 tools/relayout_runs.py`"
-        for written, why in (("- `python3 *`", "去掉通配符只剩 1 个词"), ("- `rsync`", "只有 1 个词"), ("- `* *`", "去掉通配符只剩 0 个词")):
-            self.assertEqual(lint(rev.replace(prefix, written)), [
-                "冻结的动作里的命令前缀“%s”%s：至少写两个词，不能只是通配符，比如 `docker build`；要冻结一整类动作，写不可逆事项清单里的类别" % (written[3:-1], why)])
-        text = rev.replace(prefix, "- `open -a Docker*`\n- 特权应用：Docker（`open -a Docker`）\n- Docker 资源\n- 1. 注意：别动 gpu-01 的内存")
-        parts, errors, warnings = orgspec.decision_parts(self.spec, text, ledger.header_of(text))
-        self.assertEqual(errors, [])
-        self.assertEqual([(f["kind"], f.get("words") or f.get("qualifier") or f["text"]) for f in parts["frozen"]], [
-            ("command", ["open", "-a"]), ("category", "Docker"), ("command", ["open", "-a", "Docker"]), ("category", "Docker 资源"),
-            ("text", "1. 注意：别动 gpu-01 的内存"), ("text", "把已有的运行记录挪到新的目录结构下")])
-        self.assertEqual(len(warnings), 2)
-        self.assertIn("认不出命令，只靠每轮提示约束", warnings[0])
+        frozen = lambda written: [(f["kind"], f.get("name"), f.get("qualifier"), f["text"]) for f in orgspec.decision_parts(
+            self.spec, rev.replace(prefix, written), ledger.header_of(rev))[0]["frozen"]][:-1]
+        for written in ("- `python3 *`", "- `rsync`", "- `* *`", "- 别动 gpu-01"):          # one word, wildcards, a few words: all fine
+            self.assertEqual(lint(rev.replace(prefix, written)), [], written)
+            self.assertEqual(frozen(written), [("text", None, None, written[2:])])
+        self.assertEqual(frozen("- 特权应用：Docker（`open -a Docker`）\n- Docker 资源\n1. 注意：别动 gpu-01 的内存\n* 对外发送（给导师的周报）"), [
+            ("category", "特权应用", "Docker（`open -a Docker`）", "特权应用：Docker（`open -a Docker`）"),
+            ("category", "Docker 资源", "", "Docker 资源"),
+            ("text", None, None, "注意：别动 gpu-01 的内存"),
+            ("category", "对外发送", "（给导师的周报）", "对外发送（给导师的周报）")])
+        # several categories on a line: every one of them is read
+        self.assertEqual(frozen("- 特权应用：Docker；对外发送：git push; 花钱"), [
+            ("category", "特权应用", "Docker", "特权应用：Docker"), ("category", "对外发送", "git push", "对外发送：git push"),
+            ("category", "花钱", "", "花钱")])
+        # a remark after a category stays with it; a sentence with a semicolon in it stays one sentence
+        self.assertEqual(frozen("- 特权应用：Docker；等研究员定了再开；对外发送"), [
+            ("category", "特权应用", "Docker；等研究员定了再开", "特权应用：Docker；等研究员定了再开"), ("category", "对外发送", "", "对外发送")])
+        self.assertEqual(frozen("- 别重启 gpu-01；也别清它的缓存"), [("text", None, None, "别重启 gpu-01；也别清它的缓存")])
+        self.assertEqual(frozen("- 特权应用的事先放一放"), [("text", None, None, "特权应用的事先放一放")])      # not the category: no colon after its name
         self.assertEqual(orgspec.decision_parts(self.spec, example(DECIDED), ledger.header_of(example(DECIDED)))[0]["frozen"], [])
         for empty in ("<决策定下以前谁都不做的动作>", ""):
             errors = lint(rev.replace(prefix + "\n- 把已有的运行记录挪到新的目录结构下", empty))
-            self.assertEqual(errors, ["栏目“冻结的动作”是空的：写决策待定期间谁都不做的动作：不可逆事项清单里的类别，用反引号写的命令前缀，或者一句话描述；没有写“无”"], empty)
+            self.assertEqual(errors, ["栏目“冻结的动作”是空的：写决策待定期间谁都不做的动作，一条一行：不可逆事项清单里的类别（可以带一句说明），"
+                                      "或者一句话描述；没有写“无”"], empty)
+        # what is registered is what the line every pool session is shown each turn says: both categories of the line
+        self.task()
+        item = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION, edit=lambda t: t.replace(
+            "- 特权应用：Docker\n", "- 特权应用：Docker；对外发送：scp、ssh 到 CAMPUS-HPC\n")))
+        with open(ledger.gates_path(self.tmp), encoding="utf-8") as f:
+            held = json.load(f)["pending"][item]["frozen"]
+        self.assertEqual([(f["kind"], f.get("category"), f["text"]) for f in held], [
+            ("category", "privileged_app", "特权应用：Docker"), ("category", "send_out", "对外发送：scp、ssh 到 CAMPUS-HPC"),
+            ("text", None, "`docker build`"), ("text", None, "照某个选项改实验平台的计量和内存闸")])
 
     def test_the_irreversible_list(self):
-        """B6: every category says how it is recognized and how it is released; the decision template names
-        every category; what is wrong in the list file is reported by orgspec.py check."""
+        """B6: every category says what it covers and which criteria it meets; the decision template names every
+        category; what is wrong in the list file is reported by orgspec.py check. 1.0.6: the list is what decision
+        packages are written and checked against, no hook reads it, so it holds nothing a hook matched commands
+        with or released them by (match rules, path groups, how a category is recognized, how it is released, the
+        applications of a category)."""
         spec = self.spec
         self.assertEqual(spec.validate_irreversible(), [])
-        rules = spec.irreversible()["release_rules"]
+        self.assertEqual(sorted(k for k in spec.irreversible() if not k.startswith("_")), ["categories", "criteria", "schema_version"])
         for c in spec.irreversible_categories():
-            self.assertTrue(c["how"] and c["recognized_by"] and c["release"] in rules, c["name"])
-            self.assertEqual(bool(c.get("match")), "package" not in c["recognized_by"], c["name"])
+            self.assertTrue(c["covers"] and c["criteria"], c["name"])
+            self.assertFalse(set(c) - {"id", "name", "covers", "criteria", "criteria_note", "sheet_rows"}, c["name"])
         self.assertEqual(spec.irreversible_names(), ["管理员权限", "特权应用", "系统和账号", "权限", "Docker 资源", "对外发送", "受保护路径", "花钱", "付费运行的条件"])
-        self.assertEqual(spec.irreversible_category("受保护路径")["release"], "researcher_session")
+        for said in ("放行”一列", "recognized_by", "release", "apps"):
+            self.assertNotIn(said, spec.irreversible()["_说明"])
         table = spec.irreversible_table()
+        self.assertTrue(table.startswith("| 类别 | 包括 | 判据 |\n"), table)
         self.assertIn("| 特权应用 | 启动会装特权组件的应用，先列 Docker Desktop（open -a Docker） | 2 |", table)
         self.assertIn("| 受保护路径 |", table)
         section = spec.irreversible_section()
-        self.assertIn("- 受保护路径：不走决策放行", section)
-        self.assertIn("- 管理员权限、特权应用、系统和账号、权限、Docker 资源、对外发送：要有一条研究员批准的决策在所选选项里列了它", section)
+        self.assertTrue(section.endswith(table + "\n\n" + spec.IRREVERSIBLE_RULE), section)
+        self.assertIn("清单里的事要先有一条研究员批准、所选选项里列了它的决策再做；决策待定期间，包里“冻结的动作”谁都不做。", section)
+        self.assertIn("hook 不拦这些命令，也不按待定决策冻结", section)
+        for claim in ("不走决策放行", "池会话里没有这样的决策就拒绝", "弹窗确认", "识别方式", "放行条件"):
+            self.assertNotIn(claim, section)
         with open(os.path.join(ROOT, "skills", "packages", "assets", "decision.md"), encoding="utf-8") as f:
             template = f.read()
         self.assertIn("清单里的类别是%s，" % "、".join(spec.irreversible_names()), template.split("## 填写规则", 1)[1])
         self.assertNotIn("决策不会过期", template)
         broken = json.loads(json.dumps(spec.irreversible()))
         broken["categories"][0]["criteria"] = [7]
-        broken["categories"][1]["match"].append({"cmd": ["open"], "app_name": "Parallels"})
+        broken["categories"][1]["covers"] = ""
         broken["categories"][2]["name"] = "系统：账号"
-        broken["categories"][3]["match"][0]["paths"] = ["secrets"]
-        del broken["categories"][7]["release"]
         path = os.path.join(self.tmp, "irreversible.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(broken, f, ensure_ascii=False)
         problems = orgspec.OrgSpec(irreversible_path=path).validate()
-        for part in ("管理员权限：criteria 要写 criteria 里有的判据号", "特权应用：app_name Parallels 不在 apps 名单里",
-                     "name 要是不重复的中文名，不带冒号和分号", "权限：match 用到的路径组 secrets 没有定义", "花钱：release 要是 release_rules 里的一种"):
+        for part in ("管理员权限：criteria 要写 criteria 里有的判据号", "特权应用：缺 covers",
+                     "name 要是不重复的中文名，不带冒号和分号"):
             self.assertTrue(any(part in p for p in problems), (part, problems))
+        self.assertEqual(len(problems), 3, problems)
         self.assertTrue(all(p.startswith("不可逆事项清单：") for p in problems))
 
 

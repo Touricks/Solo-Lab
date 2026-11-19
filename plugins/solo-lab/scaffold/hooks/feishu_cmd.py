@@ -16,6 +16,12 @@ NPX_PACKAGES = (("@larksuite/cli", "lark"), ("@lark-project/meegle", "meegle"))
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "fish"}
 INTERPRETERS = {"python", "python3", "node", "ruby", "perl", "deno", "bun", "php"}
 PASS_WRAPPERS = {"command", "builtin", "exec", "nohup", "noglob", "time"}
+# Their own options, with how many words each takes. command -v and -V only look a name up: they are not skipped.
+PASS_OPTIONS = {"command": {"-p": 1}, "exec": {"-c": 1, "-l": 1, "-cl": 1, "-lc": 1, "-a": 2},
+                "time": {"-p": 1, "-l": 1, "-h": 1, "-a": 1, "-v": 1, "-o": 2, "-f": 2}}
+# Wrappers that run the command as it stands, as the same user. A call behind any other word in front (sudo, doas,
+# sshpass, xargs, uv run, a function being defined) is still read and judged, but guard.py answers no allow for it.
+PLAIN_WRAPPERS = PASS_WRAPPERS | {"env", "timeout", "nice", "stdbuf", "caffeinate"}
 RUNNERS = {"uv", "poetry", "pipenv", "pdm", "hatch", "rye", "pixi", "conda", "mamba", "micromamba"}
 RUNNER_GLOBAL_VALUES = {"--directory", "--project", "--config-file", "--cache-dir", "-C", "-P", "--manifest-path",
                         "--data-dir", "--env", "-e"}
@@ -23,6 +29,7 @@ VALUE_OPTIONS = {
     "sudo": ("-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T"),
     "caffeinate": ("-w", "-t"), "arch": ("-arch",), "ionice": ("-c", "-n", "-p", "-P", "-u"),
     "chrt": (), "taskset": ("-c", "--cpu-list"), "stdbuf": (), "doas": ("-u", "-C"),
+    "sshpass": ("-p", "-f", "-d", "-P"),
     "run": ("-n", "--name", "-p", "--prefix", "--python", "--with", "--project", "--directory", "--env-file",
             "-e", "--environment", "--group", "--extra", "--from", "--cwd"),
 }
@@ -37,6 +44,7 @@ ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _NOT_KEY_BEFORE = r"(?<![\w)\]]\[['\"])(?<!get\(['\"])(?<!default\(['\"])"
 _NOT_KEY_AFTER = r"(?![\w.-])(?!['\"]\s*:)(?!['\"]\s+(?:not\s+)?in\b)"
 MENTION_RE = re.compile(r"(?<![\w.-])%s(?:lark-cli|meegle)%s|@larksuite/cli|@lark-project/meegle" % (_NOT_KEY_BEFORE, _NOT_KEY_AFTER))
+SUB_MARK = re.compile(r"\$__SUB(\d+)")                # stands for the n-th $(...) or `...` of a command
 HEREDOC_OP_RE = re.compile(r"<<(-?)[ \t]*(\\?)(['\"]?)([A-Za-z_][\w.-]*)\3")
 HEREDOC_MARK_RE = re.compile(r"__AOHD(\d+)__")
 _heredoc_ids = itertools.count(1)
@@ -61,6 +69,9 @@ class Parsed:
         self.trusted = []       # plugin scripts that call Feishu themselves and log their writes
         self.error = None
         self.simple = True      # one plain command: safe to rebuild with shlex.join
+        self.plain = True       # nothing runs but lark-cli, meegle and the project's own ledger.py, with cd, pushd
+        #                         and popd between them: no other command, no $(...) or sh -c, no wrapper that changes
+        #                         who runs it, no redirect that writes a file. guard.py answers allow for nothing else.
         self.bodies = {}        # here-document bodies by marker number: (body, quoted)
 
     @property
@@ -319,6 +330,57 @@ def substitutions(text):
     return found
 
 
+def split_substitutions(text, heredoc=False, unclosed=None):
+    """(text with each $(...) and `...` the shell would run replaced by $__SUB<n>, their inner texts).
+    Inside single quotes and after a backslash they are plain text; a here-document body has no quotes.
+    unclosed, when a list is passed, gets the inner text of each one the command never closes."""
+    out, subs, i, n, q = [], [], 0, len(text), None
+    while i < n:
+        c = text[i]
+        if q == "'":
+            out.append(c)
+            q = None if c == "'" else q
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if not heredoc and c == "'" and q is None:
+            q = "'"
+        elif not heredoc and c == '"':
+            q = None if q == '"' else '"'
+        elif text.startswith("$(", i) and not text.startswith("$((", i):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                depth += {"(": 1, ")": -1}.get(text[j], 0)
+                j += 1
+            subs.append(text[i + 2:j - 1] if depth == 0 else text[i + 2:])
+            if depth and unclosed is not None:
+                unclosed.append(subs[-1])
+            out.append("$__SUB%d" % len(subs))
+            i = j
+            continue
+        elif c == "`":
+            j = text.find("`", i + 1)
+            subs.append(text[i + 1:] if j < 0 else text[i + 1:j])
+            if j < 0 and unclosed is not None:
+                unclosed.append(subs[-1])
+            out.append("$__SUB%d" % len(subs))
+            i = n if j < 0 else j + 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out), subs
+
+
+def restore_substitutions(word, subs):
+    """word with each $__SUB<n> written out again, as $(...)."""
+    if "$__SUB" not in word:
+        return word
+    return SUB_MARK.sub(lambda m: "$(%s)" % subs[int(m.group(1)) - 1] if 0 < int(m.group(1)) <= len(subs) else m.group(0), word)
+
+
 def _segments(tokens):
     segs, cur, piped, nxt_piped = [], [], [], False
     for t in tokens:
@@ -349,6 +411,16 @@ def _drop_redirects(seg):
         out.append(t)
         i += 1
     return out, had
+
+
+def writes_file(seg):
+    """Does a redirect in one command's tokens write a file? 2>&1, >&2 and whatever goes to /dev/null do not."""
+    for i, t in enumerate(seg):
+        if t in (">", ">>", "&>", ">|", "<>", ">&"):
+            target = seg[i + 1] if i + 1 < len(seg) else ""
+            if target != "/dev/null" and not (t == ">&" and re.fullmatch(r"\d+|-", target)):
+                return True
+    return False
 
 
 def seg_stdin(seg, bodies, cwd):
@@ -407,16 +479,61 @@ def _scan_file(path, cwd):
     return text is not None and "\0" not in text and mentions_cli(text)
 
 
-def _unwrap(seg):
+def _split_string(seg, i):
+    """seg with the string of env's -S at seg[i] (-S STRING, -SSTRING, --split-string=STRING, and S in a cluster of
+    short options: -vS STRING, -0S STRING, -iSSTRING) split into words in its place, as env does before it runs
+    them; None when seg[i] is another word."""
+    t = seg[i]
+    if t == "--split-string":
+        text, used = (seg[i + 1] if i + 1 < len(seg) else ""), 2
+    elif t.startswith("--split-string="):
+        text, used = t.split("=", 1)[1], 1
+    elif t.startswith("-") and not t.startswith("--"):
+        for j, ch in enumerate(t[1:], 1):
+            if ch in "uCP":                              # the rest of the word, or the next one, is this option's value
+                return None
+            if ch == "S":
+                text, used = (t[j + 1:], 1) if t[j + 1:] else ((seg[i + 1] if i + 1 < len(seg) else ""), 2)
+                break
+        else:
+            return None
+    else:
+        return None
+    try:
+        words = shlex.split(text)
+    except ValueError:
+        words = text.split()
+    return seg[:i] + words + seg[i + used:]
+
+
+def _unwrap(seg, names=None):
+    """(the command a segment runs, the words in front of it): assignments, shell keywords, a function's
+    `function NAME`, and wrappers with their own options (command -p, env -S 'nohup cmd', timeout 5, sudo -u x,
+    uv run ...) are the words in front. names, when a list is passed, gets the name of each wrapper skipped
+    (function for a function's head; not the assignments and keywords, nor a wrapper's own options and values)."""
     i = 0
     while i < len(seg):
         t = seg[i]
         base = os.path.basename(t)
-        if ASSIGN_RE.match(t) or base in PASS_WRAPPERS or t in SHELL_KEYWORDS:
+        if ASSIGN_RE.match(t) or t in SHELL_KEYWORDS:
             i += 1
+            continue
+        if base in PASS_WRAPPERS:
+            own = PASS_OPTIONS.get(base, {})
+            i += 1
+            while i < len(seg) and seg[i] in own:
+                i += own[seg[i]]
+            if i < len(seg) and seg[i] == "--":
+                i += 1
+        elif t == "function" and i + 1 < len(seg):       # function NAME { cmd; }: the body starts after the name
+            i += 2
         elif base == "env":
             i += 1
             while i < len(seg) and (seg[i].startswith("-") or ASSIGN_RE.match(seg[i])):
+                split = _split_string(seg, i)
+                if split is not None:                    # the words of the string are read as env's own from here
+                    seg = split
+                    continue
                 i += 2 if seg[i] in ("-u", "--unset", "-C", "--chdir") else 1
         elif base == "timeout":
             i += 1
@@ -429,7 +546,7 @@ def _unwrap(seg):
                 i += 2
             elif i < len(seg) and re.match(r"^-\d+$", seg[i]):
                 i += 1
-        elif base in ("stdbuf", "sudo", "doas", "caffeinate", "arch", "ionice", "chrt", "taskset"):
+        elif base in ("stdbuf", "sudo", "doas", "caffeinate", "arch", "ionice", "chrt", "taskset", "sshpass"):
             takes = VALUE_OPTIONS.get(base, ())
             i += 1
             while i < len(seg) and seg[i].startswith("-"):
@@ -458,6 +575,8 @@ def _unwrap(seg):
                 i += 2 if takes else 1
         else:
             break
+        if names is not None:
+            names.append(base)
     return seg[i:], seg[:i]
 
 
@@ -610,15 +729,55 @@ def _full(path, cwd):
     return os.path.normpath(path if os.path.isabs(path) else os.path.join(cwd or ".", path))
 
 
-def _cd(cur, argv):
-    target = argv[1] if len(argv) > 1 else os.path.expanduser("~")
+CD_COMMANDS = ("cd", "pushd", "popd")
+CD_OPTIONS = ("-L", "-P", "-e", "-@")
+
+
+def _cd(cur, target):
+    """Where cd TARGET leads from cur ("" is the home directory); cur itself when the text does not show it."""
     if target == "-" or cur is None:
         return cur
-    return os.path.normpath(os.path.join(cur, os.path.expanduser(target)))
+    return os.path.normpath(os.path.join(cur, os.path.expanduser(target or "~")))
+
+
+def change_dir(argv, cur, dirs, follow=_cd):
+    """Where cd, pushd or popd (argv) leads from cur. cd's own options and -- are skipped (cd -P DIR, cd -- DIR).
+    pushd DIR goes to DIR and puts cur on the stack dirs, pushd alone swaps cur with the top of the stack, popd
+    goes back to it. follow(cur, operand) is how the caller follows one operand; it gets "-" for a move the text
+    does not show (cd -, pushd +1, a popd with an argument or with nothing on the stack)."""
+    name, args = os.path.basename(argv[0]).lstrip("\\"), list(argv[1:])
+    while args and args[0] in CD_OPTIONS:
+        args.pop(0)
+    if args[:1] == ["--"]:
+        args.pop(0)
+    target = args[0] if args else ""
+    if name == "cd":
+        return follow(cur, target)
+    if name == "popd":
+        return dirs.pop() if dirs and not target else follow(cur, "-")
+    if not target:
+        if not dirs:
+            return follow(cur, "-")
+        top, dirs[-1] = dirs[-1], cur
+        return top
+    if re.fullmatch(r"[+-]\d+", target):
+        return follow(cur, "-")
+    dirs.append(cur)
+    return follow(cur, target)
+
+
+def _is_ledger(path, cwd):
+    """The project's own ledger.py, the copy that still matches the manifest."""
+    return os.path.basename(path) == "ledger.py" and _full(path, cwd) in TRUSTED
 
 
 def parse(command, cwd=None, _depth=0, _result=None):
+    """The lark-cli and meegle calls a shell command runs, as far as its text shows: at the top level, in
+    $(...) and backticks (taken out of the text before it is split into words, so one written without quotes is
+    read whole), in sh -c, eval, find -exec and npm exec. What cannot be seen into is listed in opaque."""
     res = _result or Parsed()
+    if _depth:
+        res.plain = False                             # run from inside something else: not the plain command itself
     if _depth > MAX_DEPTH:
         res.opaque.append("嵌套太深")
         return res
@@ -632,17 +791,34 @@ def parse(command, cwd=None, _depth=0, _result=None):
             if not quoted:
                 for inner in substitutions(body):
                     parse(inner, cwd, _depth + 1, res)
+    unclosed = []
+    text, subs = split_substitutions(strip_comments(text).replace("\\\n", " "), unclosed=unclosed)   # a trailing \ continues the line
+    if subs:
+        res.simple = False
+    if unclosed:
+        res.opaque.append("反引号或 $( 没有闭合")
     try:
-        tokens = tokenize(strip_comments(text).replace("\\\n", " "))     # a trailing \ continues the line
+        tokens = tokenize(text)
     except ValueError as e:
         res.error = "命令解析失败：%s" % e
+        res.plain = False
         return res
     segs, piped = _segments(tokens)
     if len(segs) > 1 or any(t in SEPARATORS or t in REDIRECTS for t in tokens):
         res.simple = False
-    cur = cwd
+    cur, dirs = cwd, []                               # dirs: the directories pushd keeps for popd
     feed = None                                       # what the previous command writes to the pipe
+    done = set()                                      # the $(...) already read, each where the shell runs it
     for seg, is_piped in zip(segs, piped):
+        for tok in seg:
+            for m in SUB_MARK.finditer(tok):
+                k = int(m.group(1)) - 1
+                if 0 <= k < len(subs) and k not in done:
+                    done.add(k)
+                    parse(subs[k], cur, _depth + 1, res)
+        seg = [restore_substitutions(t, subs) for t in seg]
+        if writes_file(seg):
+            res.plain = False
         docs, strings, infile = seg_stdin(seg, res.bodies, cur)
         stdin_text = (docs + strings)[0] if docs or strings else (
             read_script(infile, cur) if infile else (feed if is_piped else None))
@@ -650,22 +826,22 @@ def parse(command, cwd=None, _depth=0, _result=None):
         seg, had_redirect = _drop_redirects(seg)
         if had_redirect:
             res.simple = False
-        for tok in seg:
-            if "$(" in tok or "`" in tok:
-                res.simple = False
-                for inner in substitutions(tok):
-                    parse(inner, cur, _depth + 1, res)
-        argv, wrappers = _unwrap(seg)
+        names = []
+        argv, wrappers = _unwrap(seg, names)
         feed = pipe_output(argv, stdin_text, cur)
+        if not set(names) <= PLAIN_WRAPPERS:
+            res.plain = False
         if not argv:
             continue
         head = argv[0]
         base = os.path.basename(head)
-        if base == "cd":
-            cur = _cd(cur, argv)
+        if base in CD_COMMANDS:
+            cur = change_dir(argv, cur, dirs)
             continue
+        plain, res.plain = res.plain, False           # kept only by a call read here and by the project's ledger.py
         if base in CLI_BASENAMES:
             res.invocations.append(Invocation(CLI_BASENAMES[base], argv[1:], cur, wrappers + [head], stdin_text))
+            res.plain = plain
             continue
         if base in ("npx", "bunx", "pnpx"):
             j = 1
@@ -675,6 +851,7 @@ def parse(command, cwd=None, _depth=0, _result=None):
                 for pkg, cli in NPX_PACKAGES:
                     if argv[j].startswith(pkg):
                         res.invocations.append(Invocation(cli, argv[j + 1:], cur, wrappers + argv[:j + 1], stdin_text))
+                        res.plain = plain
                         break
             continue
         if base == "npm" and len(argv) > 1 and argv[1] in ("exec", "x"):
@@ -714,6 +891,7 @@ def parse(command, cwd=None, _depth=0, _result=None):
             hit = [cli for pkg, cli in NPX_PACKAGES if pkg in argv[1]]
             if hit:
                 res.invocations.append(Invocation(hit[0], argv[2:], cur, wrappers + argv[:2], stdin_text))
+                res.plain = plain
                 continue
         if base in INTERPRETERS or PYTHON_RE.match(base):
             if PYTHON_RE.match(base):
@@ -735,15 +913,22 @@ def parse(command, cwd=None, _depth=0, _result=None):
                 continue
             if files and _full(files[0], cur) in TRUSTED:
                 res.trusted.append(files[0])
+                if _is_ledger(files[0], cur):
+                    res.plain = plain
                 continue
             if files and _scan_file(files[0], cur):
                 res.opaque.append("脚本 %s 里调用了飞书命令行" % files[0])
             continue
         if _full(head, cur) in TRUSTED:
             res.trusted.append(head)
+            if _is_ledger(head, cur):
+                res.plain = plain
             continue
         if ("/" in head or os.path.isfile(os.path.join(cur or ".", head))) and _scan_file(head, cur):
             res.opaque.append("脚本 %s 里调用了飞书命令行" % head)
+    for k, inner in enumerate(subs):                  # one in a redirect's target, say
+        if k not in done:
+            parse(inner, cur, _depth + 1, res)
     return res
 
 
@@ -850,10 +1035,10 @@ def classify_meegle(args):
         tier = "read"
     elif verb in MEEGLE_WRITE.get(dom, ()):
         tier = "write"
-    elif not pos:
-        tier = "read"
-    else:
-        tier = "unknown"
+    elif not pos and ("--version" in flags or "-v" in flags):
+        key, tier = "--version", "read"
+    else:                                             # no subcommand counts as unknown too: a call whose words the
+        tier = "unknown"                              # parser lost is not taken for a read
     return {
         "cli": "meegle", "key": key, "tier": tier, "pos": pos, "flags": flags,
         "help": "-h" in flags or "--help" in flags or dom == "help",

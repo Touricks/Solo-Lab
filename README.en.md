@@ -206,7 +206,7 @@ A few tips:
 **Deciding whether a task succeeded**
 
 - Problem: the conventional approach is to have one agent review another agent's conclusion, but the reviewing agent has no new evidence in hand and can only judge from the text.
-- Our approach: the eval set and the thresholds are fixed before any result exists, and are frozen after the user signs off once the task reaches step 4. The official score is produced only by the quality sequence on the frozen eval set. What the executing side runs for itself is a development score, used only for debugging. Every run is recorded in the task ledger.
+- Our approach: the eval set and the thresholds are fixed before any result exists, and are frozen after the user signs off once the task reaches step 4. The official score is produced only by the quality sequence on the frozen eval set. What the side running the experiments scores for itself is a development score, used only for debugging. Every run is recorded in the task ledger.
 
 **The user only makes decisions**
 
@@ -220,4 +220,4 @@ A few tips:
 
 ## Version
 
-v1.0.5
+v1.0.6

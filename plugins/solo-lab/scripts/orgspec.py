@@ -10,10 +10,10 @@ live only in orgspec/terms.zh.json. Prose in rules.json may contain tokens such 
 {pkg:request} or {seq:alg}; render() replaces them with the current names.
 orgspec/contract.json holds what the plugin and a Feishu Project template agree on: the
 slots scripts handle by meaning (class Contract).
-orgspec/irreversible.json is the list of irreversible actions: each category, the criteria it
-meets, how it is recognized (a command, a path or the type of a package) and how it is
-released. Decision packages name its categories; decision_parts() reads what a decision
-package says about them, for the package check and for ledger.py.
+orgspec/irreversible.json is the list of irreversible actions: each category, what it covers
+and the criteria it meets. Decision packages name its categories; decision_parts() reads what
+a decision package says about them, for the package check and for ledger.py. No hook reads it,
+and nothing in it says how a command would be recognized (1.0.6).
 Python 3.9 standard library only.
 """
 import datetime
@@ -263,7 +263,7 @@ class OrgSpec:
 
     # --------------------------------------------------------- irreversible
     def irreversible(self):
-        """orgspec/irreversible.json: criteria, release rules and the categories of irreversible actions."""
+        """orgspec/irreversible.json: the criteria and the categories of irreversible actions."""
         if self._irreversible is None:
             self._irreversible = _load(self.irreversible_path)
         return self._irreversible
@@ -284,37 +284,27 @@ class OrgSpec:
         crit = self.irreversible().get("criteria") or {}
         return "，".join("%s %s" % (k, v.split("：")[0]) for k, v in sorted(crit.items()))
 
-    # A runtime whose hooks do not check the list (the Codex adaptation) says so instead of the release rules.
-    UNENFORCED = ("这个项目的 hook 不按这份清单拦命令，也不按待定决策冻结：清单用来判断决策包的可逆性和每个选项要放行的类别。"
-                  "要做清单里的事，照样要一条研究员批准、所选选项里列了它的决策；待定决策“冻结的动作”谁都不做；受保护路径不走决策放行。"
-                  "这些只靠各会话照规则办和包检查，写着“hook 拦下”“池会话拒绝”的地方在这里都不拦。")
+    # No hook checks the list (1.0.6): the rule stands on its own, in a Claude project and in a Codex one alike.
+    IRREVERSIBLE_RULE = ("清单里的事要先有一条研究员批准、所选选项里列了它的决策再做；决策待定期间，包里“冻结的动作”谁都不做。"
+                         "hook 不拦这些命令，也不按待定决策冻结，命令的权限照会话自己的权限检查。上面两条规矩不变，靠各会话照规则办和包检查："
+                         "选项里列了清单里类别的决策包必须写不可逆，到期只能等研究员。")
 
-    def irreversible_table(self, enforced=True):
-        """The list as a table: 类别、包括、判据、识别方式、放行条件. Without hooks that check it (enforced False),
-        the release column leaves out what a hook does."""
-        rules = self.irreversible().get("release_rules") or {}
+    def irreversible_table(self):
+        """The list as a table: 类别、包括、判据."""
         rows = []
         for c in self.irreversible_categories():
             crit = "、".join(str(n) for n in c["criteria"]) + ("（%s）" % c["criteria_note"] if c.get("criteria_note") else "")
-            short = rules[c["release"]]["short"] if enforced else re.split(r"[：；]", rules[c["release"]]["short"], 1)[0]
-            rows.append([c["name"], c["covers"], crit, c["how"], short])
-        return md_table(["类别", "包括", "判据", "识别方式", "放行条件"], rows)
+            rows.append([c["name"], c["covers"], crit])
+        return md_table(["类别", "包括", "判据"], rows)
 
-    def irreversible_section(self, enforced=True):
-        """The body of org/org.md's section on irreversible actions: the criteria, the list and how
-        each kind is released (enforced False: that the project's hooks check none of it)."""
+    def irreversible_section(self):
+        """The body of org/org.md's section on irreversible actions: the criteria, the list and the rule
+        that goes with it."""
         irr = self.irreversible()
-        lines = ["满足下面任一条判据的事算不可逆，到期只能等研究员；都不满足的算可逆，到期按决策包写的到期默认动作办。", ""]
+        lines = ["一件事可逆不可逆，由决策包的作者按下面的判据判断：满足任一条的算不可逆，到期只能等研究员；都不满足的算可逆，"
+                 "到期按决策包写的到期默认动作办。判据下面的清单是必须写不可逆的下限，清单以外的事由作者按判据判断。", ""]
         lines += ["%s. %s。" % (k, v) for k, v in sorted((irr.get("criteria") or {}).items())]
-        lines += ["", "清单里每一类都落到能机械检查的对象上：命令、路径或包的类型；落不到的不进清单。", "",
-                  self.irreversible_table(enforced), ""]
-        if not enforced:
-            return "\n".join(lines + [self.UNENFORCED])
-        groups = {}
-        for c in self.irreversible_categories():
-            groups.setdefault(c["release"], []).append(c["name"])
-        rules = irr.get("release_rules") or {}
-        lines += ["- %s：%s" % ("、".join(names), rules[r]["text"]) for r, names in groups.items()]
+        lines += ["", self.irreversible_table(), "", self.IRREVERSIBLE_RULE]
         return "\n".join(lines)
 
     def validate_irreversible(self):
@@ -327,16 +317,10 @@ class OrgSpec:
         crit = irr.get("criteria") or {}
         if sorted(crit) != [str(n) for n in range(1, len(crit) + 1)] or not crit:
             problems.append("criteria 要是从 1 起连续编号的判据")
-        rules = irr.get("release_rules") or {}
-        for key, rule in rules.items():
-            if not isinstance(rule, dict) or not rule.get("short") or not rule.get("text"):
-                problems.append("release_rules.%s 要有 short 和 text" % key)
-        computed = set(irr.get("computed_paths") or {})
         cats = irr.get("categories")
         if not isinstance(cats, list) or not cats:
             return ["不可逆事项清单：没有类别"]
         ids, names = set(), set()
-        rule_keys = {"cmd", "args_any", "sub_prefix", "app", "app_name", "remote", "except", "paths", "writes"}
         for c in cats:
             cid, name = c.get("id"), c.get("name")
             where = name or cid or "?"
@@ -346,40 +330,10 @@ class OrgSpec:
                 problems.append("%s：name 要是不重复的中文名，不带冒号和分号（包里用它们隔开类别和限定）" % where)
             ids.add(cid)
             names.add(name)
-            for key in ("covers", "how"):
-                if not isinstance(c.get(key), str) or not c[key].strip():
-                    problems.append("%s：缺 %s" % (where, key))
+            if not isinstance(c.get("covers"), str) or not c["covers"].strip():
+                problems.append("%s：缺 covers" % where)
             if not c.get("criteria") or any(str(n) not in crit for n in c.get("criteria") or []):
                 problems.append("%s：criteria 要写 criteria 里有的判据号" % where)
-            how = c.get("recognized_by") or []
-            if not how or any(h not in ("command", "path", "package") for h in how):
-                problems.append("%s：recognized_by 只能是 command、path、package" % where)
-            if c.get("release") not in rules:
-                problems.append("%s：release 要是 release_rules 里的一种" % where)
-            machine = "command" in how or "path" in how
-            if machine != bool(c.get("match")):
-                problems.append("%s：用命令或路径识别的类别要写 match，用包的类型识别的不写" % where)
-            groups = set(c.get("paths") or {}) | computed
-            for group, globs in (c.get("paths") or {}).items():
-                if not isinstance(globs, list) or not globs or not all(isinstance(g, str) and g.strip() for g in globs):
-                    problems.append("%s：paths.%s 要是路径模式的列表" % (where, group))
-            apps = [n.lower() for a in c.get("apps") or [] for n in [a.get("name", "")] + list(a.get("names") or [])]
-            for rule in c.get("match") or []:
-                if not isinstance(rule, dict) or set(rule) - rule_keys:
-                    problems.append("%s：match 里有不认识的写法：%s" % (where, rule))
-                    continue
-                cmd = rule.get("cmd")
-                if not (isinstance(cmd, list) and cmd and all(isinstance(w, str) and w for w in cmd)) and not rule.get("writes"):
-                    problems.append("%s：match 的每一条要有 cmd（命令开头的词）或 writes" % where)
-                for group in list(rule.get("paths") or []) + ([rule["writes"]] if rule.get("writes") else []):
-                    if group not in groups:
-                        problems.append("%s：match 用到的路径组 %s 没有定义" % (where, group))
-                if (rule.get("app") or rule.get("app_name")) and not apps:
-                    problems.append("%s：match 要认应用，这一类要有 apps 名单" % where)
-                if rule.get("app_name") and rule["app_name"].lower() not in apps:
-                    problems.append("%s：app_name %s 不在 apps 名单里" % (where, rule["app_name"]))
-                if rule.get("except") not in (None, "researcher"):
-                    problems.append("%s：except 只能是 researcher" % where)
         return ["不可逆事项清单：" + p for p in problems]
 
     # ----------------------------------------------------------- validation
@@ -615,11 +569,18 @@ HEADER_KEYS = ["包类型", VERSION, "发出方", "接收方", "关联工作项"
 # 挂 API、开 Docker ..., 无 when nothing). The two agree: 研究员 has something to do, a session has 无.
 # Required on decision packages only. The registration receipt keeps both; `ledger.py query queue` lists
 # a decided decision until it is archived while the researcher carries it out.
+# The session is one that answers for the matter (the researcher, 2026-11-16): a sequence's +2, the entry or
+# the router (EXECUTOR_RANKS); a +1, a +0 and the scribe are sent back, and what a lower rank is to do the +2
+# delegates with a request package. When one option needs the researcher's own hands the header says 研究员;
+# should the researcher pick an option that does not, `ledger.py confirm --executor` hands the decision to a
+# session, under the same check.
 EXECUTOR = "执行方"
 RESEARCHER = "研究员"
 RESEARCHER_ACTION = "研究员要做的事"
 NOTHING = "无"
-WHO_EXECUTES = "写“研究员”，或者执行这条决策的那个会话的名字（多半是发出方的会话名），只写名字、不加说明，比如 Alg-p2-01"
+EXECUTOR_RANKS = "研究员、各序列的 +2、入口和路由"
+WHO_EXECUTES = ("写“研究员”，或者执行这条决策的那个会话的名字：各序列的 +2、入口或路由（多半是发出方的会话名），"
+                "只写名字、不加说明，比如 Alg-p2-01")
 WHAT_RESEARCHER_DOES = "写这条决策定下以后要研究员亲手做的事，没有写“%s”" % NOTHING
 # How 研究员要做的事 is filled when the researcher carries the decision out: never 无 alone, which the
 # check would send back as disagreeing with 执行方.
@@ -640,13 +601,20 @@ ADDED_ON_UPLOAD = {"状态包", "交接记录"}
 # 可逆性: 可逆, or 不可逆 with the criteria it meets (不可逆（判据 2）). 到期默认动作: the option a reversible
 # decision takes once it has waited the expiry time; 等研究员 for an irreversible one and for one the
 # researcher carries out (or has something to do by hand); 无 for one the researcher decided in a talk,
-# which never waits. An option that releases a category of the list, and a decision that signs, is
-# irreversible. A decision's 回复期限 is the sender's wish only: nothing happens when it passes (a request's is
-# its deadline, written into 截止时间).
+# which never waits. A decision one of whose options lists a category of the list of irreversible actions,
+# and a decision that signs, is irreversible; beyond the list its author judges by the criteria. A decision's
+# 回复期限 is the sender's wish only: nothing happens when it passes (a request's is its deadline, written
+# into 截止时间).
+# The options table's last column, 不可逆的动作, says what of the list an option does: its categories, each
+# with a note if wanted (特权应用：启动 Docker Desktop), 无 when none. 冻结的动作 lists what nobody does while
+# the decision waits, a line each, a category or a sentence. Neither is matched against commands by any
+# hook (1.0.6: the column was 要放行的不可逆动作 until then, and what it listed was released to a hook), so a
+# note is free text; the rules, the line every pool session is shown each turn and this check keep them.
 REVERSIBILITY = "可逆性"
 DEFAULT_ACTION = "到期默认动作"
 WAIT = "等研究员"
-RELEASE_COLUMN = "要放行的不可逆动作"
+IRREVERSIBLE_COLUMN = "不可逆的动作"
+FORMER_COLUMN = "要放行的不可逆动作"          # the column's name in 1.0.4 and 1.0.5
 OPTIONS = "选项"
 FROZEN = "冻结的动作"
 SIGNED = "待签版本"
@@ -655,15 +623,13 @@ NEW_SECTIONS = {
     "没有列入的选项": "写已知但没列进选项表的做法，每个写不列的原因",
     "约束的出处": "写限定选项的约束出自哪份文件、谁定的、研究员确认过没有",
     "已发生的偏向性工作": "写已经做了、偏向某个选项的工作和投入",
-    FROZEN: "写决策待定期间谁都不做的动作：不可逆事项清单里的类别，用反引号写的命令前缀，或者一句话描述",
+    FROZEN: "写决策待定期间谁都不做的动作，一条一行：不可逆事项清单里的类别（可以带一句说明），或者一句话描述",
 }
 VERSION_VALUE = re.compile(r"第\s*(\d+)\s*版\s*[（(]\s*(\d{4})-(\d{1,2})-(\d{1,2})\s*[）)]")
 DATE_TEXT = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})")
 CRITERIA_TEXT = re.compile(r"判据\s*([0-9](?:\s*[、,，/和及与]\s*[0-9])*)")
 SAYS_WAIT = re.compile(r"等研究员(?:$|[\s（(，,。.；;：:、])")
 SAYS_REVERSIBLE = re.compile(r"可逆(?:$|[\s（(，,。.；;：:])")
-BACKTICKED = re.compile(r"`([^`\n]+)`")
-GLOB_CHARS = re.compile(r"[*?\[]")
 VERSION_HOW = "写“第 1 版（YYYY-MM-DD）”；已经登记的包要改，写上一版加 1，请书记员用 revise 换主文档"
 VERSION_HOW_DELIVERY = "写“第 1 版（YYYY-MM-DD）”；交付包改了就用 reply 重新交，版本号加 1"
 DEFAULT_HOW = ("可逆的写到期按哪个选项办（选项表第一列的名字）；不可逆的、执行方是研究员或者研究员要亲手做事的写“%s”；"
@@ -737,79 +703,54 @@ def first_table(text):
     return rows[0], [r for r in rows[1:] if not all(re.fullmatch(r":?-{2,}:?", c) for c in r)]
 
 
-def qualifier_apps(cat, text):
-    """The applications of a category's apps list (by their name) that a qualifier names anywhere in it: Docker,
-    Docker Desktop 的沙箱, com.docker.docker and 启动 Docker all name Docker. guard.qualifier_apps reads the same."""
-    low, found = str(text or "").lower(), []
-    for entry in cat.get("apps") or []:
-        for n in [entry.get("name", "")] + list(entry.get("names") or []):
-            n = str(n).lower()
-            if n and re.search(r"(?<![A-Za-z0-9.])%s(?![A-Za-z0-9])" % re.escape(n), low):
-                found.append(entry.get("name"))
-                break
-    return found
-
-
-def app_names(cat):
-    return "、".join(str(a.get("name")) for a in cat.get("apps") or [])
-
-
 def read_category(spec, text):
-    """({category, name, qualifier, text}, None) for 特权应用：Docker or Docker 资源, a category of the list
-    with an optional qualifier (a remark in brackets after it is no part of it); (None, why) otherwise. A
-    category with an apps list keeps as its qualifier the names of the applications it names (特权应用：Docker
-    Desktop 的沙箱 is Docker), so that releases and frozen items of one application compare equal; one that names
-    none of them keeps what it says and is marked unknown_app."""
-    m = re.match(r"\s*([^：:]+?)\s*(?:[：:]\s*(.*))?$", text or "", re.S)
-    cat = spec.irreversible_category(m.group(1)) if m else None
-    if not cat:
-        return None, "不在不可逆事项清单里：清单里的类别是%s；几类之间用“；”隔开" % "、".join(spec.irreversible_names())
-    qualifier = re.split(r"[（(，,。；;]", (m.group(2) or "").strip(), 1)[0].strip()
-    item = {"category": cat["id"], "name": cat["name"], "qualifier": qualifier, "text": text.strip()}
-    if cat.get("apps") and qualifier:
-        found = qualifier_apps(cat, qualifier)
-        if found:
-            item["qualifier"] = "、".join(found)
-        else:
-            item["unknown_app"] = True
-    return item, None
+    """({category, name, qualifier, text}, None) when text opens with a category of the list: the category alone
+    (Docker 资源), with a note after a colon (特权应用：启动 Docker Desktop) or in brackets (花钱（约 8 美元））;
+    (None, why) otherwise. The qualifier is the note as written, all of it: nothing matches it against commands,
+    so it is cut nowhere and may be any text."""
+    text = (text or "").strip()
+    for name in sorted(spec.irreversible_names(), key=len, reverse=True):
+        rest = text[len(name):].lstrip() if text.startswith(name) else None
+        if rest is None or rest and rest[0] not in "：:（(":
+            continue
+        cat = spec.irreversible_category(name)
+        return {"category": cat["id"], "name": name, "qualifier": rest.lstrip("：:").strip(), "text": text}, None
+    return None, "不在不可逆事项清单里：清单里的类别是%s；先写类别，说明写在“：”后面，几类之间用“；”隔开" % "、".join(spec.irreversible_names())
 
 
-def read_releases(spec, cell, option):
-    """(releases, errors) of one cell of the options table's 要放行的不可逆动作 column: categories of the
-    list separated by ；, 无 when the option releases nothing."""
+def read_actions(spec, cell, option):
+    """(actions, errors) of one cell of the options table's 不可逆的动作 column: the categories of the list the
+    option does, separated by ；, each with a note if wanted; 无 when it does none. Every part has to open with
+    a category: a part that does not is sent back, so that no category goes unread."""
     if empty_text(cell):
-        return [], ["选项“%s”的“%s”是空的：写不可逆事项清单里的类别，可以加限定，比如“特权应用：Docker”；没有写“无”" % (option, RELEASE_COLUMN)]
+        return [], ["选项“%s”的“%s”是空的：写这个选项要做的、不可逆事项清单里的事，先写类别，可以带一句说明，"
+                    "比如“特权应用：启动 Docker Desktop”；没有写“%s”" % (option, IRREVERSIBLE_COLUMN, NOTHING)]
     if SAYS_NOTHING.match(cell):
         return [], []
-    releases, errors = [], []
+    actions, errors = [], []
     for part in [p.strip() for p in re.split(r"[；;]", cell) if p.strip()]:
         item, why = read_category(spec, part)
-        cat = spec.irreversible_category(item["name"]) if item else None
-        if not item:
-            errors.append("选项“%s”要放行的“%s”%s" % (option, part, why))
-        elif cat["release"] == "researcher_session":
-            errors.append("选项“%s”要放行的“%s”：%s不走决策放行，照原来的规则由研究员在自己的会话里确认；这一格去掉它" % (
-                option, part, item["name"]))
-        elif item.pop("unknown_app", False):
-            errors.append("选项“%s”要放行的“%s”认不出应用：%s的限定写应用名单里的应用（%s），hook 按应用名放行；不写限定就是放行整类" % (
-                option, part, item["name"], app_names(cat)))
+        if item:
+            actions.append(item)
         else:
-            releases.append(item)
-    return releases, errors
+            errors.append("选项“%s”的%s“%s”%s" % (option, IRREVERSIBLE_COLUMN, part, why))
+    return actions, errors
 
 
 def read_options(spec, section):
-    """(options, errors) of a decision package's 选项 section: options is [{name, approach, releases}] from its
-    table, or None when the section has no table (研究员主动发起 may write 无)."""
+    """(options, errors) of a decision package's 选项 section: options is [{name, approach, irreversible}] from
+    its table, or None when the section has no table (研究员主动发起 may write 无)."""
     table = first_table(section)
     if table is None:
         return None, []
     head, rows = table
-    if RELEASE_COLUMN not in head:
-        return [], ["选项表少了“%s”一列：写选了这个选项以后要做的、不可逆事项清单里的类别，可以加限定，比如“特权应用：Docker”；没有写“无”"
-                    % RELEASE_COLUMN]
-    col, how = head.index(RELEASE_COLUMN), head.index("做法") if "做法" in head else None
+    if IRREVERSIBLE_COLUMN not in head:
+        if FORMER_COLUMN in head:
+            return [], ["选项表的“%s”一列改名“%s”了（1.0.6）：把表头改过来；格子里照旧写这个选项要做的、不可逆事项清单里的类别，"
+                        "可以带一句说明，没有写“%s”" % (FORMER_COLUMN, IRREVERSIBLE_COLUMN, NOTHING)]
+        return [], ["选项表少了“%s”一列：写这个选项要做的、不可逆事项清单里的事，先写类别，可以带一句说明，"
+                    "比如“特权应用：启动 Docker Desktop”；没有写“%s”" % (IRREVERSIBLE_COLUMN, NOTHING)]
+    col, how = head.index(IRREVERSIBLE_COLUMN), head.index("做法") if "做法" in head else None
     options, errors = [], []
     for r in rows:
         name = r[0] if r else ""
@@ -819,56 +760,44 @@ def read_options(spec, section):
         if any(o["name"] == name for o in options):
             errors.append("选项表里“%s”出现了两次：一个选项写一行，名字不重复" % name)
             continue
-        releases, more = read_releases(spec, r[col] if col < len(r) else "", name)
+        actions, more = read_actions(spec, r[col] if col < len(r) else "", name)
         errors += more
-        options.append({"name": name, "approach": r[how] if how is not None and how < len(r) else "", "releases": releases})
+        options.append({"name": name, "approach": r[how] if how is not None and how < len(r) else "", "irreversible": actions})
     return options, errors
 
 
+def option_actions(option):
+    """What of the list an option does, as its registration kept it: irreversible; releases in a receipt or a
+    local decision state written by 1.0.4 or 1.0.5."""
+    return option.get("irreversible") or option.get("releases") or []
+
+
 def read_frozen(spec, section):
-    """(items, errors, warnings) of a decision package's 冻结的动作, one item a line: a category of the list
-    ({kind: category, ...}), a command prefix in backticks ({kind: command, prefix, words}) or a sentence
-    ({kind: text}). words are the prefix's words before any wildcard, at least two of them: a command is
-    frozen when it starts with them. A sentence is only a reminder: no command can be recognized from it; so is
-    a category recognized by the package type alone (花钱), with a warning. A qualifier of 特权应用 that names no
-    application of the list freezes the whole category, with a warning."""
-    items, errors, warnings = [], [], []
+    """The items of a decision package's 冻结的动作, a line each: a line that opens with a category of the list
+    is that category ({kind: category, category, name, qualifier, text}), and one that names several, separated
+    by ；, is an item for each of them; a remark after a category stays with it. Any other line is a sentence
+    ({kind: text, text}). Either way the whole line reaches the line every pool session is shown each turn;
+    nothing here is matched against commands, so nothing is sent back."""
     lines = [re.sub(r"^\s*(?:[-*+]|\d+[.、)）])\s*", "", line).strip() for line in (section or "").splitlines()]
     lines = [t for t in lines if t]
     if empty_text(section) or len(lines) == 1 and SAYS_NOTHING.match(lines[0]):
-        return items, errors, warnings
+        return []
+    items = []
     for text in lines:
-        found = False
-        item, _ = read_category(spec, text)
-        if item:
-            cat = spec.irreversible_category(item["name"])
-            if item.pop("unknown_app", False):
-                warnings.append("冻结的动作“%s”认不出应用（%s的应用名单：%s），hook 按整类冻结“%s”" % (
-                    text, item["name"], app_names(cat), item["name"]))
-            if not set(cat.get("recognized_by") or []) & {"command", "path"}:
-                warnings.append("冻结的动作“%s”：“%s”认不出命令，hook 不拦，只靠每轮提示约束" % (text, item["name"]))
-            items.append(dict(item, kind="category"))
-            found = True
-        for prefix in BACKTICKED.findall(text):
-            words = prefix.split()
-            literal = []
-            for w in words:
-                if GLOB_CHARS.search(w):
-                    break
-                literal.append(w)
-            found = True
-            if len(literal) < 2:
-                errors.append("冻结的动作里的命令前缀“%s”%s：至少写两个词，不能只是通配符，比如 `docker build`；要冻结一整类动作，写不可逆事项清单里的类别" % (
-                    prefix, "去掉通配符只剩 %d 个词" % len(literal) if len(literal) < len(words) else "只有 %d 个词" % len(words)))
-                continue
-            items.append({"kind": "command", "prefix": prefix.strip(), "words": literal, "text": text})
-        if not found:
-            items.append({"kind": "text", "text": text})
-            warnings.append("冻结的动作“%s”认不出命令，只靠每轮提示约束；要 hook 拦下，写不可逆事项清单里能用命令或路径认出的类别"
-                            "（%s），或者用反引号写命令前缀" % (text, "、".join(
-                                c["name"] for c in spec.irreversible_categories()
-                                if set(c.get("recognized_by") or []) & {"command", "path"} and c.get("release") != "researcher_session")))
-    return items, errors, warnings
+        found = []
+        for part in [p.strip() for p in re.split(r"[；;]", text) if p.strip()]:
+            item, _ = read_category(spec, part)
+            if item:
+                found.append(dict(item, kind="category"))
+            elif found:                                   # a remark after a category
+                last = found[-1]
+                last["qualifier"] = "；".join(x for x in (last["qualifier"], part) if x)
+                last["text"] = "%s；%s" % (last["text"], part)
+            else:                                         # a sentence, kept whole
+                found = [{"kind": "text", "text": text}]
+                break
+        items += found
+    return items
 
 
 def match_option(value, options):
@@ -882,9 +811,12 @@ def decision_parts(spec, text, header=None):
 
     parts: version; reversible (True, False or None when unreadable) and criteria; default (the 到期默认动作
     line as written) and default_option (the option it names, for a reversible one); options [{name,
-    approach, releases}] (None without a table); frozen [items of read_frozen]; signing (待签版本 names what
+    approach, irreversible}] (None without a table); frozen [items of read_frozen]; signing (待签版本 names what
     is signed). errors: what the package check sends back. A missing line or section is left to the header
-    and section checks; a rule that needs a line that is wrong waits until that line is right."""
+    and section checks; a rule that needs a line that is wrong waits until that line is right. The list of
+    irreversible actions is the floor: a decision one of whose options lists a category of it, and one that
+    signs, has to say 不可逆; whether anything beyond the list is reversible is its author's judgement by the
+    criteria. warnings: none at present."""
     header = header if header is not None else {}
     errors, warnings = [], []
     channel = (header.get("渠道") or "").strip()
@@ -913,15 +845,13 @@ def decision_parts(spec, text, header=None):
         sec = section_of(text, name)
         if sec is not None and empty_text(sec):
             errors.append("栏目“%s”是空的：%s；没有写“无”" % (name, what))
-    frozen, more, warned = read_frozen(spec, section_of(text, FROZEN) or "")
-    errors += more
-    warnings += warned
+    frozen = read_frozen(spec, section_of(text, FROZEN) or "")
     signed = section_of(text, SIGNED)
     signing = signed is not None and not empty_text(signed) and not SAYS_NOTHING.match(signed)
-    releasing = [o for o in options or [] if o["releases"]]
-    if reversible is True and releasing:
-        errors.append("选项%s要放行不可逆事项清单里的类别，包头“%s”要写不可逆，并写判据号" % (
-            "、".join("“%s”（%s）" % (o["name"], "；".join(r["text"] for r in o["releases"])) for o in releasing), REVERSIBILITY))
+    listing = [o for o in options or [] if o["irreversible"]]
+    if reversible is True and listing:
+        errors.append("选项%s列了不可逆事项清单里的类别，包头“%s”要写不可逆，并写判据号" % (
+            "、".join("“%s”（%s）" % (o["name"], "；".join(r["text"] for r in o["irreversible"])) for o in listing), REVERSIBILITY))
     if reversible is True and signing:
         errors.append("这条决策用来签字（“%s”写了要签的版本），包头“%s”要写不可逆：签字关不走到期默认" % (SIGNED, REVERSIBILITY))
     default, default_option = header.get(DEFAULT_ACTION), None
@@ -965,10 +895,13 @@ def decision_parts(spec, text, header=None):
 
 
 def read_executor(spec, value):
-    """(who, None) when a decision package's 执行方 line names 研究员 or one of the organization's
-    sessions, else (None, how to write it). A session's abbreviation names a sequence, case aside as the
-    ledger compares names (the name comes back spelled with the sequence's abbreviation), and a sequence
-    and rank written in front of it (算法 +2（Alg-p2-01）) are its own."""
+    """(who, None) when a decision package's 执行方 line names 研究员 or a session that may carry a decision
+    out, else (None, how to write it). A session's abbreviation names a sequence, case aside as the ledger
+    compares names (the name comes back spelled with the sequence's abbreviation), and a sequence and rank
+    written in front of it (算法 +2（Alg-p2-01）) are its own. The session is a sequence's +2, the entry
+    (项目管理 +2) or the router (项目管理 +1): a +1, a +0 and the scribe are sent back with what to write
+    instead. `ledger.py confirm --executor` takes a session under the same check. A receipt that names
+    another session from before 1.0.6 is read as it is: nothing here looks at receipts."""
     value = (value or "").strip().rstrip("。.")
     if value == RESEARCHER:
         return RESEARCHER, None
@@ -977,18 +910,23 @@ def read_executor(spec, value):
         return None, WHO_EXECUTES
     name = m.group(1) or m.group(4)
     head, rank = name.split("-")[0], name.split("-")[1][1:]
-    seq = next(((cn, abbrev) for _, cn, abbrev in spec.sequences() if abbrev.lower() == head.lower()), None)
+    seq = next(((cn, abbrev, sid) for sid, cn, abbrev in spec.sequences() if abbrev.lower() == head.lower()), None)
     if not seq:
         return None, "序列的简写只有 %s，没有 %s" % ("、".join(abbrev for _, _, abbrev in spec.sequences()), head)
     name = seq[1] + name[len(head):]
     if m.group(4) and (m.group(2), m.group(3)) != (seq[0], rank):
         return None, "%s 是%s +%s 的会话，前面写的序列和职级要和它一致，或者只写会话名" % (name, seq[0], rank)
+    role = OrgSpec.role_name(seq[2], int(rank))
+    if rank != "2" and role != "pmo-router":
+        what = "书记员" if role == "pmo-scribe" else "%s +%s 的会话" % (seq[0], rank)
+        return None, ("%s 是%s：执行方只收%s。改写负责这件事的 +2 的会话名（比如 %s-p2-01）；要下级干的活，由 +2 用需求包委托"
+                      % (name, what, EXECUTOR_RANKS, seq[1]))
     return name, None
 
 
 def executor_of(spec, value):
-    """Who a decision package's 执行方 line names: 研究员, or one of the organization's sessions by name;
-    None when it names neither, or more than one (read_executor)."""
+    """Who a decision package's 执行方 line names: 研究员, or a session that may carry a decision out, by
+    name; None when it names neither, more than one, or a session of another rank (read_executor)."""
     return read_executor(spec, value)[0]
 
 
