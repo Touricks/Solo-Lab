@@ -771,14 +771,31 @@ def entry_values(spec, policy):
         "entry_preface": "先写清工作方式：用中文回答，先给结论；先读再改，做完核对结果；研究员在场就问，不在场就写进决策队列，不猜参数、不编结果。你会运行很久，上下文一定会被压缩，所以不靠对话记状态：每次都从台账、状态包和 `python3 -I .claude/solo-lab/bin/route.py pool` 读。",
         "entry_to_router": "给 `%s` 发 `%s：<一句话>`，把原话和脚本输出写进消息（长的先写进 `packages/drafts/pmo/` 再给路径）。它把结论用【%s】发回给你。" % (
             router, msg_head(spec, "assign", item=None, sender=me, receiver=router), spec.term("msg", "report")),
-        "entry_dispatch": "**委托。** 照派发图给这些角色的会话发消息：%s。已经有工作项的事用【委托 #ID】；还没有工作项的（研究员刚交代的新任务、要对方起草的包）用【通知】，正文写研究员的原话和要它做什么。两种都先跑 `python3 -I .claude/solo-lab/bin/route.py pool --role <角色>` 找人：有空闲的发给空闲的，优先发给台账里“负责会话”对应的那个；显示“研究员在用”的不打断，用 `route.py notify <会话名> --text '...' --work-item <ID>` 留言，紧急的才发消息。消息首行写 `%s：<包名> <包路径>`，下面写要它做什么；正文不复述，包在文件里。回执是 delivered 或 queued 才算发出；对方收没收到，以对方 hook 记在 `.claude/logs/dispatch.jsonl` 的时间为准。\n\n**登记。** 工作项、字段、状态和文档只由书记员写。要登记的东西写成一条“%s”，发给 `%s`，它写完回【%s #ID】：" % (
+        "entry_dispatch": (
+            "**委托。** 照派发图给这些角色的会话发消息：%s。已经有工作项的事用【委托 #ID】；"
+            "还没有工作项的（研究员刚交代的新任务、要对方起草的包）用【通知】，正文写研究员的原话和要它做什么。"
+            "两种都先跑 `python3 -I .claude/solo-lab/bin/route.py pool --role <角色>` 找人：有空闲的发给空闲的，优先发给台账里“负责会话”对应的那个；"
+            "显示“研究员在用”的不打断，用 `route.py notify <会话名> --text '...' --work-item <ID>` 留言，紧急的才发消息。"
+            "消息首行写 `%s：<包名> <包路径>`，下面写要它做什么；正文不复述，包在文件里。回执是 delivered 或 queued 才算发出；"
+            "对方收没收到，以对方 hook 记在 `.claude/logs/dispatch.jsonl` 的时间为准。\n\n**登记。** 工作项、字段、状态和文档只由书记员写。"
+            "要登记的东西写成一条“%s”，发给 `%s`，它写完回【%s #ID】：") % (
             targets, msg_head(spec, "assign", sender=me, receiver="<+2 的会话名>"), spec.term("msg", "register_request"), scribe,
             spec.term("msg", "register_receipt")),
         "entry_extra_info": "**补充信息（R1、R2）。** 在工作项下加带标签的评论（请书记员登记，或自己 `meegle comment add`），再给负责会话发【%s #ID】说明一句；它正被研究员直接用着的，改用 `route.py notify` 留言。【%s】只由委托方发。" % (
             spec.term("msg", "notice"), spec.term("msg", "resume")),
         "entry_queue": "清单长、要附选项和建议时，给 `%s` 发【%s】请它汇总成表：每件写状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、选项、建议，改过版的在事项后面写版本号；已经到期、继续等研究员的排最前，其次是“插队”的。研究员在本会话里" % (
             router, spec.term("msg", "assign")),
-        "entry_focus": "**研究员直接交代。** 当前这一步由谁负责，照上面“研究任务”一段查；两个流程的对照在 `org/phases.md`。\n\n%s\n\n这时那个会话会自己运行 `route.py focus open`，并用 `route.py notify` 告诉你。`route.py pool` 显示它“研究员在用”期间不委托它，新信息照“委托”一段留言。谈定的事它会写成决策包（渠道：研究员主动发起）交给你：照 R6 请书记员登记，“待签版本”写了要更新的字段的一并写进去。\n\n**会话池。** 研究员说“恢复”时，运行 `route.py pool --recover`，照它列的清单发消息（你自己委托出去的发【%s #ID】，别人委托的请委托方发），先让书记员补完写到一半的登记。研究员在本会话明确说“补位”或“再开一个 …”时才开会话：路由和书记员由你开，其余序列的会话由那个序列的 +2 开；开法照 `route.py claim` 输出里的开池表，开好马上 `route.py expect` 预登记。没人要求时不开会话，也不提卡片；补位请求（`route.py refill`）记在 `route.py pool` 里，研究员来谈时跟在决策清单后面列出；补位请求不算决策。委托一批工作项之前先看额度：5 小时额度用了八成以上，只委托紧急程度为“插队”的。你开的会话每结束一轮，应用会叫醒你一次，这不算交付：先跑 `route.py pool --queue %s`，有待开工的工作项又有空闲会话就委托出去，没有就一句话结束本轮。" % (
+        "entry_focus": (
+            "**研究员直接交代。** 当前这一步由谁负责，照上面“研究任务”一段查；两个流程的对照在 `org/phases.md`。\n\n%s\n\n"
+            "这时那个会话会自己运行 `route.py focus open`，并用 `route.py notify` 告诉你。"
+            "`route.py pool` 显示它“研究员在用”期间不委托它，新信息照“委托”一段留言。"
+            "谈定的事它会写成决策包（渠道：研究员主动发起）交给你：照 R6 请书记员登记，“待签版本”写了要更新的字段的一并写进去。\n\n**会话池。"
+            "** 研究员说“恢复”时，运行 `route.py pool --recover`，照它列的清单发消息（你自己委托出去的发【%s #ID】，别人委托的请委托方发），先让书记员补完写到一半的登记。"
+            "研究员在本会话明确说“补位”或“再开一个 …”时才开会话：路由和书记员由你开，其余序列的会话由那个序列的 +2 开；"
+            "开法照 `route.py claim` 输出里的开池表，开好马上 `route.py expect` 预登记。没人要求时不开会话，也不提卡片；"
+            "补位请求（`route.py refill`）记在 `route.py pool` 里，研究员来谈时跟在决策清单后面列出；补位请求不算决策。"
+            "委托一批工作项之前先看额度：5 小时额度用了八成以上，只委托紧急程度为“插队”的。"
+            "你开的会话每结束一轮，应用会叫醒你一次，这不算交付：先跑 `route.py pool --queue %s`，有待开工的工作项又有空闲会话就委托出去，没有就一句话结束本轮。") % (
             bullets([spec.render(spec.rules["entry"]["focus_rule"])]), spec.term("msg", "resume"), me),
         "entry_permissions": "**权限提示。** 每个会话的权限提示只出现在它自己的会话里；`route.py pool --watch` 把等研究员批准的会话列在最前。请研究员不要对飞书写操作的提示选“不再询问”。",
         "after_compaction": after_compaction("研究员", entry=True),

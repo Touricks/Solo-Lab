@@ -5152,8 +5152,6 @@ class TextsAfterTheGatesTest(PoolProjectCase):
 
     def test_upgrading_to_1_0_6_is_written_down(self):
         texts = self.texts()
-        with open(os.path.join(ROOT, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
-            self.assertEqual(json.load(f)["version"], "1.0.6")
         note = next(x for x in texts["skills/setup/references/mechanisms.md"].splitlines() if x.startswith("- **升到 1.0.6。**"))
         for part in ("这一版去掉了 1.0.4 加的三层命令拦截", "权限判断交给 Claude Code，插件做不到比它更好", "重跑 `init --apply`",
                      "`guard.py` 的 `POLICY_VERSION` 从 6 升到 7，`policy.json` 不再带清单",
@@ -5214,6 +5212,31 @@ class TextsAfterTheGatesTest(PoolProjectCase):
                 self.assertIn(part, places[rel], rel)
         self.assertIn("## 老空间补到 2.2.0", places["feishu-template/README.md"])
         self.assertIn("[README.md](README.md) 的“老空间补到 2.2.0”", places["feishu-template/更新记录.md"])
+
+
+# ----------------------------------------------------------------- 1.0.7
+class RunAsAFileTest(unittest.TestCase):
+    """Python 3.9, the python3 macOS ships, reads a script it is given as a file one line at a time into a buffer
+    of 1024 bytes at the smallest. A longer line comes in several pieces, and a piece that ends inside a multi-byte
+    character is refused: "SyntaxError: Non-UTF-8 code", though the file is valid UTF-8. Whether a long line of
+    Chinese fails depends on where the cut happens to fall, so setup.py ran up to 1.0.3 and stopped at its first
+    line from 1.0.4 to 1.0.6. Importing a script compiles it from memory and never shows this: the other tests
+    import the scripts, the sessions run them as files."""
+
+    def test_no_line_of_a_python_file_is_longer_than_one_read(self):
+        long = []
+        for folder, _, names in os.walk(ROOT):
+            for name in sorted(n for n in names if n.endswith(".py")):
+                path = os.path.join(folder, name)
+                with open(path, "rb") as f:
+                    long += ["%s:%d (%d bytes)" % (os.path.relpath(path, ROOT), n, len(line))
+                             for n, line in enumerate(f, 1) if len(line) > 1000]
+        self.assertEqual(long, [], "write a long string as several adjacent literals, one to a line")
+
+    def test_setup_starts_when_it_is_run_as_a_file(self):
+        done = subprocess.run([sys.executable, "-I", os.path.join(ROOT, "scripts", "setup.py"), "--help"],
+                              capture_output=True, text=True)
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
 
 
 if __name__ == "__main__":
