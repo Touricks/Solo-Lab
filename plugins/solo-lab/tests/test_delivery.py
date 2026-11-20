@@ -31,7 +31,7 @@ WOKEN = "本轮由其他 agent 会话叫醒"
 QUEUED = "本轮登记了待定决策"
 LIST_DUE = ("先回答研究员，再跑 python3 -I .claude/solo-lab/bin/ledger.py query queue，把待决定的决策和等研究员执行的决策附在末尾，"
             "每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接，改过版的在事项后面写版本号；"
-            "route.py pool 里还开着的研究员待办和补位请求一起列，它们不算决策，补位请求写明启动卡在哪个会话里。都没有就不附。")
+            "route.py pool 里的研究员任务清单和补位请求一起列，它们不算决策；清单里飞书项目的工作项合成一件事说，补位请求写明启动卡在哪个会话里。都没有就不附。")
 QUEUED_TEXT = ("本轮登记了待定决策 #%s：在这一行状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和主文档链接，"
                "不超过 3 行。")
 DENIED = ("这一轮是其他 agent 会话叫醒的，研究员多半不在：不用 AskUserQuestion。要研究员拍板的事写决策包或发【需拍板】给入口；"
@@ -315,7 +315,7 @@ class InboxDeliveryTest(DeliveryCase):
         # takes no decision is a 研究员待办 in route.py pool, listed after the decisions
         for old in ("query blocked", "等研究员：", "阻塞"):
             self.assertNotIn(old, text)
-        self.assertIn("route.py pool 里还开着的研究员待办和补位请求一起列，它们不算决策", text)
+        self.assertIn("route.py pool 里的研究员任务清单和补位请求一起列，它们不算决策", text)
         self.assertNotIn(WOKEN, text)
         self.assertEqual(self.session("s-entry")["turn_origin"], "researcher")
         self.set_state("s-entry", researcher_at=self.ago(10))

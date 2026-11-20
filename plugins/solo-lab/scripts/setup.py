@@ -136,8 +136,13 @@ READ_ALLOW = [
     "Bash(python3 -I .claude/solo-lab/bin/orgspec.py lint *)",
     "Bash(python3 -I .claude/solo-lab/bin/orgspec.py show *)",
 ]
+# What no session runs, whatever its role: Claude Code refuses these before a hook is asked, and a hook's
+# "allow" does not lift a deny. So nothing a role may run belongs here. Until 1.0.10 the list also denied
+# every lark-cli command with --yes, and build_settings denied every high-risk command: the scribe's
+# wiki +node-delete, which guard.py let through, was refused all the same. --yes and the high-risk commands
+# are guard.py's to judge, by role (check_lark); tools/lint.py holds the two lists against each other.
 ADMIN_DENY = [
-    "Bash(lark-cli * --yes)", "Bash(lark-cli * --yes *)", "Bash(lark-cli auth login *)",
+    "Bash(lark-cli auth login *)",
     "Bash(lark-cli auth logout *)", "Bash(lark-cli config *)", "Bash(lark-cli profile *)",
     "Bash(lark-cli update *)", "Bash(meegle auth login *)", "Bash(meegle auth logout *)",
     "Bash(meegle telemetry enable *)", "Bash(meegle telemetry disable *)", "Bash(meegle config set *)",
@@ -485,7 +490,7 @@ def build_policy(spec, task, seqs):
 
 ROUTE = "python3 -I .claude/solo-lab/bin/route.py"
 POOL_ALLOW = ["Bash(python3 -I .claude/solo-lab/bin/onboarding.py *)"] + ["Bash(%s %s)" % (ROUTE, c) for c in ("pool", "audit")] + [
-    "Bash(%s %s *)" % (ROUTE, c) for c in ("claim", "expect", "pool", "refill", "audit", "notify", "focus")]
+    "Bash(%s %s *)" % (ROUTE, c) for c in ("claim", "expect", "pool", "refill", "todo", "audit", "notify", "focus")]
 SCRIBE_ALLOW = ["Bash(python3 -I .claude/solo-lab/bin/ledger.py %s *)" % w
                 for w in ("register", "revise", "reply", "confirm", "rollback", "update", "comment", "status-block", "append",
                           "archive", "relink", "ensure-node")]
@@ -499,7 +504,8 @@ WRAPUP_TOOL = "^mcp__.+__wrap_up$"
 
 
 def build_settings(task, risk, policy):
-    high = sorted(k for k, v in risk.get("commands", {}).items() if v == "high-risk-write")
+    allowed = {k for pol in policy["agents"].values() for k in pol.get("lark_high_risk", ())}
+    high = sorted(k for k, v in risk.get("commands", {}).items() if v == "high-risk-write" and k not in allowed)
     deny = ADMIN_DENY + ["Bash(lark-cli %s *)" % k for k in high if k != "update"]
     ask = ["Edit(/.claude/settings.json)", "Edit(/.claude/settings.local.json)", "Edit(/.claude/hooks/**)",
            "Edit(/.claude/agents/**)", "Edit(/.claude/solo-lab/**)", "Edit(/.claude/state/**)", "Edit(/org/**)",
@@ -719,7 +725,7 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
         lines += [
             "- 研究员会直接点开你的会话交代事情。这时先运行 `python3 -I .claude/solo-lab/bin/route.py focus open --topic '<一句话>'`，用 `route.py notify %s --text '…'` 告诉入口；做完或研究员说“结束”时运行 `route.py focus close`。谈定的事写成决策包（渠道：研究员主动发起）交给入口登记。没写进台账的决定不算数。" % entry,
             "- 被其他 agent 会话叫醒的轮次，研究员多半不在，不向研究员提问：要研究员拍板的事写决策包，或给入口发【%s】；+1 和 +0 要拍板的事写进交付包。收尾里的提问 hook 会去掉。" % spec.term("msg", "decide"),
-            "- 只要研究员动一下手、没有选项要他挑的事（恢复集群连接、下载数据、连 VPN、核对一个 key 这类），不写决策包：运行 `route.py todo add --text '<要他做什么>' --for <工作项 ID> --done-when '<做完怎么算数>'` 记一条研究员待办，入口向研究员列出；他做完了，或者你自己核对到了结果，运行 `route.py todo done <编号>`。有两个以上的选项要他挑，或者做了以后不好撤回的，是决策，照旧写决策包。",
+            "- 只要研究员动一下手、没有选项要他挑的事（恢复集群连接、下载数据、连 VPN、跑一条只有他能跑的命令这类），不写决策包：运行 `route.py todo add --text '<要他做什么>' --for <工作项 ID> --done-when '<做完怎么算数>'` 记进研究员任务清单，入口向研究员列出；他做完了，或者你自己核对到了结果，运行 `route.py todo done <编号>`。建错的、不做了的工作项归档不了，也不去推它的节点：运行 `route.py todo add --for <工作项 ID> --terminate --text '<为什么不要它了>'`，由研究员在网页上终止。有两个以上的选项要他挑，或者做了以后不好撤回的，是决策，照旧写决策包。",
             "- 决策定下以后要研究员亲手做的事（整理数据、挂 API、维护沙箱、开 Docker、调设置这类），写在决策包包头“研究员要做的事”。"
             "每份决策包都有这一行，没有要研究员亲手做的写“无”。"
             "包头还有“执行方”一行，写这条决策定下以后由谁执行：“研究员”，或者执行它的会话名，多半是你自己。"
@@ -946,7 +952,7 @@ def pool_sections(spec, policy):
             "被其他 agent 会话叫醒的轮次，研究员多半不在，不向研究员提问。这类轮次有三种：其他会话发来的消息、本会话开出的会话结束一轮的回报、开会话时上级写的首轮。"
             "这时面向研究员最多写一行状态，不标“等研究员回答”，不复述已经登记过的决策；要研究员拍板的事，+2 写成决策包或给入口发【%s】，+1、+0 写进交给上一级的交付包。"
             "hook 会去掉收尾里的提问、拒绝 AskUserQuestion；唯一的例外是插队决策的登记回执到入口的那一轮，入口可以在收尾里问研究员一次。" % decide,
-            "只要研究员动一下手、没有选项要他挑的事（恢复集群连接、下载数据、连 VPN、核对一个 key 这类），不写决策包：运行 `route.py todo add --text '<要他做什么>' --for <工作项 ID> --done-when '<做完怎么算数>'` 记一条研究员待办，入口向研究员列出；他做完了，或者你自己核对到了结果，运行 `route.py todo done <编号>`。有两个以上的选项要他挑，或者做了以后不好撤回的，是决策，照旧写决策包。"
+            "只要研究员动一下手、没有选项要他挑的事（恢复集群连接、下载数据、连 VPN、跑一条只有他能跑的命令这类），不写决策包：运行 `route.py todo add --text '<要他做什么>' --for <工作项 ID> --done-when '<做完怎么算数>'` 记进研究员任务清单，入口向研究员列出；他做完了，或者你自己核对到了结果，运行 `route.py todo done <编号>`。建错的、不做了的工作项归档不了，也不去推它的节点：运行 `route.py todo add --for <工作项 ID> --terminate --text '<为什么不要它了>'`，由研究员在网页上终止。有两个以上的选项要他挑，或者做了以后不好撤回的，是决策，照旧写决策包。"
             "有选项要研究员挑、定下以后又要他亲手做的事（整理数据、挂 API、维护沙箱、开 Docker、调设置这类）是决策：卡住的那个序列 +2 写决策包交给入口 `%s`，"
             "包头“执行方”写“研究员”，“研究员要做的事”写明要他做什么；卡住的工作项照旧记阻塞，阻塞原因写“等研究员：决策 #<ID>”。"
             "每份决策包都有“执行方”和“研究员要做的事”这两行：执行方写“研究员”，或者执行这条决策的会话名，多半是发出方；"
@@ -1291,6 +1297,7 @@ PLUGIN_SECTIONS = {
     "d0062ed622919fb97c63ba55db952a0b8a784a1c1d9f10f720becf1e8988f8b0": "1.0.5",
     "1c0702acad9db570f7783b8d0ee3e34bc68a2c6301adc4bec33803e9fe8c06d4": "1.0.6 至 1.0.9",
     "c80f58059cf5cb10a43cc52da992aeb7b420f68618042de373c679496a383233": "1.0.10",
+    "27f611c7282725b164819e37100fac25b86d8252a113c36b8a0a7fda75df2cc1": "1.0.11",
 }
 
 

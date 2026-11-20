@@ -214,4 +214,4 @@ claude plugin install solo-lab@solo-lab
 
 ## 插件版本
 
-v1.0.10
+v1.0.11

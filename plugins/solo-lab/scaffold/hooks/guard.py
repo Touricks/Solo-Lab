@@ -189,9 +189,9 @@ def check_lark(inv, c, who, policy, data, soft, rewritable):
         return Verdict("allow", "查看帮助"), None
     mine = key in pol.get("lark_high_risk", ())      # the scribe's wiki +node-delete: a document goes to the recycle bin
     if c["yes"] and not mine:
-        return Verdict("deny", "带 --yes 的命令只能由研究员本人执行。不要自己加 --yes；把完整命令写进交付的内容。"), None
+        return Verdict("deny", "带 --yes 的命令只能由研究员本人执行。不要自己加 --yes；把完整命令记进研究员任务清单：python3 -I .claude/solo-lab/bin/route.py todo add --text '<完整命令，和为什么要跑>'。"), None
     if c["tier"] == "high-risk-write" and not mine:
-        return Verdict("deny", "%s 是 high-risk-write，只能由研究员本人执行。把完整命令写进交付的内容。" % key), None
+        return Verdict("deny", "%s 是 high-risk-write，只能由研究员本人执行。把完整命令记进研究员任务清单：python3 -I .claude/solo-lab/bin/route.py todo add --text '<完整命令，和为什么要跑>'。" % key), None
     if c["dry_run"]:
         return Verdict("allow", "--dry-run 只预览"), None
     new_args = None
@@ -223,7 +223,7 @@ def check_meegle(inv, c, who, data, soft, rewritable):
     if c["help"]:
         return Verdict("allow", "查看帮助"), None
     if c["tier"] == "admin":
-        return Verdict("deny", "%s 属于登录、诊断上报或配置类命令，只能由研究员本人执行。" % key), None
+        return Verdict("deny", "%s 属于登录、诊断上报或配置类命令，只能由研究员本人执行。确实要跑的，把完整命令记进研究员任务清单：python3 -I .claude/solo-lab/bin/route.py todo add --text '<完整命令，和为什么要跑>'。" % key), None
     if c["dry_run"]:
         return Verdict("allow", "--dry-run 只预览"), None
     if c["tier"] == "read":
@@ -285,12 +285,23 @@ def _ledger_named(tok, rest):
     return os.path.basename(tok).endswith("ledger.py") and _subcommand(rest) in LEDGER_WRITE_WORDS
 
 
+def _may_apply(args):
+    """Could these ledger.py arguments carry --apply? The option itself, any abbreviation argparse takes for
+    it (--app), or a word the hook cannot read (a variable, a substitution, a glob)."""
+    return any(len(a) >= 3 and "--apply".startswith(a.split("=", 1)[0]) or re.search(r"[$`*?\[]", a) or SUB_MARK.search(a) for a in args)
+
+
 def _subcommand(args):
-    """The ledger.py subcommand in the arguments after the script; --help before any -- makes it a read."""
+    """The ledger.py subcommand in the arguments after the script; --help before any -- makes it a read, and so
+    does a write subcommand without --apply: ledger.py writes nothing then, it prints what it would do. Reads
+    are never stopped (the researcher, 2026-11-20): until 1.0.10 the entry could not preview a revision."""
     head = args[:args.index("--")] if "--" in args else args
     if "-h" in head or "--help" in head:
         return "--help"
-    return next((a for a in args if not a.startswith("-")), "")
+    sub = next((a for a in args if not a.startswith("-")), "")
+    if sub in LEDGER_WRITE_WORDS and not _may_apply(args):
+        return ""
+    return sub
 
 
 def _verdict(sub):
@@ -469,7 +480,7 @@ def ledger_write(command, cwd=None):
     A guardrail against accidental writes by well-behaved agents, not a security
     boundary: enough obfuscation can always hide a command from a shell parser.
     Returns None when ledger.py is not run, or only with get/query/mql/trace/status,
-    --help or no subcommand. Handled: comments, new lines, ; && || |, cd, shell
+    --help, no subcommand, or a write subcommand without --apply (a preview: _subcommand). Handled: comments, new lines, ; && || |, cd, shell
     keywords and functions, wrappers and project runners (env, timeout, nice,
     sudo, xargs, uv run ...), python option clusters, -c / -m (ledger, runpy,
     cProfile ...), scripts on stdin (here-documents, here-strings, < file, pipes),
@@ -921,7 +932,8 @@ def past_cd_home(command, root):
 def check_pool_command(data, who, policy, root, command):
     """route.py claim / expect / release: one plain command, run by a session allowed to."""
     runs = command_runs(command, data.get("cwd") or root, root)
-    subs = [route_sub(argv) for argv, _ in runs if argv]
+    # --help prints the usage and does nothing: a read, wherever in a command it stands
+    subs = [route_sub(argv) for argv, _ in runs if argv and not ("-h" in argv or "--help" in argv)]
     sub = next((x for x in subs if x in POOL_SUBS), None)
     if sub is None:
         unread = [t for argv, t in runs if argv is None]
@@ -1093,7 +1105,7 @@ def check_git(data, who, command, root):
     if not sub:
         return None
     reason = ("（%s）不能在共享工作区里运行 git %s：会话池的会话共用这个目录，切分支、stash、reset、pull 这类命令会丢掉"
-              "或混进别的会话还没提交的改动。把要做的事写进交付，由研究员执行。" % (who.label, sub))
+              "或混进别的会话还没提交的改动。要研究员来做的，把完整命令记进研究员任务清单：python3 -I .claude/solo-lab/bin/route.py todo add --text '<完整命令，和为什么要跑>'。" % (who.label, sub))
     return refuse(who, data, reason)
 
 

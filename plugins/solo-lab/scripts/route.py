@@ -12,13 +12,15 @@ The session pool (see pool.py):
     route.py expect NAME --role R (--desk ID | --session ID)   pre-register a session you opened
     route.py release NAME                     the researcher frees a claim (it becomes a tombstone)
     route.py pool [--role R] [--item ID] [--queue NAME] [--recover] [--watch [--once]]
-    route.py pool --prune [--apply]           take archived and terminated work items out of the table of who answers
-                                              for what (pool.json owners), read from the ledger; a preview without --apply
+    route.py pool --prune [--apply]           take archived, terminated and deleted work items out of the table of who
+                                              answers for what (pool.json owners) and strike those the researcher was
+                                              asked to terminate or delete, read from the ledger; a preview without --apply
     route.py refill <role> [--count N]        ask for more sessions of a role: a refill request in pool.json and the entry's
                                               inbox; --count 0 withdraws the role's requests
-    route.py todo add --text T [--for ID] [--done-when T]
+    route.py todo add --text T [--for ID] [--done-when T] [--terminate | --delete]
                                               something the researcher is to do by hand and that takes no decision:
-                                              a line in pool.json and the entry's inbox, listed after the decisions
+                                              a line in pool.json and the entry's inbox, listed after the decisions;
+                                              --terminate / --delete: the work item --for is to go, on the web page
     route.py todo done <n> [--note T]         the to-do is done: taken off the list
     route.py audit                            the soft-rule hits, questions the hooks took out of turns
                                               other sessions woke, wrap-ups that asked by who started the
@@ -750,10 +752,18 @@ def print_pool(root, policy, role=None, item=None):
             card = ("；启动卡在 %s 的会话里（桌面会话 %s），研究员点一下就开" % (r["card_in"], where.get("desk") or "未知") if r.get("card_in")
                     else "；还没有提启动卡")
             print("- 补位请求：%s ×%s（%s，%s 提）%s" % (r.get("role"), r.get("count", 1), r.get("by"), str(r.get("at"))[:16], card))
-    for t in ([] if role else open_todos(pl)):
-        print("- 研究员待办 %d：%s（%s 提，%s%s%s）" % (
+    todos = [] if role else open_todos(pl)
+    for t in [t for t in todos if not t.get("kind")]:
+        print("- 研究员任务 %d：%s（%s 提，%s%s%s）" % (
             t["n"], t.get("text"), t.get("by"), str(t.get("at"))[:16], "，为 #%s" % t["item"] if t.get("item") else "",
             "；做完算数：%s" % t["done_when"] if t.get("done_when") else ""))
+    items = [t for t in todos if t.get("kind")]
+    if items:                                        # however many: one thing to tell the researcher
+        print("- 研究员任务·飞书项目：%d 条工作项等研究员在网页上处理，合成一件事跟他说，下面每条附给他；"
+              "他说处理完了，运行 route.py pool --prune --apply 核对台账、划掉办了的。" % len(items))
+        for t in items:
+            print("  - #%s %s：%s；原因：%s（%s 提）%s" % (t["item"], ITEM_KINDS.get(t["kind"], t["kind"]), t.get("title") or "名称没读到",
+                                              t.get("text"), t.get("by"), "；%s" % t["link"] if t.get("link") else ""))
     mixed = pool.mixed_modes(rows)
     if mixed:
         print("提醒：%s 的权限模式和池里多数会话不是一类（bypass 和其他模式之间的消息会被扣下）。" % "、".join(mixed))
@@ -900,43 +910,92 @@ def open_todos(pl):
     return [t for t in pl.get("todos", []) if isinstance(t.get("n"), int)]
 
 
-def todo_cmd(spec, root, action, n=None, text=None, item=None, done_when=None, note=None):
-    """研究员待办: what a session needs the researcher to do by hand where nothing is to be decided (fetch a
-    key, connect a VPN, restore a connection). Until 1.0.9 it took a decision package, six to eight turns
-    each. It is a line in pool.json that the entry lists after the decisions; no work item, no document.
-    What tells it from a decision is for the session that writes it to judge: nothing here checks."""
+ITEM_KINDS = {"terminate": "终止", "delete": "删除"}          # what the researcher is asked to do with a work item
+
+
+def item_end(lg, item):
+    """What became of a work item: (state name, its name) when it is archived or terminated, ("已删除", "") when
+    the space no longer has it, None while it is open. A ledger that cannot be read is LedgerError: an item
+    that is gone and a ledger that does not answer are told apart by what the space says (WorkItemNotFound)."""
+    try:
+        it = lg.item(item)
+    except ledger.LedgerError as e:
+        if "WorkItemNotFound" in str(e):
+            return "已删除", ""
+        raise
+    if it is None:
+        raise ledger.LedgerError("读不到 #%s" % item)
+    return (it.get("state"), it.get("name") or "") if ledger.finished(lg, it.get("state"), it.get("type")) else None
+
+
+def todo_cmd(spec, root, action, n=None, text=None, item=None, done_when=None, note=None, kind=None):
+    """研究员任务清单: what a session needs the researcher to do by hand where nothing is to be decided (fetch a
+    key, connect a VPN, run a command only they may run). Until 1.0.9 it took a decision package, six to
+    eight turns each. It is a line in pool.json that the entry lists after the decisions; no work item, no
+    document. What tells it from a decision is for the session that writes it to judge: nothing here checks.
+
+    A work item to be terminated or deleted on the web page (kind) is such a line too: one that was made by
+    mistake or withdrawn before its work began cannot be archived, and no script terminates one. The entry
+    tells the researcher of all of them as one thing (pool_cmd). Nobody looks whether it was done; when the
+    researcher says so, `route.py pool --prune --apply` reads the ledger once and strikes those that are."""
     policy = need_pool(root)
     if not policy:
         return 0
     by = sender_label(*caller(root, policy))
     if action == "add":
         if not (text or "").strip():
-            print("出错：--text 写要研究员做什么")
+            print("出错：--text 写要研究员做什么；请他终止或删除工作项的，写为什么不要这条工作项了")
             return 1
         item = str(item).lstrip("#") if item else None
+        if kind and not item:
+            print("出错：--terminate、--delete 要和 --for <工作项 ID> 一起用")
+            return 1
+        title = link = None
+        if kind:                                     # the item's name and link, read once, for the researcher to click
+            try:
+                lg = ledger.Ledger(root, "preview")
+                it = lg.item(item)
+                if it:
+                    title, link = it.get("name"), lg.item_url(it.get("type"), item) if it.get("type") else None
+            except Exception:                        # the name and the link are a convenience: the line is written without
+                pass
         with pool.locked(root) as pl:
-            number = max([t["n"] for t in open_todos(pl)] + [int(pl.get("todo_seq") or 0)]) + 1
-            pl["todo_seq"] = number
-            pl["todos"].append({"n": number, "text": text.strip(), "item": item, "done_when": (done_when or "").strip() or None,
-                                "by": by, "at": now()})
-        pool.log_event(root, {"event": "todo", "n": number, "by": by, "item": item, "line": text.strip()[:200]})
+            same = next((t for t in open_todos(pl) if kind and t.get("kind") and t.get("item") == item), None)
+            if not same:
+                number = max([t["n"] for t in open_todos(pl)] + [int(pl.get("todo_seq") or 0)]) + 1
+                pl["todo_seq"] = number
+                pl["todos"].append({"n": number, "text": text.strip(), "item": item, "kind": kind, "title": title, "link": link,
+                                    "done_when": (done_when or "").strip() or None, "by": by, "at": now()})
+        if same:
+            print("#%s 已经在研究员任务清单里了（第 %d 条，%s 提），没有再记。" % (item, same["n"], same.get("by")))
+            return 0
+        pool.log_event(root, {"event": "todo", "n": number, "by": by, "item": item, "kind": kind, "line": text.strip()[:200]})
         entry = policy["agents"][policy["entry_role"]].get("fixed_session") or "PMO-p2-01"
-        append_inbox(root, entry, {"id": uuid.uuid4().hex[:12], "ts": now(), "from": by, "read": False,
-                                   "text": "研究员待办 %d：%s%s。研究员来谈时跟在决策清单后面列出，研究员待办不算决策；他做完了，运行 route.py todo done %d。" % (
-                                       number, text.strip(), "（为 #%s）" % item if item else "", number)})
-        print("已记研究员待办 %d：%s。入口向研究员列出时会带上它。研究员做完了，或者你自己核对到了结果，"
-              "运行 route.py todo done %d --note '<研究员的话或核对到的结果>'。" % (number, text.strip(), number))
+        if kind:
+            said = "研究员任务清单 %d：飞书项目里的 #%s 等研究员%s（%s）。这类工作项不管有几条，合成一件事跟研究员说，不算决策；他说处理完了，运行 route.py pool --prune --apply 核对。" % (
+                number, item, ITEM_KINDS[kind], text.strip())
+        else:
+            said = "研究员任务清单 %d：%s%s。研究员来谈时跟在决策清单后面列出，不算决策；他做完了，运行 route.py todo done %d。" % (
+                number, text.strip(), "（为 #%s）" % item if item else "", number)
+        append_inbox(root, entry, {"id": uuid.uuid4().hex[:12], "ts": now(), "from": by, "read": False, "text": said})
+        if kind:
+            print("已记进研究员任务清单（第 %d 条）：#%s 等研究员在网页上%s。入口把清单上这类工作项合成一件事跟研究员说；"
+                  "他处理完告诉入口，入口再核对台账划掉。不用为它写决策包，也不要去推它的节点。" % (number, item, ITEM_KINDS[kind]))
+        else:
+            print("已记进研究员任务清单（第 %d 条）：%s。入口向研究员列出时会带上它。研究员做完了，或者你自己核对到了结果，"
+                  "运行 route.py todo done %d --note '<研究员的话或核对到的结果>'。" % (number, text.strip(), number))
         return 0
     with pool.locked(root) as pl:
         hit = next((t for t in open_todos(pl) if t["n"] == n), None)
         if hit:
             pl["todos"].remove(hit)
     if not hit:
-        print("没有编号 %s 的研究员待办；route.py pool 列着现在还开着的。" % n)
+        print("研究员任务清单里没有第 %s 条；route.py pool 列着现在还开着的。" % n)
         return 1
     pool.log_event(root, {"event": "todo_done", "n": n, "by": by, "item": hit.get("item"), "line": (note or "").strip()[:200]})
-    print("研究员待办 %d 已销掉：%s。%s" % (n, hit["text"], "请书记员在 #%s 下加一条评论，写研究员做了什么%s。" % (
-        hit["item"], "（%s）" % note.strip() if (note or "").strip() else "") if hit.get("item") else ""))
+    print("研究员任务清单第 %d 条已划掉：%s。%s" % (n, hit["text"], "" if hit.get("kind") or not hit.get("item") else
+                                    "请书记员在 #%s 下加一条评论，写研究员做了什么%s。" % (
+                                        hit["item"], "（%s）" % note.strip() if (note or "").strip() else "")))
     return 0
 
 
@@ -1087,40 +1146,54 @@ def audit_cmd(spec, root, hours=24):
 
 
 def prune_cmd(root, apply=False):
-    """Take the work items that are archived or terminated out of pool.json's owners. A work item is terminated
-    on the web page, where no script sees it, and one archived before 1.0.9 stayed in the table too: the table
-    is checked against the ledger. Nothing is written without --apply, nothing when the ledger cannot be read,
-    and nothing but these entries is touched."""
+    """Take what is over out of pool.json: the work items that are archived, terminated or deleted leave the
+    table of owners, and those the researcher was asked to terminate or delete leave the 研究员任务清单. A work
+    item is terminated or deleted on the web page, where no script sees it, so both are checked against the
+    ledger, when the researcher says it is done and not before. Nothing is written without --apply, and
+    nothing when the ledger cannot be read; an item the space no longer has is over, not unread (until 1.0.10
+    one deleted item in the table stopped this command for good). Nothing but these entries is touched."""
     pl, ok = pool.load(root)
     if not ok:
         print("出错：读不出 .claude/state/pool.json；请研究员先处理。")
         return 1
     owners = pl.get("owners") or {}
-    gone = []
+    asked = [t for t in open_todos(pl) if t.get("kind") and t.get("item")]
+    gone, struck, waiting = [], [], []
     try:
         lg = ledger.Ledger(root, "preview")
-        for item, name in sorted(owners.items()):
-            it = lg.item(item)
-            if it is None:
-                raise ledger.LedgerError("读不到 #%s" % item)
-            if ledger.finished(lg, it.get("state"), it.get("type")):
-                gone.append((item, name, it.get("state"), it.get("name") or ""))
+        ends = {item: item_end(lg, item) for item in sorted(set(owners) | {t["item"] for t in asked})}
     except (ledger.LedgerError, orgspec.OrgSpecError) as e:
-        print("出错：台账读不到，认领表没有动：%s" % str(e)[:300])
+        print("出错：台账读不到，认领表和研究员任务清单都没有动：%s" % str(e)[:300])
         return 1
-    if not gone:
+    for item, name in sorted(owners.items()):
+        if ends[item]:
+            gone.append((item, name, ends[item][0], ends[item][1]))
+    for t in asked:
+        (struck if ends[t["item"]] else waiting).append(t)
+    if not gone and not struck:
         print("认领表里的 %d 条工作项都还没归档，也没终止，没有要移出的。" % len(owners))
+        if waiting:
+            print("研究员任务清单里等研究员处理的 %d 条工作项都还没处理：%s。" % (len(waiting), "、".join("#%s" % t["item"] for t in waiting)))
         return 0
-    print("认领表里有 %d 条工作项，其中 %d 条已经归档或终止：" % (len(owners), len(gone)))
-    for item, name, state, title in gone:
-        print("- #%s（%s）%s，认领表里记在 %s 名下" % (item, state, title, name))
+    if gone:
+        print("认领表里有 %d 条工作项，其中 %d 条已经归档、终止或删除：" % (len(owners), len(gone)))
+        for item, name, state, title in gone:
+            print("- #%s（%s）%s，认领表里记在 %s 名下" % (item, state, title, name))
+    if struck:
+        print("研究员任务清单里等研究员处理的工作项，有 %d 条已经办了：%s。" % (
+            len(struck), "、".join("#%s（%s）" % (t["item"], ends[t["item"]][0]) for t in struck)))
+    if waiting:
+        print("还有 %d 条没处理，留在清单上，告诉研究员：%s。" % (len(waiting), "、".join("#%s" % t["item"] for t in waiting)))
     if not apply:
-        print("这是预览，认领表没有动。加 --apply 才把这 %d 条移出。" % len(gone))
+        print("这是预览，认领表和研究员任务清单都没有动。加 --apply 才写。")
         return 0
     with pool.locked(root) as held:
         done = [item for item, name, _, _ in gone if held.get("owners", {}).get(item) == name and held["owners"].pop(item)]
-    pool.log_event(root, {"event": "prune", "items": done})
-    print("已从认领表移出 %d 条。" % len(done))
+        numbers = {t["n"] for t in struck}
+        off = [t for t in held.get("todos", []) if t.get("n") in numbers]
+        held["todos"] = [t for t in held.get("todos", []) if t.get("n") not in numbers]
+    pool.log_event(root, {"event": "prune", "items": done, "todos": [t["item"] for t in off]})
+    print("已从认领表移出 %d 条，研究员任务清单划掉 %d 条。" % (len(done), len(off)))
     return 0
 
 
@@ -1230,9 +1303,11 @@ def main(argv=None):
     p.add_argument("--count", type=int, default=1, help="再要几个会话；0 是撤回这个角色的补位请求")
     p = sub.add_parser("todo")
     p.add_argument("action", choices=("add", "done"))
-    p.add_argument("n", nargs="?", type=int, help="done 时写：要销掉的研究员待办的编号")
-    p.add_argument("--text", help="add 时写：要研究员做什么")
+    p.add_argument("n", nargs="?", type=int, help="done 时写：研究员任务清单里要划掉的那一条的编号")
+    p.add_argument("--text", help="add 时写：要研究员做什么；带 --terminate、--delete 时写为什么不要这条工作项")
     p.add_argument("--for", dest="item", metavar="ID", help="add 时写：为哪条工作项")
+    p.add_argument("--terminate", dest="kind", action="store_const", const="terminate", help="add 时写：请研究员在网页上终止 --for 的工作项")
+    p.add_argument("--delete", dest="kind", action="store_const", const="delete", help="add 时写：请研究员在网页上删除 --for 的工作项")
     p.add_argument("--done-when", help="add 时写：做完怎么算数")
     p.add_argument("--note", help="done 时写：研究员的话，或者核对到的结果")
     p = sub.add_parser("audit")
@@ -1275,7 +1350,7 @@ def main(argv=None):
         if args.action == "done" and args.n is None:
             print("出错：todo done 后面写编号，route.py pool 列着")
             return 1
-        return todo_cmd(spec, root, args.action, args.n, args.text, args.item, args.done_when, args.note)
+        return todo_cmd(spec, root, args.action, args.n, args.text, args.item, args.done_when, args.note, args.kind)
     if args.cmd == "audit":
         return audit_cmd(spec, root, args.hours)
     ap.print_help()

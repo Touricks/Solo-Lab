@@ -1428,6 +1428,9 @@ class ArchiveTest(LedgerCase):
         request = self.quiet(ledger.register, self.lg(), self.draft(ASSIGN))
         lg = self.lg()
         self.assertIn("还没走到最后一步“归档”：现在在“开工”", self.fails(ledger.archive, lg, request))
+        # 1.0.11: an item made by mistake is not pushed through its steps; the message says how to ask the researcher
+        self.assertIn("route.py todo add --for", self.fails(ledger.archive, lg, request))
+        self.assertIn("记进研究员任务清单，由研究员在网页上终止", self.fails(ledger.archive, lg, request))
         self.assertEqual(lg.wrote("wiki", "+move"), [])
 
     def test_a_document_moved_before_the_step_failed(self):

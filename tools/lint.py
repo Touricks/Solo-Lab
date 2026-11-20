@@ -11,10 +11,12 @@ rule finds something, and also when a rule finds nothing to look at (then the ru
     range-read     1.0.4 to 1.0.7   ledger.py revise read nothing of the main document's opening
     project-file   up to 1.0.7      runs/README.md got a .new at every init
     template-line  up to 1.0.9      a draft that copied the template's 关联工作项 line was sent back
+    two-gates      1.0.10           the scribe's wiki +node-delete passed the hook and was refused by the settings
 """
 import argparse
 import ast
 import contextlib
+import fnmatch
 import io
 import json
 import os
@@ -167,13 +169,46 @@ def template_line(root):
     return findings, "%d 行写着“待建”的模板包头" % lines, lines
 
 
+def two_gates(root):
+    """A Feishu command a role may run by the hook's policy is not refused by the project's permission rules.
+
+    A command passes two gates: Claude Code's permission rules in .claude/settings.json, which no hook can
+    lift, and guard.py, which judges by role. 1.0.10 let the scribe delete documents and opened the hook
+    alone: the settings went on denying every command with --yes and every high-risk command, and in a
+    project the scribe's delete was refused. The tests asked the hook; nothing asked the settings. Here
+    every lark-cli command a role's policy lists is held against the deny rules init writes.
+    """
+    scripts = os.path.join(root, PLUGIN, "scripts")
+    sys.path.insert(0, scripts)
+    import setup
+    setup.run = lambda cmd, timeout=30: (None, "", "lint does not call %s" % cmd[0])
+    source = os.path.join(scripts, "setup.py")
+    findings, commands = [], 0
+    with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
+        plan = setup.build_plan(tmp, os.path.join(root, PLUGIN, "scaffold", "task.example.json"), None)
+        deny = [r[5:-1] for r in json.loads(plan.files[".claude/settings.json"][0])["permissions"]["deny"]
+                if r.startswith("Bash(") and r.endswith(")")]
+        agents = json.loads(plan.files[".claude/hooks/policy.json"][0])["agents"]
+    for role, pol in sorted(agents.items()):
+        for key in pol.get("lark_write", ()):
+            commands += 1
+            risky = key in pol.get("lark_high_risk", ())
+            command = "lark-cli %s --token x%s --as user" % (key, " --yes" if risky else "")
+            hit = next((d for d in deny if fnmatch.fnmatchcase(command, d)), None)
+            if hit:
+                findings.append((source, line_of(source, "ADMIN_DENY = ["), "%s 的 hook 策略放行 `lark-cli %s`%s，权限规则 `Bash(%s)` 却会拒绝它："
+                                 "权限规则拒绝的命令 hook 放不开，在项目里这条命令跑不了。从权限规则里去掉这一条，交给 hook 按角色判断" % (
+                                     role, key, "（带 --yes）" if risky else "", hit)))
+    return findings, "%d 条各角色可以运行的 lark-cli 写命令" % commands, commands
+
+
 def line_of(path, text):
     with open(path, encoding="utf-8") as f:
-        return next((n for n, line in enumerate(f, 1) if '"%s"' % text in line), 1)
+        return next((n for n, line in enumerate(f, 1) if '"%s"' % text in line or line.startswith(text)), 1)
 
 
 RULES = (("long-line", "行长", long_line), ("range-read", "按范围读文档", range_read), ("project-file", "要项目写的文件", project_file),
-         ("template-line", "模板的包头", template_line))
+         ("template-line", "模板的包头", template_line), ("two-gates", "权限规则和 hook", two_gates))
 
 
 def main(argv=None):

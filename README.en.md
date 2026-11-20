@@ -220,4 +220,4 @@ A few tips:
 
 ## Version
 
-v1.0.10
+v1.0.11

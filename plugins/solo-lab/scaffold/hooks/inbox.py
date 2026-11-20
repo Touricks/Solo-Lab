@@ -192,7 +192,7 @@ FIRST_TALK = "研究员来谈了。"           # no earlier message of theirs on
 BACK_AFTER = "研究员隔了 %d 分钟回来。"
 LIST_DUE = ("先回答研究员，再跑 python3 -I .claude/solo-lab/bin/ledger.py query queue，"
             "把待决定的决策和等研究员执行的决策附在末尾，每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接，"
-            "改过版的在事项后面写版本号；route.py pool 里还开着的研究员待办和补位请求一起列，它们不算决策，补位请求写明启动卡在哪个会话里。都没有就不附。")
+            "改过版的在事项后面写版本号；route.py pool 里的研究员任务清单和补位请求一起列，它们不算决策；清单里飞书项目的工作项合成一件事说，补位请求写明启动卡在哪个会话里。都没有就不附。")
 SOURCE_SHOWN = 80                     # characters of the sender's title shown
 # The local decision state ledger.py keeps (1.0.4): the decisions still waiting, with what each of them freezes.
 GATES_FILE = "gates.json"

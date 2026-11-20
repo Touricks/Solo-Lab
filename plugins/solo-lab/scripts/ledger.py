@@ -2898,8 +2898,13 @@ def archive(lg, item_id, moved=False):
         nodes = lg.flow_nodes(item_id)
         last = next((n for n in nodes if is_last(n)), None)
         if not last or last["status"] != "doing":
-            raise LedgerError("#%s 还没走到最后一步“%s”：现在在“%s”。前面的步骤确认完再归档" % (
-                item_id, (last or {}).get("name") or "归档", "、".join(n["name"] for n in nodes if n["status"] == "doing") or "流程之外"))
+            # A work item made by mistake, or withdrawn before its work began, is not archived, and its steps are
+            # not confirmed to get it there: the researcher terminates it on the web page (the researcher,
+            # 2026-11-20). The message says how to ask, since this is where a session learns that it must.
+            raise LedgerError("#%s 还没走到最后一步“%s”：现在在“%s”。前面的步骤确认完再归档。\n这条工作项要是建错了、或者不做了，不要为了归档去确认前面的步骤，"
+                              "也不用写决策包：运行 python3 -I .claude/solo-lab/bin/route.py todo add --for %s --terminate --text '<为什么不要它了>'，"
+                              "记进研究员任务清单，由研究员在网页上终止" % (
+                item_id, (last or {}).get("name") or "归档", "、".join(n["name"] for n in nodes if n["status"] == "doing") or "流程之外", item_id))
     key = "archive/%s" % (seq or "<序列>")
     if not moved:
         n = lg.nodes.get(key) if (lg.nodes.get(key) or {}).get("node_token") else None
