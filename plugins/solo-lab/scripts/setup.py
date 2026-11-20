@@ -103,6 +103,11 @@ POOL_SESSIONS = (7, 57)
 
 SCRIBE_LARK = ["docs +create", "docs +update", "wiki +node-create", "wiki +move",
                "drive +add-comment", "drive +add-reply", "drive +resolve-comment", "drive +upload"]
+# The one high-risk command a session runs (1.0.10): the scribe deletes a document in the knowledge space, one
+# that a later version replaced or a copy uploaded twice. Until then nobody but the researcher could, and the
+# copies stayed. What is deleted goes to the space's recycle bin. Everything else that is high-risk stays the
+# researcher's, and a document is changed through ledger.py only.
+SCRIBE_HIGH_RISK = ["wiki +node-delete"]
 SCRIBE_MEEGLE = ["workitem create", "workitem update", "comment add", "attachment +upload", "attachment prepare-upload"]
 READ_ALLOW = [
     "Bash(lark-cli docs +fetch *)", "Bash(lark-cli docs +search *)", "Bash(lark-cli wiki +node-list *)",
@@ -433,7 +438,8 @@ def build_policy(spec, task, seqs):
                    "write_paths": write_paths(seq, rank, task), "lark_write": [],
                    "meegle_write": ["comment add"], "ledger_write": False}
             if name == "pmo-scribe":
-                pol.update(lark_write=SCRIBE_LARK, meegle_write=SCRIBE_MEEGLE, ledger_write=True)
+                pol.update(lark_write=SCRIBE_LARK + SCRIBE_HIGH_RISK, lark_high_risk=SCRIBE_HIGH_RISK,
+                           meegle_write=SCRIBE_MEEGLE, ledger_write=True)
             elif name == "pmo-p2":
                 pol["lark_write"] = ["im +messages-send", "im +messages-reply"]
             agents[name] = pol
@@ -687,8 +693,10 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
         opens = ("你开本序列的 +1；+0 由它上面的 +1 开，要补 +0 请研究员到那个 +1 的会话里说（本序列没有 +1 时才由你开）" if rank == 2
                  else "你开自己下面的 +0")
         lines.append("- 上限和补位：每个角色 +1 最多 3 个会话、+0 最多 5 个。没有空闲会话就排队。会话一层开一层，侧栏里新会话嵌在开它的会话下面：%s。"
-                     "开局那句话点了名的，认领那一轮就开；此后只有研究员在你的会话里明确说“补位”或“再开一个 …”时才开"
-                     "（开法照 `route.py claim` 输出里的表，开好马上 `route.py expect` 预登记），其余时候只运行 `route.py refill <角色>` 记一条补位请求，不提卡片。" % opens)
+                     "开局那句话点了名的，认领那一轮就开；此后研究员在你的会话里明确说“补位”或“再开一个 …”时照表开"
+                     "（开法照 `route.py claim` 输出里的表，开好马上 `route.py expect` 预登记）。人手不够时运行 `route.py refill <角色>` 记一条补位请求："
+                     "这个角色归你开的，同一轮为表里“补位用”的那一行提一张启动卡（先 `route.py expect … --card`，再 start_session，initiation 写 own_initiative），"
+                     "研究员在你的会话里点一下就开；不归你开的，照命令的输出请开它的会话提卡。" % opens)
         lines.append("- 你开的会话每结束一轮，应用会叫醒你一次。这不算交付：先跑 `route.py pool --queue <你的会话名>`，有等你委托的事、又有空闲会话就委托出去，没有就一句话结束本轮。")
     if rank == 2:
         lines.append("- 跨序列的需求包、决策包写成草稿发给入口 `%s`（需求包草稿也用【%s】这个抬头，决策包用【%s】），由入口转交；你不直接委托别的序列。" % (
@@ -711,7 +719,8 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
         lines += [
             "- 研究员会直接点开你的会话交代事情。这时先运行 `python3 -I .claude/solo-lab/bin/route.py focus open --topic '<一句话>'`，用 `route.py notify %s --text '…'` 告诉入口；做完或研究员说“结束”时运行 `route.py focus close`。谈定的事写成决策包（渠道：研究员主动发起）交给入口登记。没写进台账的决定不算数。" % entry,
             "- 被其他 agent 会话叫醒的轮次，研究员多半不在，不向研究员提问：要研究员拍板的事写决策包，或给入口发【%s】；+1 和 +0 要拍板的事写进交付包。收尾里的提问 hook 会去掉。" % spec.term("msg", "decide"),
-            "- 要研究员亲手做的事（整理数据、挂 API、维护沙箱、开 Docker、调设置这类）也写决策包，写在包头“研究员要做的事”。"
+            "- 只要研究员动一下手、没有选项要他挑的事（恢复集群连接、下载数据、连 VPN、核对一个 key 这类），不写决策包：运行 `route.py todo add --text '<要他做什么>' --for <工作项 ID> --done-when '<做完怎么算数>'` 记一条研究员待办，入口向研究员列出；他做完了，或者你自己核对到了结果，运行 `route.py todo done <编号>`。有两个以上的选项要他挑，或者做了以后不好撤回的，是决策，照旧写决策包。",
+            "- 决策定下以后要研究员亲手做的事（整理数据、挂 API、维护沙箱、开 Docker、调设置这类），写在决策包包头“研究员要做的事”。"
             "每份决策包都有这一行，没有要研究员亲手做的写“无”。"
             "包头还有“执行方”一行，写这条决策定下以后由谁执行：“研究员”，或者执行它的会话名，多半是你自己。"
             "执行方写会话的只收各序列的 +2、入口和路由，要下级干的活由你用需求包委托。"
@@ -792,8 +801,7 @@ def entry_values(spec, policy):
             "谈定的事它会写成决策包（渠道：研究员主动发起）交给你：照 R6 请书记员登记，“待签版本”写了要更新的字段的一并写进去。\n\n**会话池。"
             "** 研究员说“恢复”时，运行 `route.py pool --recover`，照它列的清单发消息（你自己委托出去的发【%s #ID】，别人委托的请委托方发），先让书记员补完写到一半的登记。"
             "研究员在本会话明确说“补位”或“再开一个 …”时才开会话：路由和书记员由你开，其余序列的会话由那个序列的 +2 开；"
-            "开法照 `route.py claim` 输出里的开池表，开好马上 `route.py expect` 预登记。没人要求时不开会话，也不提卡片；"
-            "补位请求（`route.py refill`）记在 `route.py pool` 里，研究员来谈时跟在决策清单后面列出；补位请求不算决策。"
+            "开法照 `route.py claim` 输出里的开池表，开好马上 `route.py expect` 预登记。没人要求时不开会话。"
             "委托一批工作项之前先看额度：5 小时额度用了八成以上，只委托紧急程度为“插队”的。"
             "你开的会话每结束一轮，应用会叫醒你一次，这不算交付：先跑 `route.py pool --queue %s`，有待开工的工作项又有空闲会话就委托出去，没有就一句话结束本轮。") % (
             bullets([spec.render(spec.rules["entry"]["focus_rule"])]), spec.term("msg", "resume"), me),
@@ -851,6 +859,22 @@ def task_summary(task):
     return "\n".join(lines)
 
 
+def old_owners_out(target):
+    """A project that moved to another space: the work items its sessions answer for (pool.json owners) are
+    the old space's, and the ledger reads none of them any more. `route.py pool --prune` stops when it cannot
+    read an item, so they could never be taken out; the switch takes them out, and writes them into the log.
+    Returns what it took out, {} when there was nothing or the file cannot be read."""
+    try:
+        with pool_state.locked(target) as pl:
+            left = dict(pl.get("owners") or {})
+            pl["owners"] = {}
+    except (pool_state.PoolError, OSError):
+        return {}
+    if left:
+        pool_state.log_event(target, {"event": "owners_out", "why": "space_switch", "owners": left})
+    return left
+
+
 def space_names(task, ids):
     """(project space, knowledge space) by the names Feishu gave when they were bound, else as the
     task file wrote them: the task file may name the project space by simple_name or project_key."""
@@ -899,7 +923,8 @@ def shared_mechanics(spec, policy):
             msg_head(spec, "assign"), words),
         "自动提醒：你开的会话每结束一轮，应用会叫醒你一次。这不算交付：先跑 `route.py pool --queue <自己的会话名>`，有待开工的工作项、又有空闲会话就委托出去，没有就一句话结束本轮。【%s】（比如补充信息）也是消息，会叫起对方的下一轮；对方在 `route.py pool` 里显示“研究员在用”的不打断，改用 `route.py notify <会话名> --text '...'` 留在它的收件箱。" % spec.term("msg", "notice"),
         "开会话：会话一层开一层，+2 开本序列的 +1，+1 开自己下面的 +0，侧栏里新会话嵌在开它的会话下面。开局那句话点了名要你开的，在认领那一轮照认领输出开，这是研究员初始化时定下的开法；"
-        "此后只有研究员在你的会话里明确要求（“补位”“再开一个 alg-p0”）时才开。其余时候运行 `route.py refill <角色>` 记一条补位请求，不开会话，也不提卡片。",
+        "此后研究员在你的会话里明确要求（“补位”“再开一个 alg-p0”）时照表开。人手不够时运行 `route.py refill <角色>` 记一条补位请求，"
+        "开这个角色的会话在同一轮提一张启动卡；研究员在那个会话里点一下才开，不会自动开。",
         "工作项、字段、节点和文档只由唯一认领的书记员 `%s` 写，写操作都走 `ledger.py`；其他会话只能加带会话标签的评论。每一步谁负责、必填什么，以飞书空间为准：`ledger.py next <工作项 ID>` 现读。" % scribe,
         "high-risk-write 和带 `--yes` 的飞书命令、在本目录切分支、stash、reset 之类的 git 命令都由研究员执行：把完整命令写给研究员。",
         "知识库、文档和云空间的命令显式带 `--as user`；收发消息和订阅事件带 `--as bot`。",
@@ -921,7 +946,8 @@ def pool_sections(spec, policy):
             "被其他 agent 会话叫醒的轮次，研究员多半不在，不向研究员提问。这类轮次有三种：其他会话发来的消息、本会话开出的会话结束一轮的回报、开会话时上级写的首轮。"
             "这时面向研究员最多写一行状态，不标“等研究员回答”，不复述已经登记过的决策；要研究员拍板的事，+2 写成决策包或给入口发【%s】，+1、+0 写进交给上一级的交付包。"
             "hook 会去掉收尾里的提问、拒绝 AskUserQuestion；唯一的例外是插队决策的登记回执到入口的那一轮，入口可以在收尾里问研究员一次。" % decide,
-            "要研究员亲手做的事（整理数据、挂 API、维护沙箱、开 Docker、调设置这类）也是决策：卡住的那个序列 +2 写决策包交给入口 `%s`，"
+            "只要研究员动一下手、没有选项要他挑的事（恢复集群连接、下载数据、连 VPN、核对一个 key 这类），不写决策包：运行 `route.py todo add --text '<要他做什么>' --for <工作项 ID> --done-when '<做完怎么算数>'` 记一条研究员待办，入口向研究员列出；他做完了，或者你自己核对到了结果，运行 `route.py todo done <编号>`。有两个以上的选项要他挑，或者做了以后不好撤回的，是决策，照旧写决策包。"
+            "有选项要研究员挑、定下以后又要他亲手做的事（整理数据、挂 API、维护沙箱、开 Docker、调设置这类）是决策：卡住的那个序列 +2 写决策包交给入口 `%s`，"
             "包头“执行方”写“研究员”，“研究员要做的事”写明要他做什么；卡住的工作项照旧记阻塞，阻塞原因写“等研究员：决策 #<ID>”。"
             "每份决策包都有“执行方”和“研究员要做的事”这两行：执行方写“研究员”，或者执行这条决策的会话名，多半是发出方；"
             "“研究员要做的事”没有要研究员亲手做的写“无”，执行方是研究员时不能是“无”，执行方是会话时写“无”。"
@@ -931,8 +957,11 @@ def pool_sections(spec, policy):
             "执行方是会话的，照决定执行完，马上请书记员归档，不在待执行里停留；"
             "执行方是研究员的，他在入口会话说做完了，入口带着他的原话请书记员归档，书记员在评论里记下他做了什么。"
             "决策归档以后，卡住的那个 +2 请书记员清掉阻塞。" % entry,
+            "交给研究员定的决策包和研究任务单，默认给他飞书文档的链接，不给本地文件，他在文档上批注；他明确要本地文件、或者要在对话里直接说的，照做。"
+            "所以研究任务单写完先请书记员登记，再把主文档链接给研究员；研究员批完，入口把批注读出来转给作者，作者改好下一版，书记员原位修订，链接不变。"
+            "批注只是讨论的一种方式，不跟踪哪条处理了没有。",
             "重发一条消息时，把“重发，上一条作废”写进抬头的【】里，比如【委托 #2101（重发，上一条作废）】。",
-            "不提后续任务的卡片，后续工作写成需求包草稿交给委托方；不把手上的任务移交到新会话；不归档、清空或停止别的池会话，回退时由研究员本人在侧栏操作。",
+            "不提后续任务的卡片（补位的启动卡除外），后续工作写成需求包草稿交给委托方；不把手上的任务移交到新会话；不归档、清空或停止别的池会话，回退时由研究员本人在侧栏操作。",
         ]),
         "", "## Compact Instructions", "",
         "压缩上下文时保留：本会话的会话名和角色；未了事项，即委托出去还没交付的工作项 ID 和接收方、还欠谁交付的工作项 ID；"
@@ -1176,7 +1205,7 @@ def first_task_sheet(task):
         "## 已知的上下文", "待定", "",
         "## 风险和未决事项",
         "这份研究任务单是初始化时照项目名和一句话描述生成的。入口用技能 `solo-lab:charter` 访谈研究员，写出修订稿，"
-        "再请书记员运行 `ledger.py register <修订稿> --existing <这条研究任务的工作项 ID>` 换成主文档；工作项不变。", ""])
+        "再请书记员运行 `ledger.py revise <这条研究任务的工作项 ID> <修订稿> --note '<改了什么>'` 原位换掉主文档开头；工作项和文档链接都不变。", ""])
 
 
 def registered_tasks(target):
@@ -1260,7 +1289,8 @@ PLUGIN_SECTIONS = {
     "354838a5ab3b366410e5b748072309e6b5626e02560fca8b87fbab63989cc5b7": "1.0.3",
     "dd2d7f72868799a7bf3f86b583dad924d4c1d8525d7e74b92f65c060c27c769a": "1.0.4",
     "d0062ed622919fb97c63ba55db952a0b8a784a1c1d9f10f720becf1e8988f8b0": "1.0.5",
-    "1c0702acad9db570f7783b8d0ee3e34bc68a2c6301adc4bec33803e9fe8c06d4": "1.0.6",
+    "1c0702acad9db570f7783b8d0ee3e34bc68a2c6301adc4bec33803e9fe8c06d4": "1.0.6 至 1.0.9",
+    "c80f58059cf5cb10a43cc52da992aeb7b420f68618042de373c679496a383233": "1.0.10",
 }
 
 
@@ -2536,7 +2566,22 @@ def read_back(spec, contract, ids, task_feishu, maps, switch=None, old_snap=None
             print("提醒：lark-cli whoami 里没有用户身份的 open_id；飞书私聊监听不会启动")
     wiki = ids.setdefault("wiki", {})
     want_wiki = task_feishu.get("wiki_space")
-    if want_wiki and (not wiki.get("space_id") or wiki.get("space_name", want_wiki) != want_wiki):
+    want_id = str(task_feishu.get("wiki_space_id") or "").strip()
+    if want_id:
+        # The knowledge space by its ID (1.0.10). By name alone a project could not move to a space named as its
+        # old one: the same name was not looked up again, and two spaces of one name are not chosen between.
+        if str(wiki.get("space_id") or "") != want_id or not wiki.get("space_name"):
+            data = optional_read("知识空间", lambda: cli_json(
+                ["lark-cli", "wiki", "+space-list", "--as", "user", "--page-all", "--page-limit", "0"], 120))
+            hit = next((d for d in ledger._walk(data or {}) if str(d.get("space_id") or "") == want_id), None)
+            if hit:
+                if wiki.get("space_id") and str(wiki["space_id"]) != want_id:
+                    print("提醒：知识空间换成了“%s”（space_id %s），原来记下的节点作废，书记员在新空间里重建" % (hit.get("name") or "", want_id))
+                    wiki.pop("nodes", None)
+                wiki.update({"space_id": hit["space_id"], "space_name": hit.get("name") or want_wiki or ""})
+            elif data is not None:
+                print("提醒：翻完全部分页，没有 space_id 是 %s 的知识空间；知识空间的绑定没有动。核对任务文件的 feishu.wiki_space_id" % want_id)
+    elif want_wiki and (not wiki.get("space_id") or wiki.get("space_name", want_wiki) != want_wiki):
         data = optional_read("知识空间", lambda: cli_json(
             ["lark-cli", "wiki", "+space-list", "--as", "user", "--page-all", "--page-limit", "0"], 120))
         hits = list({d["space_id"]: d for d in ledger._walk(data or {})
@@ -2559,7 +2604,7 @@ def read_back(spec, contract, ids, task_feishu, maps, switch=None, old_snap=None
         elif data is not None and not hits:
             print("知识空间：翻完全部分页，没有叫“%s”的；加 --apply 时新建一个。" % want_wiki)
         elif len(hits) > 1:
-            print("提醒：有 %d 个知识空间叫“%s”（space_id：%s），没有自动选；把要用的那个写进 feishu/ids.json 的 wiki.space_id，再重跑" % (
+            print("提醒：有 %d 个知识空间叫“%s”（space_id：%s），没有自动选；把要用的那个的 space_id 写进任务文件的 feishu.wiki_space_id，再重跑" % (
                 len(hits), want_wiki, "、".join(str(h["space_id"]) for h in hits)))
     for key, n in (wiki.get("nodes") or {}).items():
         if n.get("node_token"):
@@ -2591,7 +2636,8 @@ def switch_md(switch):
     if not switch["held"] and not switch["unchecked"]:
         lines += ["旧空间里没有工作项，可以直接写入。" if switch["bound_types"] else
                   "旧绑定一种类型都没绑上，台账没在旧空间里记过东西，可以直接写入。", ""]
-    lines += ["写入时 `feishu/ids.json` 的 `previous_spaces` 记下旧空间和换出的时间，本地记录里旧的工作项 ID 还能查到属于哪个空间。"
+    lines += ["写入时 `feishu/ids.json` 的 `previous_spaces` 记下旧空间和换出的时间，本地记录里旧的工作项 ID 还能查到属于哪个空间；"
+              "会话池的认领表里旧空间的工作项同时移出，记在 `.claude/logs/dispatch.jsonl`。"
               "旧空间留不留由研究员决定，删空间只能研究员本人做。", ""]
     return lines
 
@@ -2695,6 +2741,11 @@ def feishu(target, maps, live, apply, leave_old=False):
         with open(p, "w", encoding="utf-8") as fh:
             fh.write(content)
     print("已写入 %s。" % "、".join(os.path.relpath(p, target) for p in files))
+    if switch:
+        left = old_owners_out(target)
+        if left:
+            print("会话池的认领表里移出了旧空间的 %d 条工作项（%s）：它们留在旧空间，台账不再读写。" % (
+                len(left), "、".join("#%s" % i for i in sorted(left))))
     if blank:
         print("一种类型都没绑上：这次只记下空间和 open_id，没写绑定时间，台账脚本仍然不读写飞书。")
     return 1 if problems or blank else 0                 # a space that fails the contract check stops an initialisation

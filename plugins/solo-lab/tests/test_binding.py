@@ -205,6 +205,30 @@ class FeishuTest(BindingCase):
         self.assertIn("有 2 个知识空间叫“同名”（space_id：sp_a、sp_b）", text)
         self.assertEqual(self.made, [])
 
+    def test_the_task_may_name_the_knowledge_space_by_its_id(self):
+        """1.0.10: a project moving to a new knowledge space named as its old one could not: the same name was
+        not looked up again, and two spaces of one name are not chosen between. feishu.wiki_space_id names it."""
+        self.spaces = [{"name": "t", "space_id": "sp_old"}]
+        self.feishu([], True, True)
+        ids = json.loads(self.read("feishu/ids.json"))
+        self.assertEqual(ids["wiki"]["space_id"], "sp_old")
+        ids["wiki"]["nodes"] = {"任务": {"title": "任务", "node_token": None}}
+        self.put("feishu/ids.json", ids)
+        self.spaces.append({"name": "t", "space_id": "sp_new"})                  # the new one, of the same name
+        self.put("spec/task.json", {"name": "t", "feishu": {"meegle_space": "research_template", "wiki_space": "t",
+                                                            "wiki_space_id": "sp_new"}})
+        _, text = self.feishu([], True, True)
+        wiki = json.loads(self.read("feishu/ids.json"))["wiki"]
+        self.assertEqual((wiki["space_id"], wiki["space_name"]), ("sp_new", "t"))
+        self.assertNotIn("nodes", wiki)                                          # the old space's nodes are void
+        self.assertIn("知识空间换成了“t”（space_id sp_new）", text)
+        self.assertNotIn("有 2 个知识空间叫", text)
+        self.assertEqual(self.made, [])
+        self.put("spec/task.json", {"name": "t", "feishu": {"meegle_space": "research_template", "wiki_space_id": "sp_gone"}})
+        _, text = self.feishu([], True, True)
+        self.assertIn("没有 space_id 是 sp_gone 的知识空间；知识空间的绑定没有动", text)
+        self.assertEqual(json.loads(self.read("feishu/ids.json"))["wiki"]["space_id"], "sp_new")
+
     def test_a_space_without_the_types_is_recorded_but_not_bound(self):
         def blank(argv, out):
             if argv[:2] == ["workitem", "meta-types"]:
@@ -255,9 +279,19 @@ class FeishuTest(BindingCase):
             self.feishu([], True, True)
         self.assertIn("--leave-old-items", str(e.exception))
         self.assertEqual(json.loads(self.read("feishu/ids.json"))["meegle"]["project_key"], "pk_old")       # nothing was written
-        self.feishu([], True, True, True)
+        table = setup.pool_state.empty()                                  # what the sessions answered for in the old space
+        table["owners"] = {"2101": "Alg-p1-01", "2102": "Infra-p0-01"}
+        table["refills"] = [{"role": "alg-p0", "count": 1, "by": "Alg-p1-01", "at": "2026-11-20T10:00:00-05:00"}]
+        setup.pool_state.save_json(setup.pool_state.pool_path(self.tmp), table)
+        _, text = self.feishu([], True, True, True)
         m = json.loads(self.read("feishu/ids.json"))["meegle"]
         self.assertEqual((m["project_key"], m["previous_spaces"][0]["project_key"]), (SNAP["project_key"], "pk_old"))
+        # 1.0.10: the old space's items leave the table with the switch; the prune command could never read them
+        self.assertIn("会话池的认领表里移出了旧空间的 2 条工作项（#2101、#2102）", text)
+        after = setup.pool_state.load(self.tmp)[0]
+        self.assertEqual((after["owners"], len(after["refills"])), ({}, 1))
+        out = [r for r in setup.pool_state.read_events(self.tmp) if r.get("event") == "owners_out"]
+        self.assertEqual(out[0]["owners"], table["owners"])
 
     def test_a_space_made_from_2_2_0_binds_its_decided_state(self):
         code, text = self.feishu([], True, True, edit=made_from_2_2_0)

@@ -431,7 +431,7 @@ class DecisionsFileTest(ProjectCase):
         time kept."""
         old = setup.render(setup.scaffold("org/decisions.md.tmpl"), {"deviations": setup.bullets(self.V105)})
         self.assertEqual(setup.PLUGIN_SECTIONS.get(setup.sha256(setup.squeeze(self.section(old)))), "1.0.5")
-        self.assertEqual(setup.PLUGIN_SECTIONS.get(setup.sha256(setup.squeeze(self.current_section()))), "1.0.6")
+        self.assertEqual(setup.PLUGIN_SECTIONS.get(setup.sha256(setup.squeeze(self.current_section()))), "1.0.10")
         before = self.write(self.V105)
         kind, out = self.init()
         self.assertEqual(kind, "update")
@@ -3176,6 +3176,76 @@ class PoolRouteTest(PoolProjectCase):
         self.assertEqual(code, 1)
         self.assertIn("--count 写 0 是撤回", text)
 
+    def test_a_refill_gets_a_start_card_and_the_session_it_opens_claims_under_its_name(self):
+        """1.0.10: a refill request was written down and nothing more; the researcher had to find the +1's
+        session and say 补位 there. Now the session that opens the role proposes a start card in the turn it
+        records the request. A card has no session until it is clicked, so the permit waits under the
+        session's name (expect --card) and the session's own claim binds it."""
+        code, text = self.route("refill", "alg-p0", sid="s-alg1")                  # the +1 opens its own +0s
+        self.assertEqual(code, 0)
+        self.assertIn("本轮接着提一张启动卡", text)
+        self.assertIn("不会自动开", text)
+        self.assertNotIn("不提卡片", text)
+        code, text = self.route("expect", "Alg-p0-02", "--role", "alg-p0", "--card", sid="s-alg1")
+        self.assertEqual(code, 0, text)
+        self.assertIn("等研究员点启动卡", text)
+        permit = next(p for p in self.pool()["permits"] if p["name"] == "Alg-p0-02")
+        self.assertEqual((permit["via"], permit["desk"], permit["session_id"]), ("card", None, None))
+        self.assertEqual(self.pool()["refills"][0]["card_in"], "Alg-p1-01")
+        self.assertIn("启动卡在 Alg-p1-01 的会话里（桌面会话 d-s-alg1）", self.route("pool", sid="s-entry")[1])
+        code, out = self.claim("alg-p0", "Alg-p0-02", "s-new", desk="d-new")       # the card was clicked: a session nobody knew
+        self.assertEqual(code, 0, out)
+        claim = self.pool()["claims"]["Alg-p0-02"]
+        self.assertEqual((claim["session_id"], claim["desk"], claim["by"]), ("s-new", "d-new", "Alg-p1-01"))
+        self.assertEqual(self.pool()["refills"], [])                               # the request is met
+        self.assertFalse([p for p in self.pool()["permits"] if p["name"] == "Alg-p0-02"])
+
+    def test_a_todo_for_the_researcher_is_listed_and_struck_off(self):
+        """1.0.10: something the researcher is to do by hand, with nothing to decide, took a decision package:
+        4 of the 11 written in one day were of this kind, six to eight turns each. It is a line the entry lists
+        after the decisions."""
+        code, text = self.route("todo", "add", "--text", "恢复集群连接", "--for", "#2101", "--done-when", "ssh 能登录", sid="s-alg2")
+        self.assertEqual(code, 0, text)
+        self.assertIn("已记研究员待办 1：恢复集群连接", text)
+        self.route("todo", "add", "--text", "连 VPN", sid="s-alg1")
+        todos = self.pool()["todos"]
+        self.assertEqual([(t["n"], t["text"], t["item"], t["by"]) for t in todos],
+                         [(1, "恢复集群连接", "2101", "Alg-p2-01"), (2, "连 VPN", None, "Alg-p1-01")])
+        self.assertIn("研究员待办 1：恢复集群连接（为 #2101）。研究员来谈时跟在决策清单后面列出，研究员待办不算决策", self.read("inbox/PMO-p2-01.jsonl"))
+        listed = self.route("pool", sid="s-entry")[1]
+        self.assertIn("- 研究员待办 1：恢复集群连接（Alg-p2-01 提，", listed)
+        self.assertIn("，为 #2101；做完算数：ssh 能登录）", listed)
+        code, text = self.route("todo", "done", "1", "--note", "研究员说连上了", sid="s-entry")
+        self.assertEqual(code, 0, text)
+        self.assertIn("研究员待办 1 已销掉：恢复集群连接。请书记员在 #2101 下加一条评论，写研究员做了什么（研究员说连上了）", text)
+        self.assertEqual([t["n"] for t in self.pool()["todos"]], [2])
+        self.assertEqual(self.route("todo", "done", "1", sid="s-entry")[0], 1)
+        code, text = self.route("todo", "add", "--text", "下载数据", sid="s-alg2")     # a number is not used twice
+        self.assertIn("已记研究员待办 3", text)
+        self.assertEqual(self.route("todo", "add", "--text", " ", sid="s-alg2")[0], 1)
+        self.assertEqual(self.route("todo", "done", sid="s-entry")[0], 1)
+        events = [r["event"] for r in pool_lib.read_events(self.tmp) if r.get("event", "").startswith("todo")]
+        self.assertEqual(events, ["todo", "todo", "todo_done", "todo"])
+
+    def test_who_proposes_the_card_and_how_long_it_waits(self):
+        code, text = self.route("refill", "alg-p0", sid="s-alg2")                  # the +2 asks: its +1 opens +0s
+        self.assertIn("给 Alg-p1-01 发一条【通知】，请它为这条补位请求提启动卡", text)
+        self.assertIn("还没有提启动卡", self.route("pool", sid="s-entry")[1])
+        code, text = self.route("expect", "Alg-p0-02", "--role", "alg-p0", "--card", "--desk", "d9", sid="s-alg1")
+        self.assertEqual(code, 1)
+        self.assertIn("--card 是给还没开出来的会话预登记的", text)
+        self.route("expect", "Alg-p0-02", "--role", "alg-p0", "--card", sid="s-alg1")
+        code, out = self.route("claim", "alg-p0", "--as", "Alg-p0-03", "--wait", "0", sid="s-other", desk="d-other")
+        self.assertEqual(code, 1)                                                  # another name: not this permit
+        data = self.pool()
+        for p in data["permits"]:
+            if p["name"] == "Alg-p0-02":
+                p["at"] = (datetime.datetime.now().astimezone() - datetime.timedelta(days=8)).isoformat(timespec="seconds")
+        self.write_pool(data)
+        code, out = self.route("claim", "alg-p0", "--as", "Alg-p0-02", "--wait", "0", sid="s-late", desk="d-late")
+        self.assertEqual(code, 1)                                                  # the card is gone after a week
+        self.assertIn("没有找到本会话认领 alg-p0 的许可", out)
+
     def test_session_names_in_classify(self):
         sys.path.insert(0, os.path.join(self.tmp, ".claude", "solo-lab", "bin"))
         out = route.classify_text(self.spec, self.tmp, "alg-p1-02 那边的结果出来了吗", True)
@@ -4140,14 +4210,14 @@ class DeliveryTextTest(PoolProjectCase):
                 self.assertNotIn(old, text, name)
         entry = texts["pmo-p2.md"]
         for part in ("**决策队列。** 决策只在两个时刻推给研究员，到时 hook 会在上下文里提示你",
-                     "在状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和工作项链接，不超过 3 行",
+                     "在状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和主文档链接，不超过 3 行",
                      "紧急程度为“插队”的，这一轮可以在收尾里问研究员一次",
                      "距他上一条消息 30 分钟以上，或者第一次", "之前提过的也附", "改版、截止前、每日汇总都不推",
-                     "**面向研究员的内容。** 你主动给研究员的只有两类：决策（给链接，执行方和要研究员亲手做的事一并写上）、"
+                     "**面向研究员的内容。** 你主动给研究员的只有两类：决策（给主文档的飞书链接，执行方和要研究员亲手做的事一并写上）、"
                      "里程碑（研究任务走完一步、出了结论）",
                      "收到【需拍板】，请发来的 +2 写成决策包，不直接转问研究员",
                      "面向研究员最多写一行状态，不提问，不标“等研究员回答”，不复述已经登记过的决策",
-                     "补位请求（`route.py refill`）记在 `route.py pool` 里，研究员来谈时跟在决策清单后面列出；补位请求不算决策"):
+                     "`route.py pool` 里的研究员待办和补位请求跟在决策清单后面列出，它们不算决策"):
             self.assertIn(part, entry)
         self.assertIn("研究员在本会话里拍板后，请书记员确认决策的“决定”这一步", entry)     # what follows the decision stays
         self.assertIn("入口要时汇总决策队列", texts["pmo-router.md"])
@@ -4195,9 +4265,11 @@ class DeliveryTextTest(PoolProjectCase):
             sources["docs/使用说明.md"] = f.read()
         with open(os.path.join(REPO, "CHANGELOG.md"), encoding="utf-8") as f:
             sources["CHANGELOG.md 1.0.3"] = f.read().split("\n## 1.0.3\n", 1)[1].split("\n## ", 1)[0]
-        to_do = "研究员" + "待办"                    # split so a grep for the old term finds none here
+        # 研究员待办 is not in the list any more: the researcher brought it back on 2026-11-20 (1.0.10) for what
+        # takes no decision, as a line the entry lists (route.py todo). What stays out is how 1.0.2 did it:
+        # written into 阻塞原因 with a deadline.
         for name, text in sources.items():
-            for old in (to_do, "动手：", "等研究员：<事项>", "（截止 <时间>）", "带期限", "记成阻塞", "“等研究员：”开头", "已做：",
+            for old in ("动手：", "等研究员：<事项>", "（截止 <时间>）", "带期限", "记成阻塞", "“等研究员：”开头", "已做：",
                         "只有三类", "要做的事也做完了",
                         # who carries a decision out follows its header, not the option picked
                         "选定的做法", "某个选项下", "选的做法",
@@ -4238,7 +4310,7 @@ class DeliveryTextTest(PoolProjectCase):
             self.assertIn("研究员要做的事", texts[name], name)
             self.assertIn("执行方", texts[name], name)
         entry = texts["pmo-p2.md"]
-        for part in ("你主动给研究员的只有两类：决策（给链接，执行方和要研究员亲手做的事一并写上）、里程碑（研究任务走完一步、出了结论）",
+        for part in ("你主动给研究员的只有两类：决策（给主文档的飞书链接，执行方和要研究员亲手做的事一并写上）、里程碑（研究任务走完一步、出了结论）",
                      "再把待决定的决策和等研究员执行的决策全部附在末尾，之前提过的也附，每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接",
                      "**决策的三个阶段。** 每条决策走三步：待决定、待执行（用 2.1.0 及以前的模板建的空间里叫“已决定”）、归档（已执行）。"
                      "研究员定了，照上面马上请书记员确认“决定”这一步，书记员会通知包头写的执行方，各会话就知道选了哪个选项",
@@ -4247,13 +4319,17 @@ class DeliveryTextTest(PoolProjectCase):
                      "执行方是会话的，书记员把决定内容发给它，它照决定执行完，马上请书记员归档，不在待执行里停留",
                      "执行方是你自己的（比如第 9 步的决策），你也照决定办完马上请书记员归档",
                      "被决策卡住的工作项照旧记阻塞，阻塞原因写“等研究员：决策 #<ID>”，决策归档以后由卡住的那个 +2 请书记员清掉",
-                     "补位请求不算决策",
+                     "研究员待办和补位请求跟在决策清单后面列出，它们不算决策",
                      # the table the router is asked for: the same columns as the entry skill and the router's role
                      "请它汇总成表：每件写状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、选项、建议，"
                      "改过版的在事项后面写版本号；已经到期、继续等研究员的排最前，其次是“插队”的。"):
             self.assertIn(part, entry)
         claude = texts["CLAUDE.md"]
-        for part in ("要研究员亲手做的事（整理数据、挂 API、维护沙箱、开 Docker、调设置这类）也是决策",
+        for part in ("有选项要研究员挑、定下以后又要他亲手做的事（整理数据、挂 API、维护沙箱、开 Docker、调设置这类）是决策",
+                     # 1.0.10, the researcher on 2026-11-20: what takes no decision is no decision package
+                     "只要研究员动一下手、没有选项要他挑的事（恢复集群连接、下载数据、连 VPN、核对一个 key 这类），不写决策包",
+                     "记一条研究员待办，入口向研究员列出",
+                     "交给研究员定的决策包和研究任务单，默认给他飞书文档的链接，不给本地文件，他在文档上批注",
                      "包头“执行方”写“研究员”，“研究员要做的事”写明要他做什么；",
                      "每份决策包都有“执行方”和“研究员要做的事”这两行：执行方写“研究员”，或者执行这条决策的会话名，多半是发出方；"
                      "“研究员要做的事”没有要研究员亲手做的写“无”，执行方是研究员时不能是“无”，执行方是会话时写“无”。",
@@ -4263,7 +4339,7 @@ class DeliveryTextTest(PoolProjectCase):
                      "决策归档以后，卡住的那个 +2 请书记员清掉阻塞"):
             self.assertIn(part, claude)
         alg = texts["alg-p2.md"]
-        for part in ("也写决策包，写在包头“研究员要做的事”。每份决策包都有这一行，没有要研究员亲手做的写“无”。",
+        for part in ("写在决策包包头“研究员要做的事”。每份决策包都有这一行，没有要研究员亲手做的写“无”。",
                      "包头还有“执行方”一行，写这条决策定下以后由谁执行：“研究员”，或者执行它的会话名，多半是你自己。",
                      "执行方是研究员时“研究员要做的事”不能是“无”，执行方是会话时写“无”，对不上包检查会退回。",
                      "执行方是研究员的，他做完了，入口请书记员归档，再通知你",
@@ -4284,7 +4360,8 @@ class DeliveryTextTest(PoolProjectCase):
         decisions = texts["org/decisions.md"]
         self.assertIn("每条决策走三步：待决定、待执行（用 2.1.0 及以前的模板建的空间里叫“已决定”）、归档（已执行）。研究员定了，书记员就确认“决定”这一步，并通知执行方", decisions)
         self.assertIn("决策包包头“执行方”写这条决策定下以后由谁执行，“研究员”或者执行它的会话名，多半是发出方", decisions)
-        self.assertIn("入口主动给研究员的内容只有决策（给链接，执行方和要研究员亲手做的事一并写上）和里程碑两类；补位请求不算决策。依据：研究员 2026-11-16 定。", decisions)
+        self.assertIn("入口主动给研究员的内容只有决策（给主文档的飞书链接，执行方和要研究员亲手做的事一并写上）和里程碑两类。依据：研究员 2026-11-16 定，2026-11-20 改。", decisions)
+        self.assertIn("研究员待办和补位请求不算决策，入口跟在决策清单后面列给研究员。依据：研究员 2026-11-20 定。", decisions)
         self.assertIn("执行方、定下以后研究员要做的事", texts["org/org.md"])        # the package table
         for part in ("- 需要接收方做的事：拍板（决策队列）／确认记录无误（研究员主动发起）\n"
                      "- 执行方：<研究员，或者执行这条决策的会话名：各序列的 +2、入口或路由，多半是发出方；只要有一个选项要研究员亲手做，就写“研究员”>\n"
@@ -4304,7 +4381,7 @@ class DeliveryTextTest(PoolProjectCase):
         self.assertEqual((out["row"], out["next_hop"]), ("R5", "pmo-scribe"))
         steps = "\n".join(out["steps"])
         self.assertNotIn("每日", steps)
-        self.assertIn("登记回执到的那一轮，在状态里提一次：事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）、工作项链接", steps)
+        self.assertIn("登记回执到的那一轮，在状态里提一次：事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）、主文档链接", steps)
         self.assertIn("“插队”的，这一轮可以在收尾里问研究员一次", steps)
         self.assertIn("研究员主动来谈时，连同其余待决定的决策和等研究员执行的决策列给他", steps)
         self.assertIn("研究员定了，书记员确认“决定”这一步，决策到“待执行”；书记员把决定内容发给执行方 Alg-p2-01，"
@@ -4323,7 +4400,7 @@ class DeliveryTextTest(PoolProjectCase):
         self.started_pool()
         code, text = self.route("refill", "alg-p0", sid="s-alg2")
         self.assertEqual(code, 0)
-        self.assertIn("研究员来谈时入口会列出", text)
+        self.assertIn("要研究员在提卡片的那个会话里点一下才会开，不会自动开", text)
         inbox = self.read("inbox/PMO-p2-01.jsonl")
         self.assertIn("研究员来谈时跟在决策清单后面列出，补位请求不算决策", inbox)
         self.assertNotIn("每日", inbox + text)
@@ -4518,6 +4595,23 @@ class HookScopeTest(PoolProjectCase):
             self.assertEqual(self.bash("s-entry", cmd)[1].get("permissionDecision"), "allow", cmd)
         for cmd in (send, "function f { %s; }; f" % send, "command -p " + send):
             self.assertEqual(self.bash("s-alg1", cmd)[1].get("permissionDecision"), "deny", cmd)
+
+    def test_the_scribe_may_delete_a_document_and_nothing_else_that_is_high_risk(self):
+        """1.0.10, the researcher's ruling of 2026-11-20: documents in the knowledge space may be deleted (they
+        go to the recycle bin), not changed outside ledger.py. Nobody but the researcher could delete one, and
+        the copies a revision left behind piled up. The scribe runs lark-cli wiki +node-delete itself; every
+        other high-risk command, and every other session, is as before."""
+        delete = "lark-cli wiki +node-delete --node-token wikOLD --obj-type wiki --include-children=false --yes --as user"
+        for cmd in (delete, "command -p " + delete):
+            self.assertEqual(self.bash("s-scribe", cmd)[1].get("permissionDecision"), "allow", cmd)
+        for sid in ("s-alg2", "s-alg1", "s-entry"):
+            out = self.bash(sid, delete)[1]
+            self.assertEqual(out.get("permissionDecision"), "deny", sid)
+            self.assertIn("只能由研究员本人执行", out["permissionDecisionReason"], sid)
+        for other in ("lark-cli wiki +move-to-drive --node-token wikOLD --yes --as user",
+                      "lark-cli drive +delete --file-token boxOLD --type docx --yes --as user"):
+            out = self.bash("s-scribe", other)[1]
+            self.assertEqual(out.get("permissionDecision"), "deny", other)
 
     def left_to_claude_code(self, sid, command, **extra):
         """The hook judged a Feishu or ledger call in the command as allowed and still gives the call no answer:

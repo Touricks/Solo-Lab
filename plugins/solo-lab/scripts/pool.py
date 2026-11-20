@@ -31,7 +31,8 @@ ledger.py and the inbox hook must agree on about decisions that wait for the res
 the expiry time read from org/decisions.md, and which decisions 到期默认 may take.
 
     .claude/state/pool.json            claims, permits, pending, tombstones, work item
-                                       owners, refill requests, focus flags, re-attach notes
+                                       owners, refill requests, focus flags, re-attach notes,
+                                       the researcher's to-dos (todos: n, text, item, done_when, by, at)
     .claude/state/sessions/<id>.json   one session's status, written by its own hooks
     .claude/logs/dispatch.jsonl        messages seen, claims, releases, refills, queued decisions
                                        the entry was told about
@@ -64,7 +65,7 @@ ITEMS_SHOWN = 20
 BYPASS_MODES = ("bypassPermissions", "dontAsk")
 DESK_ENV = "CLAUDE_CODE_HOST_SESSION_ID"
 SESSION_ENV = "CLAUDE_CODE_SESSION_ID"
-LIST_KEYS = ("permits", "pending", "tombstones", "refills", "reattach")
+LIST_KEYS = ("permits", "pending", "tombstones", "refills", "reattach", "todos")
 DICT_KEYS = ("owners", "focus")
 
 
@@ -99,7 +100,7 @@ def pool_path(root):
 
 def empty():
     return {"version": 1, "claims": {}, "permits": [], "pending": [], "tombstones": [], "owners": {},
-            "refills": [], "focus": {}, "reattach": []}
+            "refills": [], "focus": {}, "reattach": [], "todos": []}
 
 
 def save_json(path, obj):
@@ -480,6 +481,23 @@ def permit_for(pool, sid, desk):
                  if (sid and p.get("session_id") == sid) or (desk and p.get("desk") == desk)), None)
 
 
+CARD_DAYS = 7                         # a start card nobody clicked is gone from the app after a week
+
+
+def card_permit(pool, name, role, at=None):
+    """The permit that waits under a session name for whichever session a start card opens: `route.py expect
+    --card` writes it without a session, since a card has none until the researcher clicks it, and the
+    session's own `route.py claim --as <name>` binds it. One older than CARD_DAYS waits for nobody."""
+    if not name:
+        return None
+    for p in pool["permits"]:
+        if p.get("via") == "card" and p.get("name") == name and p.get("role") == role and not (p.get("session_id") or p.get("desk")):
+            made = parse_time(p.get("at") or "")
+            if made is None or ((at or now()) - made).days < CARD_DAYS:
+                return p
+    return None
+
+
 def pending_for(pool, sid):
     return [p for p in pool["pending"] if sid and p.get("session_id") == sid]
 
@@ -749,7 +767,8 @@ def header_re(policy):
 
 def parse_message(policy, text):
     """The message header that starts one of the first non-empty lines: kind, work item ID, sender,
-    receiver. A header quoted inside a sentence is not a message. None if there is none."""
+    receiver. A header quoted inside a sentence is not a message. None if there is none. id is the first
+    work item the header names and ids all of them."""
     if not text or not policy.get("msg"):
         return None
     kinds = {v: k for k, v in policy["msg"].items()}
@@ -760,7 +779,8 @@ def parse_message(policy, text):
         if not m:
             continue
         p0 = re.search(r"会话名[：:]\s*(%s)" % NAME_IN_TEXT, text)
-        return {"kind": kinds[m.group(1)], "id": m.group(2),
+        named = re.search(r"【%s[^】]*】" % re.escape(m.group(1)), line)       # 【登记回执 #2140 / #2141】: one answer for several items
+        return {"kind": kinds[m.group(1)], "id": m.group(2), "ids": re.findall(r"#(\d{3,})", named.group(0)) if named else [],
                 "from": canonical(policy, m.group(3)) or m.group(3), "to": canonical(policy, m.group(4)) or m.group(4),
                 "p0_name": canonical(policy, p0.group(1)) if p0 else None, "line": line.strip()[:200]}
     return None

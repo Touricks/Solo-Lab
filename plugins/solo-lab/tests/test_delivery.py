@@ -31,8 +31,8 @@ WOKEN = "本轮由其他 agent 会话叫醒"
 QUEUED = "本轮登记了待定决策"
 LIST_DUE = ("先回答研究员，再跑 python3 -I .claude/solo-lab/bin/ledger.py query queue，把待决定的决策和等研究员执行的决策附在末尾，"
             "每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接，改过版的在事项后面写版本号；"
-            "route.py pool 里还没处理的补位请求一起列，补位请求不算决策。都没有就不附。")
-QUEUED_TEXT = ("本轮登记了待定决策 #%s：在这一行状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和工作项链接，"
+            "route.py pool 里还开着的研究员待办和补位请求一起列，它们不算决策，补位请求写明启动卡在哪个会话里。都没有就不附。")
+QUEUED_TEXT = ("本轮登记了待定决策 #%s：在这一行状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和主文档链接，"
                "不超过 3 行。")
 DENIED = ("这一轮是其他 agent 会话叫醒的，研究员多半不在：不用 AskUserQuestion。要研究员拍板的事写决策包或发【需拍板】给入口；"
           "+1、+0 写进交给上一级的交付包。")
@@ -244,6 +244,25 @@ class InboxDeliveryTest(DeliveryCase):
         self.assertIn("本轮登记了待定决策 #2303", self.context("s-entry", self.registered("2303")))
         self.assertEqual(self.session("s-entry")["ask_ok"], "2303")
 
+    def test_a_receipt_for_several_items_mentions_each_decision_once(self):
+        """1.0.10: the scribe answers several requests with one 【登记回执 #A / #B】. Only the first ID counted:
+        a decision named second was not mentioned at its registration, and the next receipt about it (a
+        comment added) mentioned it as newly registered, when the entry had listed it already."""
+        self.receipt("2310", type="same_seq", queue=False, urgent=False)
+        self.receipt("2311", type="decision", queue=True, urgent=False)
+        self.receipt("2312", type="decision", queue=True, urgent=True)
+        several = wrap("【登记回执 #2310 / #2311 / #2312】PMO-p0-01 → PMO-p2-01：三份包都已登记", "[示例] PMO-p0-01")
+        text = self.context("s-entry", several)
+        self.assertIn("本轮登记了待定决策 #2311、#2312：", text)
+        self.assertIn("其中 #2312 是插队的：本轮可以在收尾里问研究员一次。", text)
+        self.assertEqual(self.session("s-entry")["ask_ok"], "2312")
+        self.assertEqual(self.announced(), [("2311", False), ("2312", True)])
+        later = wrap("【登记回执 #2311 / #2310】PMO-p0-01 → PMO-p2-01：两条评论已照原文加上", "[示例] PMO-p0-01")
+        text = self.context("s-entry", later)
+        self.assertIn(WOKEN, text)
+        self.assertNotIn(QUEUED, text)                                            # mentioned once, at its registration
+        self.assertEqual(len(self.announced()), 2)
+
     def test_messages_behind_reminders_are_read(self):
         self.receipt("2302", type="decision", queue=True, urgent=True)
         self.assertIn("本轮登记了待定决策 #2302", self.context("s-entry", REMINDERS + self.registered("2302")))
@@ -292,8 +311,11 @@ class InboxDeliveryTest(DeliveryCase):
     def test_the_researcher_coming_back_to_the_entry(self):
         text = self.context("s-entry", "早")
         self.assertIn(FIRST_TALK + LIST_DUE, text)
-        for old in ("query blocked", "等研究员：", "阻塞", "待办"):      # what the researcher does by hand is a decision in the queue
+        # what the researcher does by hand is not read out of the items' 阻塞原因, as 1.0.2 did; from 1.0.10 what
+        # takes no decision is a 研究员待办 in route.py pool, listed after the decisions
+        for old in ("query blocked", "等研究员：", "阻塞"):
             self.assertNotIn(old, text)
+        self.assertIn("route.py pool 里还开着的研究员待办和补位请求一起列，它们不算决策", text)
         self.assertNotIn(WOKEN, text)
         self.assertEqual(self.session("s-entry")["turn_origin"], "researcher")
         self.set_state("s-entry", researcher_at=self.ago(10))

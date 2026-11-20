@@ -16,7 +16,7 @@ Read commands, for every session:
 
 Write commands, for the scribe only (the guard hook enforces this). They print the
 commands first; nothing is written without --apply:
-    ledger.py register <draft> [--task ID] [--source ID] [--set f=v ...] [--resume] [--existing ID]
+    ledger.py register <draft> [--task ID] [--source ID] [--set f=v ...] [--resume]
                                             需求包 / 决策包 / 研究任务单 / 反馈: work item + main document
     ledger.py revise <ID> <draft> --note N  the next version of a 需求包 or 决策包: the main document's
                                             opening up to 状态包 replaced in place, a line in 交接记录
@@ -73,6 +73,7 @@ import datetime
 import fcntl
 import glob
 import hashlib
+import html
 import json
 import os
 import re
@@ -739,6 +740,18 @@ SHEETS = {"研究任务单": "research_task", "反馈": "feedback"}
 SHEET_KEYS = {"research_task": ["流程", "发出方", "关联工作项"], "feedback": ["发出方", "关联工作项"]}
 LINK_LINE = re.compile(r"^(- 关联工作项[：:][ \t]*)([^；;\n]*)(.*)$", re.M)
 PLACEHOLDERS = {"", "待建", "待登记", "空", "无", "-", "—"}
+NOTED_PLACEHOLDER = re.compile(r"(待建|待登记)\s*[（(〔\[].*[）)〕\]]")
+EXISTING_GONE = ("register --existing 停用了：研究任务单和包一样原位修订，文档链接不变。运行 "
+                 "ledger.py revise %s <修订稿> --note '<改了什么>' --apply")
+DRAFT_CHANGED = ("草稿在命令运行期间改过：进主文档的是命令开始时的内容，之后的改动留在草稿里，没有进主文档；"
+                 "要进主文档，改好后走修订（ledger.py revise）。")
+
+
+def is_placeholder(value):
+    """Does a 关联工作项 value stand for "no work item yet"? 待建 with a note in brackets after it is one
+    too: a template once carried such a note on this line, and drafts copied from it are still around."""
+    value = value.strip()
+    return value.strip("（）()〔〕[] ") in PLACEHOLDERS or bool(NOTED_PLACEHOLDER.fullmatch(value))
 
 
 def header_of(text):
@@ -785,11 +798,41 @@ def link_line(text, ref, item_id, relink=False):
     if not m:
         raise LedgerError("包头里没有“关联工作项”一行：登记新工作项的草稿写“- 关联工作项：待建”")
     value, num = m.group(2).strip(), re.escape(str(item_id))
-    if value.strip("（）()〔〕[] ") in PLACEHOLDERS or relink and re.fullmatch(r"#?%s" % num, value):
+    if is_placeholder(value) or relink and re.fullmatch(r"#?%s" % num, value):
         return text[:m.start()] + m.group(1) + ref + m.group(3) + text[m.end():]
     if re.fullmatch(r"#?%s|\[#?%s\]\(\S+\)" % (num, num), value):
         return text
     raise LedgerError("包头的“关联工作项”写的是“%s”：登记新工作项的草稿这一行写“待建”，登记时换成新建的工作项 ID" % value)
+
+
+def write_back(path, read_text, item_id):
+    """The draft file gets its work item in the 关联工作项 line, and nothing else in it changes.
+
+    The file is read again and only that line is replaced: what its author wrote into it while the command
+    ran (a register or a revise takes ten seconds and more) stays. Writing back what the command read at its
+    start put an author's edits out once. Returns DRAFT_CHANGED when the file is not what the command read,
+    for the output and the receipt: the main document holds the earlier text. A file whose line can no longer
+    take the ID is left alone and the note says so; the receipt keeps the draft from a second registration.
+    The write goes through a temporary file, so that no reader meets half a draft.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            current = f.read()
+    except OSError:
+        current = read_text
+    changed = current != read_text
+    try:
+        fixed = link_line(current, "#%s" % item_id, item_id)
+    except LedgerError:
+        if not changed:
+            raise
+        return "草稿在命令运行期间改过，包头里找不到可以写回的“关联工作项”一行，草稿没有动：它的工作项是 #%s，请作者自己写上。" % item_id
+    if fixed != current or not os.path.exists(path):
+        tmp = "%s.tmp-%d" % (path, os.getpid())
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(fixed)
+        os.replace(tmp, path)
+    return DRAFT_CHANGED if changed else ""
 
 
 class Draft:
@@ -1525,26 +1568,6 @@ def first_step_is_the_senders(lg, wid, nodes):
     return None
 
 
-def revisable(lg, item_id, d, kind):
-    """The research task whose sheet a revised sheet replaces: it is still at its first step
-    and runs the flow the revision names. Returns the link of its present main document."""
-    spec = lg.spec
-    cn = spec.term("wi", "research_task")
-    if kind != "research_task":
-        raise LedgerError("--existing 只给%s换主文档：草稿的标题要写成“# %s：<任务名>”" % (
-            cn, next(w for w, k in SHEETS.items() if k == "research_task")))
-    it, wid = typed_item(lg, item_id, "research_task")
-    if wid != "research_task":
-        raise LedgerError("#%s 是%s，--existing 只给%s换主文档" % (item_id, spec.term("wi", wid), cn))
-    first = lg.flow_nodes(item_id)[0]
-    if first["status"] != "doing":
-        raise LedgerError("#%s 已经过了第一步“%s”，研究任务单不再整份替换：后面的改动写进各步自己的产出文档；要改目标，请研究员决定退回第一步" % (
-            item_id, first["name"]))
-    if it.get("flow") and d.flow and it["flow"] != d.flow:
-        raise LedgerError("#%s 走的是“%s”流程，修订稿写的是“%s”：流程在新建时选定，改不了；要换流程，另开一条%s" % (
-            item_id, it["flow"], d.flow, cn))
-    return plain(it["fields"].get(lg.field(wid, "main_doc")["field_key"]))
-
 
 # A research task sheet's 资源上限 names the conditions a paid run depends on: 执行环境 and 计算资源 say
 # 待研究员确认, or name the decision that set them. Choosing them meets criterion 4 of the list of
@@ -1568,7 +1591,7 @@ def run_conditions_hints(d):
     return hints
 
 
-def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=None, existing=None):
+def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=None):
     """Register a draft: a work item with the draft as its main document.
 
     需求包 → 同序列需求 or 跨序列需求; 决策包 → 决策; 研究任务单 → 研究任务; 反馈 → 反馈.
@@ -1577,8 +1600,8 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
     link to the space as its main document, since the page requires one; the document
     is created next, with the item's ID in its title and header, and written back. A decision's
     执行方 and 研究员要做的事 go into the fields of those names where the space has them (header_fields).
-    existing=<ID>: a revised research-task sheet becomes the main document of that task;
-    no item is created, the old document stays where it is.
+    A sheet or a package that is registered already takes its next version through revise, which keeps the
+    document and its link (until 1.0.9 a revised 研究任务单 became a new document: register --existing).
     """
     spec = lg.spec
     kind = sheet_kind(path)
@@ -1592,30 +1615,14 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
         for line in run_conditions_hints(d):
             print(line)
     rec = check_receipt(lg, path, resume or bool(doc) and bool(find_receipt(lg, path))) if lg.mode != "offline" else None
-    if existing and not rec:
-        if lg.mode == "offline":
-            raise LedgerError("--existing 要先读这条研究任务走到哪一步，离线做不了")
-        existing = str(item_id_of(existing))
-        rec = {"work_item_id": existing, "existing": True, "replaced": revisable(lg, existing, d, kind)}
-    swap = bool(rec and rec.get("existing"))
+    if rec and rec.get("existing"):
+        raise LedgerError(EXISTING_GONE % rec.get("work_item_id"))
     if rec:
         source, task = source or rec.get("source"), task or rec.get("task")
         pairs = merge_pairs(rec.get("pairs"), resolved_pairs(lg, pairs))   # rewritten with the main document
     source = item_id_of(source or d.source) if (source or d.source) else None
-    if existing:                                      # a revised sheet may already name the task it revises
-        link_line(d.text, "#%s" % item_id_of(existing), str(item_id_of(existing)))
-    else:
-        link_line(d.text, "#0", "0")                  # a 关联工作项 line that is no placeholder stops here
-    word = next((w for w, k in SHEETS.items() if k == kind), None)
-    if kind == "research_task":
-        name, title = d.task, spec.rules["naming"]["task_doc"].replace("<任务名>", d.task)
-    elif kind == "feedback":
-        name = "%s：%s" % (word, d.task)
-        title = "工作项 <工作项 ID>｜%s" % name
-    else:
-        pkg = spec.pkg(d.pid)
-        name = spec.rules["naming"]["work_item"].replace("<包名>", pkg).replace("<作者会话名>", d.author).replace("<任务名>", d.task)
-        title = spec.rules["naming"]["main_doc"].replace("<包名>", pkg).replace("<作者会话名>", d.author).replace("<任务名>", d.task)
+    link_line(d.text, "#0", "0")                      # a 关联工作项 line that is no placeholder stops here
+    name, title = naming(spec, d, kind)
 
     fields = [{"field_key": "name", "field_value": name}, flow_entry(lg, wid, d.flow)]
     required = [("sender", d.author)]
@@ -1682,9 +1689,8 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
     kinds = receipt_kind(spec, wid, d, pairs)
     if rec:
         item_id = rec["work_item_id"]
-        print(("给 #%s 换研究任务单。" if swap else "接着上次的 #%s 做。") % item_id)
-        save_receipt(lg, path, item_id, "created", kinds, pairs=pairs,        # values given on --resume too
-                     existing=rec.get("existing"), replaced=rec.get("replaced"))
+        print("接着上次的 #%s 做。" % item_id)
+        save_receipt(lg, path, item_id, "created", kinds, pairs=pairs)        # values given on --resume too
     else:
         created = lg.meegle("workitem", "create", "--work-item-type", lg.api(wid), "--fields",
                             json.dumps(fields, ensure_ascii=False), write=True)
@@ -1713,9 +1719,6 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
             ensure_roles(lg, wid, item_id)
         url = main_document(lg, rec or {}, doc, "节点 %s " % parent, create, remember)
         updates = [{"field_key": doc_key, "field_value": url}]
-        if swap:                                    # the task takes the name, sender and sequence of the revision
-            mine = {lg.field(wid, s)["field_key"] for s in ("sender", "sequence")}
-            updates += [{"field_key": "name", "field_value": name}] + [f for f in fields if f["field_key"] in mine]
         if rec:
             updates += [v for _, v in sets]
         if wid == "same_seq" and d.rel == "execute" and not d.receiver:
@@ -1723,24 +1726,21 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
         lg.meegle("workitem", "update", "--work-item-id", item_id, "--fields",
                   json.dumps(updates, ensure_ascii=False), write=True)
         lg.meegle("comment", "add", "--work-item-id", item_id, "--content",
-                  ("%s 研究任务单换成修订稿：%s。主文档：%s；原来那份：" + (rec.get("replaced") or "无") if swap
-                   else "%s 已登记：%s。主文档：%s") % (lg.tag, title, url), write=True)
+                  "%s 已登记：%s。主文档：%s" % (lg.tag, title, url), write=True)
     except LedgerError as e:
         if state.get("doc_unknown", (rec or {}).get("doc_unknown")) and not (state.get("docx") or state.get("doc")):
             raise WriteMaybeDone("%s\n工作项 #%s 已经建了，建主文档没有拿到确定的结果：先在网页上节点 %s 下核对。建好了的，运行 ledger.py register %s --resume --doc <文档链接> --apply；确认没建成的，运行 ledger.py register %s --resume --doc new --apply" % (
                 e, item_id, parent, path, path))
         raise LedgerError("%s\n工作项 #%s 已经建了，主文档字段暂时指着空间首页；修好后运行 ledger.py register %s --resume --apply 接着做，不会再建一个工作项（来源工作项、所属研究任务和 --set 的值已记在回执里）" % (
             e, item_id, path))
+    drifted = ""
     if lg.mode == "apply":
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(link_line(d.text, "#%s" % item_id, item_id))
-        save_receipt(lg, path, item_id, "registered", doc=url)
-    if swap:
-        print(("换主文档：#%s 的研究任务单换成修订稿，放在节点 %s 下；原来那份留在原处。" if lg.mode == "apply"
-               else "预览：会把 #%s 的研究任务单换成修订稿，放在节点 %s 下。") % (item_id, parent))
-    else:
-        print(("登记：%s #%s，主文档放在节点 %s 下。" if lg.mode == "apply" else "预览：会登记一条%s（#%s），主文档放在节点 %s 下。") % (
-            spec.term("wi", wid), item_id, parent))
+        drifted = write_back(path, d.text, item_id)
+        save_receipt(lg, path, item_id, "registered", doc=url, draft_changed=True if drifted else None)
+    print(("登记：%s #%s，主文档放在节点 %s 下。" if lg.mode == "apply" else "预览：会登记一条%s（#%s），主文档放在节点 %s 下。") % (
+        spec.term("wi", wid), item_id, parent))
+    if drifted:
+        print("提醒：" + drifted)
     after_register(lg, wid, d, item_id)
     return item_id
 
@@ -2624,6 +2624,27 @@ def opening_blocks(xml, end_id):
     return first, last_block_before(xml, end_id)
 
 
+def naming(spec, d, kind):
+    """(the work item's name, its main document's title with <工作项 ID> still in it) for a draft: a package,
+    or a sheet of the given kind."""
+    if kind == "research_task":
+        return d.task, spec.rules["naming"]["task_doc"].replace("<任务名>", d.task)
+    if kind == "feedback":
+        name = "%s：%s" % (next(w for w, k in SHEETS.items() if k == kind), d.task)
+        return name, "工作项 <工作项 ID>｜%s" % name
+    pkg, rules = spec.pkg(d.pid), spec.rules["naming"]
+    fill = lambda rule: rule.replace("<包名>", pkg).replace("<作者会话名>", d.author or "").replace("<任务名>", d.task)
+    return fill(rules["work_item"]), fill(rules["main_doc"])
+
+
+def title_block(whole):
+    """(block id, text) of the title of a document read whole. The title is a block of its own whose id is the
+    document's; replacing it renames the document and, with it, its node in the knowledge space."""
+    m = re.search(r"<title(?:\s+[^>]*?\bid=\"([^\"]+)\")?[^>]*>(.*?)</title>", doc_content(whole), re.S)
+    found = _find(whole, ("document_id",)) if isinstance(whole, dict) else None
+    return (m.group(1) if m and m.group(1) else found), (html.unescape(m.group(2)) if m else None)
+
+
 def revision_body(d, item_id, link):
     """The new opening of a main document: the draft without its title, its 关联工作项 naming the item with
     the link to it (also when the draft carries the bare ID an earlier revise wrote back into it), and
@@ -2651,22 +2672,38 @@ def revise(lg, item_id, path, note):
     if not (note or "").strip():
         raise LedgerError("修订要写改了什么：--note '<改了什么>'，它会记进交接记录")
     item_id = item_id_of(item_id)
-    if sheet_kind(path):
-        raise LedgerError("研究任务单不用 revise：还在第一步时，用 ledger.py register <修订稿> --existing <工作项 ID> 换主文档")
-    d = Draft(spec, path)
+    sheet = sheet_kind(path)
+    if sheet and sheet != "research_task":
+        raise LedgerError("反馈的主文档没有状态包，不用 revise：要补充的写成新的反馈，或者在工作项下加评论")
+    d = Sheet(spec, path, sheet) if sheet else Draft(spec, path)
     if d.pid == "delivery":
         raise LedgerError("交付包不是主文档，不用 revise：改好后用 reply 重新交，版本号加 1")
-    wid = work_item_type(d)
+    wid = "research_task" if sheet else work_item_type(d)
     head = d.text.split("\n## ", 1)[0]
     m = LINK_LINE.search(head)
     value = m.group(2).strip() if m else ""
-    if m and value.strip("（）()〔〕[] ") not in PLACEHOLDERS and not re.fullmatch(r"#?%s|\[#?%s\]\(\S+\)" % (item_id, item_id), value):
+    if m and not is_placeholder(value) and not re.fullmatch(r"#?%s|\[#?%s\]\(\S+\)" % (item_id, item_id), value):
         raise LedgerError("修订稿的“关联工作项”写的是“%s”，要修订的是 #%s：写“#%s”，或者照新草稿写“待建”" % (value, item_id, item_id))
     it = lg.item(item_id)
     rec = receipt_of(lg, item_id)
     if not title_of(d.text):                      # copied from the main document, which has no title line: the title stays
         d.task = rec.get("title") or re.split(r"[：:]", (it or {}).get("name") or "", 1)[-1].strip() or d.task
-    if it is not None:
+    if it is not None and sheet:
+        cn = spec.term("wi", wid)
+        if it.get("type") != wid:
+            raise LedgerError("#%s 是%s，修订稿是%s单：类型不变才能修订" % (
+                item_id, spec.term("wi", it["type"]) if it.get("type") else "别的类型", cn))
+        if it.get("flow") and d.flow and it["flow"] != d.flow:
+            raise LedgerError("#%s 走的是“%s”流程，修订稿写的是“%s”：流程在新建时选定，改不了；要换流程，另开一条%s" % (
+                item_id, it["flow"], d.flow, cn))
+        if it["state"] in closed_states(lg):
+            raise LedgerError("#%s 已经是“%s”：工作项关闭以后不再修订" % (item_id, it["state"]))
+        nodes = lg.flow_nodes(item_id) if lg.mode != "offline" else []
+        if nodes and nodes[0]["status"] != "doing":          # allowed from 1.0.10 on; the researcher answers for it
+            at = next((n["name"] for n in nodes if n["status"] == "doing"), None)
+            print("提醒：#%s 已经过了第一步“%s”%s：后面各步已经定下的文档不会跟着%s单变。" % (
+                item_id, nodes[0]["name"], "，现在在“%s”" % at if at else "", cn))
+    elif it is not None:
         requests = ("same_seq", "cross_request")
         relation = "（关系“%s”）" % spec.term("rel", d.rel) if d.rel else ""
         if it.get("type") != wid and it.get("type") in requests and wid in requests:
@@ -2686,9 +2723,14 @@ def revise(lg, item_id, path, note):
         elif it["state"] in closed_states(lg):
             raise LedgerError("#%s 已经是“%s”：工作项关闭以后不再修订" % (item_id, it["state"]))
     previous = int(rec.get("version") or 1)
-    if d.version != previous + 1:
-        raise LedgerError("修订稿是第 %s 版，#%s 现在是第 %d 版：修订稿的“版本”写第 %d 版" % (d.version, item_id, previous, previous + 1))
-    date = orgspec.read_version(d.header.get(orgspec.VERSION))[1]
+    if sheet:                                     # a sheet has no 版本 line: its versions are counted here
+        d.version, date = previous + 1, datetime.date.today().isoformat()
+    else:
+        if d.version != previous + 1:
+            raise LedgerError("修订稿是第 %s 版，#%s 现在是第 %d 版：修订稿的“版本”写第 %d 版" % (d.version, item_id, previous, previous + 1))
+        date = orgspec.read_version(d.header.get(orgspec.VERSION))[1]
+    name, title = naming(spec, d, sheet) if title_of(d.text) else (None, None)
+    title = title.replace("<工作项 ID>", str(item_id)) if title else None
     kinds = receipt_kind(spec, wid, d)
     updates = []                                  # field values are read before anything is written
     if wid == "decision" and kinds.get("urgency"):
@@ -2703,6 +2745,17 @@ def revise(lg, item_id, path, note):
         except (LedgerError, KeyError, orgspec.OrgSpecError) as e:
             print("提醒：跳过字段 %s（之后可以用 update 补）：%s" % (wanted[0], e))
     updates += header_fields(lg, wid, d)
+    if sheet:                                     # the task takes the sender and the sequence of this version: the
+        wanted = [("sender", d.author)] if d.author else []           # first sheet is the one init wrote
+        if "sequence" in lg.contract.slots(wid, "fields"):
+            wanted.append(("sequence", spec.term("seq", d.sender_seq or "pmo")))
+        for ref, raw in wanted:
+            try:
+                updates.append(lg.entry(wid, ref, raw))
+            except (LedgerError, KeyError, orgspec.OrgSpecError) as e:
+                print("提醒：跳过字段 %s（之后可以用 update 补）：%s" % (ref, e))
+    if name and it is not None and it.get("name") and it["name"] != name:  # the title changed: the item is renamed,
+        updates.append({"field_key": "name", "field_value": name})         # and its document below
     if d.source and "source_item" in lg.contract.slots(wid, "fields"):   # the upstream item this version names,
         try:                                                              # as register writes it
             updates.append(lg.entry(wid, "source_item", item_id_of(d.source)))
@@ -2712,6 +2765,7 @@ def revise(lg, item_id, path, note):
     url = lg.doc_url(item_id, it)
     heads = heading_ids(lg, url)
     status = next((b for b, t in heads if t == "状态包"), None)
+    retitle = None
     if lg.mode == "offline":
         status = status or "<状态包标题的 block_id>"
         first, last = "<主文档第一块的 block_id>", "<状态包前一块的 block_id>"
@@ -2723,6 +2777,8 @@ def revise(lg, item_id, path, note):
         whole = lg.lark("docs", "+fetch", "--doc", url, "--detail", "with-ids")
         first, last = opening_blocks(whole_document(doc_content(whole)), status) if whole is not None else (
             "<主文档第一块的 block_id>", "<状态包前一块的 block_id>")
+        doc_id, doc_title = title_block(whole) if whole is not None else (None, None)
+        retitle = (doc_id, doc_title) if title and doc_id and doc_title is not None and doc_title.strip() != title else None
     done, logged = [], False                      # what is written already, should a later step fail
     try:
         if updates:                               # the fields first: nothing in the document has changed if they fail
@@ -2731,6 +2787,14 @@ def revise(lg, item_id, path, note):
         lg.lark("docs", "+update", "--doc", url, "--command", "block_replace", "--start-block-id", first, "--end-block-id", last,
                 "--doc-format", "markdown", "--content", "-", write=True, stdin=body)
         done.append("主文档开头已经换成第 %d 版" % d.version)
+        if retitle:                               # the document's title, and its node's: one block, the document's own
+            try:
+                lg.lark("docs", "+update", "--doc", url, "--command", "block_replace", "--block-id", retitle[0],
+                        "--doc-format", "xml", "--content", "-", write=True, stdin="<title>%s</title>" % html.escape(title, quote=False))
+                print("改名：主文档和它的知识库节点的标题从“%s”改成“%s”。" % (retitle[1].strip(), title))
+            except LedgerError as e:              # not worth stopping a revision for: the text is in place
+                print("提醒：主文档的标题没有改成，还是“%s”；请在网页上把它改成“%s”。原因：%s" % (
+                    retitle[1].strip(), title, str(e).splitlines()[-1]))
         logged = revision_logged(lg, url, heads, d.version, date)
         if not logged:
             lg.lark("docs", "+update", "--doc", url, "--command", "append", "--doc-format", "markdown", "--content", "-", write=True,
@@ -2755,8 +2819,10 @@ def revise(lg, item_id, path, note):
         if wid == "decision" and queue:
             first_seen = rec.get("registered_at") or started_at(lg, item_id)
             hold(lg, item_id, dict(kinds, queue=queue), first_seen, rec.get("rolled_back_at") or rec.get("reopened_at"))
-        with open(path, "w", encoding="utf-8") as f:            # the draft now names its item: it is not registered again
-            f.write(link_line(d.text, "#%s" % item_id, item_id))
+        drifted = write_back(path, d.text, item_id)             # the draft now names its item: it is not registered again
+        if drifted:
+            update_receipt(lg, item_id, draft_changed=True)
+            print("提醒：" + drifted)
         print("修订：#%s 的主文档开头换成第 %d 版（文档链接不变），%s。%s" % (
             item_id, d.version, "交接记录里已经有这一版的一行，没有再加" if logged else "交接记录追加了一行",
             "本地决策状态已按新版本更新。" if wid == "decision" and queue else ""))
@@ -3307,8 +3373,7 @@ def main(argv=None):
             p.add_argument("--task", help="所属研究任务的 ID；空间里只有一条没归档的研究任务时不用写")
             p.add_argument("--set", action="append", help="字段=值；字段写名字、约定里的标识或 field_key")
             p.add_argument("--resume", action="store_true")
-            p.add_argument("--existing", metavar="ID",
-                           help="研究任务单的修订稿：换成这条研究任务的主文档，工作项不变；它还在第一步时才能换")
+            p.add_argument("--existing", metavar="ID", help=argparse.SUPPRESS)      # gone with 1.0.10: EXISTING_GONE
     p = sub.add_parser("confirm"); p.add_argument("id")
     p.add_argument("--by", help="请书记员确认这一步的会话名；研究员交代的写 研究员；到期默认 表示照决策包的到期默认动作确认")
     p.add_argument("--set", action="append"); p.add_argument("--node", help="有几个节点同时进行时指明哪一个")
@@ -3389,8 +3454,9 @@ def run_command(lg, args):
     elif args.cmd == "status":
         status(lg, args.id)
     elif args.cmd == "register":
-        register(lg, args.draft, args.source, pairs=args.set, resume=args.resume, doc=args.doc, task=args.task,
-                 existing=args.existing)
+        if args.existing:
+            raise LedgerError(EXISTING_GONE % item_id_of(args.existing))
+        register(lg, args.draft, args.source, pairs=args.set, resume=args.resume, doc=args.doc, task=args.task)
     elif args.cmd == "reply":
         reply(lg, args.draft, args.doc)
     elif args.cmd == "confirm":

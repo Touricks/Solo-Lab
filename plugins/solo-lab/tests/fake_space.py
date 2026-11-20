@@ -10,6 +10,7 @@ started, and keeps the field values; an operation record takes a while to show u
 """
 import copy
 import datetime
+import html
 import json
 import os
 import re
@@ -102,6 +103,7 @@ class FakeSpace:
         self.next_id, self.clock = 7160000001, 1794400000000
         self.lag = 0                       # operation records younger than this many ms are not listed yet
         self.moved = []
+        self.title_fails = False           # a rename of a document is refused
         # STATE_OF names the states of the reference template. A status rule points at a state, not at its name,
         # so a state this space renamed (its id kept) shows its new name: (type_key, name there) -> name here.
         base, self.renamed = snapshot(), {}
@@ -256,6 +258,9 @@ class FakeSpace:
         for f in fields or []:
             if not isinstance(f.get("field_value"), str):
                 raise failed("MCPGatewayRequestMismatch", "argument arguments.fields.field_value must be string, got number")
+            if f["field_key"] == "name":                 # the item's name, as create takes it
+                item["name"] = f["field_value"]
+                continue
             if (self.field(item["type_key"], f["field_key"]) or {}).get("field_type") == "bool" and f["field_key"] == "is_frozen":
                 raise failed("ErrAPIUpdateField", "Update Field Invalid,is_frozen:can not update system calculate field")
             if not self.field(item["type_key"], f["field_key"]):
@@ -456,11 +461,21 @@ class FakeSpace:
             start = ids.index(flags["--start-block-id"]) if flags.get("--start-block-id") else end
             content = '<fragment mode="range">%s</fragment>' % self.xml(blocks[start:end + 1])
         else:
-            content = "<title>%s</title>%s" % (doc["title"], self.xml(blocks))
+            # with ids the title carries the document's own: it is the block a rename replaces
+            ident = ' id="%s"' % doc["document_id"] if flags.get("--detail") == "with-ids" else ""
+            content = "<title%s>%s</title>%s" % (ident, html.escape(doc["title"], quote=False), self.xml(blocks))
         return {"ok": True, "data": {"document": {"content": content, "document_id": doc["document_id"], "revision_id": 1}}}
 
     def doc_update(self, flags, stdin):
         doc = self.doc_of_link(flags.get("--doc"))
+        if flags.get("--command") == "block_replace" and flags.get("--block-id") == doc["document_id"]:
+            m = re.fullmatch(r"\s*<title>(.*)</title>\s*", stdin or "", re.S)       # the title block: a rename
+            if not m or flags.get("--doc-format") != "xml":
+                raise ledger.LedgerError("命令失败（退出码 1）：lark-cli docs +update\nthe title block takes <title>…</title> as xml")
+            if self.title_fails:
+                raise ledger.LedgerError("命令失败（退出码 1）：lark-cli docs +update\npermission denied")
+            doc["title"] = html.unescape(m.group(1))
+            return {"ok": True, "data": {"result": "success", "updated_blocks_count": 1}}
         blocks = self.blocks(doc)
         new = self.parse_blocks(stdin or "")
         if flags.get("--command") == "append":

@@ -10,6 +10,7 @@ rule finds something, and also when a rule finds nothing to look at (then the ru
     long-line      1.0.4 to 1.0.6   setup.py did not start under Python 3.9
     range-read     1.0.4 to 1.0.7   ledger.py revise read nothing of the main document's opening
     project-file   up to 1.0.7      runs/README.md got a .new at every init
+    template-line  up to 1.0.9      a draft that copied the template's 关联工作项 line was sent back
 """
 import argparse
 import ast
@@ -137,17 +138,47 @@ def project_file(root):
     return findings, "%d 个生成的文件，其中要项目往里写的 %d 个" % (len(plan.files), len(invited)), len(invited)
 
 
+def template_line(root):
+    """The 关联工作项 line of a template, copied as it stands, is one the register script takes.
+
+    Two templates read 待建 with a note in brackets after it on that line (the decision template since 1.0.9),
+    and register knew 待建 alone: a decision written from the template was sent back at its first
+    registration. The template and the script were changed apart and nothing held one against the other.
+    Every template line that starts with the placeholder is given to the script's own reading of that line.
+    """
+    scripts = os.path.join(root, PLUGIN, "scripts")
+    sys.path.insert(0, scripts)
+    import ledger
+    findings, lines = [], 0
+    for folder, dirs, names in os.walk(os.path.join(root, PLUGIN, "skills")):
+        dirs[:] = sorted(dirs)
+        for name in sorted(n for n in names if n.endswith(".md")):
+            path = os.path.join(folder, name)
+            with open(path, encoding="utf-8") as f:
+                for n, line in enumerate(f.read().split("\n"), 1):
+                    if not re.match(r"- 关联工作项[：:]\s*(待建|待登记)", line):
+                        continue
+                    lines += 1
+                    try:
+                        ledger.link_line(line + "\n", "#1", "1")
+                    except ledger.LedgerError:
+                        findings.append((path, n, "模板的这一行照抄进草稿，登记脚本不认（它读到的是“%s”）：这一行只写“待建”，"
+                                                  "说明写到模板外面" % line.split("：", 1)[-1].strip()))
+    return findings, "%d 行写着“待建”的模板包头" % lines, lines
+
+
 def line_of(path, text):
     with open(path, encoding="utf-8") as f:
         return next((n for n, line in enumerate(f, 1) if '"%s"' % text in line), 1)
 
 
-RULES = (("long-line", "行长", long_line), ("range-read", "按范围读文档", range_read), ("project-file", "要项目写的文件", project_file))
+RULES = (("long-line", "行长", long_line), ("range-read", "按范围读文档", range_read), ("project-file", "要项目写的文件", project_file),
+         ("template-line", "模板的包头", template_line))
 
 
 def main(argv=None):
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    ap = argparse.ArgumentParser(description="Solo-Lab 插件仓库的 lint：三条规则，各来自一个发布出去的缺陷")
+    ap = argparse.ArgumentParser(description="Solo-Lab 插件仓库的 lint：每条规则来自一个发布出去的缺陷")
     ap.add_argument("--root", default=here, help="要检查的仓库目录，默认是本文件所在的仓库")
     root = os.path.abspath(ap.parse_args(argv).root)
     bad = 0

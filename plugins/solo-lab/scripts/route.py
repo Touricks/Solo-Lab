@@ -16,6 +16,10 @@ The session pool (see pool.py):
                                               for what (pool.json owners), read from the ledger; a preview without --apply
     route.py refill <role> [--count N]        ask for more sessions of a role: a refill request in pool.json and the entry's
                                               inbox; --count 0 withdraws the role's requests
+    route.py todo add --text T [--for ID] [--done-when T]
+                                              something the researcher is to do by hand and that takes no decision:
+                                              a line in pool.json and the entry's inbox, listed after the decisions
+    route.py todo done <n> [--note T]         the to-do is done: taken off the list
     route.py audit                            the soft-rule hits, questions the hooks took out of turns
                                               other sessions woke, wrap-ups that asked by who started the
                                               turn, headers without the app's wrapper, stale work and
@@ -148,7 +152,7 @@ def classify_draft(spec, root, path):
                           steps=["书记员 register 后确认“决定”这一步，填决定内容和决定人", carry, tell])
         return result(spec, "R5", "决策队列来的决策包", next_hop="pmo-scribe",
                       steps=["书记员 register，停在“待决定”",
-                             "登记回执到的那一轮，在状态里提一次：事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）、工作项链接；"
+                             "登记回执到的那一轮，在状态里提一次：事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）、主文档链接；"
                              "紧急程度为“插队”的，这一轮可以在收尾里问研究员一次",
                              "研究员主动来谈时，连同其余待决定的决策和等研究员执行的决策列给他",
                              "研究员定了，书记员确认“决定”这一步，决策到“待执行”；" + carry])
@@ -460,7 +464,10 @@ def children_text(root, policy, claim):
              "use_worktree 写 false，权限模式不填（继承本会话）；name、title、model、prompt、background 照下表原样填。开好马上用返回的桌面会话 ID 运行表里的 expect。"
              "这是研究员初始化这个项目时定下的开法：下一级由上一级开出，侧栏里它才嵌在上一级下面。"
              "应用回“Not started: …”时，是会话自己开出的会话到了应用的上限（同时在跑的满 5 个，或者研究员这条消息以后已经开了 10 个）："
-             "这一个先不开，也不要改提启动卡，回话里写明还差哪一个；研究员在本会话里说了，或者应用再叫醒你时，再照这张表开。"]
+             "这一个先不开，也不要改提启动卡，回话里写明还差哪一个；研究员在本会话里说了，或者应用再叫醒你时，再照这张表开。",
+             "补位请求（route.py refill 记下的）不等研究员来说：记下的那一轮就为表里“补位用”的那一行提一张启动卡。先运行那一行的 expect，把 "
+             "`--desk <…>` 换成 `--card`；再调 start_session，initiation 写 own_initiative，其余参数照那一行。被别的会话叫醒的轮次也能提卡，"
+             "研究员在本会话里点一下，会话就开出来，它自己认领。一条补位请求只提一张卡。"]
     if entry is top and not top.get("children"):
         lines.append("本序列开池时只开 +2，下表只有补位用的行。")
     if full:
@@ -521,6 +528,12 @@ def claim_cmd(spec, root, role, name=None, desk_arg=None, wait=CLAIM_WAIT):
                 print("\n" + more)
             return 0
         permit = pool.permit_for(pl, sid, desk)
+        if not permit and pool.card_permit(pl, pool.canonical(policy, name) if name else None, role):
+            with pool.locked(root) as pl2:           # the session a start card opened: its permit waits under its name
+                held = pool.card_permit(pl2, pool.canonical(policy, name), role)
+                if held:
+                    held.update(session_id=sid, desk=desk or None)
+            continue
         if permit:
             if permit.get("role") != role:
                 print("出错：本会话的许可是 %s（%s），不是 %s。" % (permit["role"], permit["name"], role))
@@ -547,7 +560,7 @@ def claim_cmd(spec, root, role, name=None, desk_arg=None, wait=CLAIM_WAIT):
         time.sleep(2)
 
 
-def expect_cmd(spec, root, name, role, desk=None, session=None):
+def expect_cmd(spec, root, name, role, desk=None, session=None, card=False):
     policy = need_pool(root)
     if not policy:
         return 0
@@ -563,8 +576,11 @@ def expect_cmd(spec, root, name, role, desk=None, session=None):
     if fixed and full != fixed:
         print("出错：%s 的会话名固定是 %s。" % (role, fixed))
         return 1
-    if not desk and not session:
-        print("出错：要给 --desk <桌面会话 ID>（开会话时返回的 ID），终端里测试时给 --session <会话 ID>。")
+    if card and (desk or session):
+        print("出错：--card 是给还没开出来的会话预登记的，不和 --desk、--session 一起用。")
+        return 1
+    if not desk and not session and not card:
+        print("出错：要给 --desk <桌面会话 ID>（开会话时返回的 ID），终端里测试时给 --session <会话 ID>；提启动卡时给 --card。")
         return 1
     if origin == "claim":
         mine, target = policy["agents"][me["role"]], policy["agents"][role]
@@ -604,9 +620,19 @@ def expect_cmd(spec, root, name, role, desk=None, session=None):
                 len(pl["claims"]) + len(pl["permits"]), cap))
             return 1
         pl["permits"].append({"name": full, "role": role, "desk": desk or None, "session_id": session or None,
-                              "by": by, "via": "expect", "at": now()})
-    pool.log_event(root, {"event": "expect", "name": full, "role": role, "desk": desk, "session_id": session, "by": by})
-    print("已预登记 %s（%s），%s。对方运行 route.py claim 时转正。" % (full, role, "桌面会话 %s" % desk if desk else "会话 %s" % session))
+                              "by": by, "via": "card" if card else "expect", "at": now()})
+        if card:                                     # the entry lists the request with where its card waits
+            for r in pl["refills"]:
+                if r.get("role") == role and not r.get("card_in"):
+                    r["card_in"] = by
+                    break
+    pool.log_event(root, {"event": "expect", "name": full, "role": role, "desk": desk, "session_id": session, "by": by,
+                          "card": card or None})
+    if card:
+        print("已预登记 %s（%s），等研究员点启动卡：卡片开出的会话运行 route.py claim %s --as %s 时转正。%d 天内没人认领，这条预登记作废。" % (
+            full, role, role, full, pool.CARD_DAYS))
+    else:
+        print("已预登记 %s（%s），%s。对方运行 route.py claim 时转正。" % (full, role, "桌面会话 %s" % desk if desk else "会话 %s" % session))
     return 0
 
 
@@ -665,8 +691,8 @@ def suggest(policy, rows, role, item, pl):
     if cap and len(pl["claims"]) + len(pl["permits"]) >= cap:
         return "%s 没有空闲的会话，会话池也到了总上限 %d：留在“待开工”排队，等有会话空出来。" % (role, cap)
     if len(mine) < pool.role_limit(policy, role):
-        return "%s 没有空闲的会话，还没到上限 %d：排队，或请研究员在%s的会话里说“补位”（别处运行 route.py refill %s）。" % (
-            role, pool.role_limit(policy, role), opener(policy, role), role)
+        return "%s 没有空闲的会话，还没到上限 %d：排队，或运行 route.py refill %s 记一条补位请求，%s的会话提启动卡，研究员点一下就开。" % (
+            role, pool.role_limit(policy, role), role, opener(policy, role))
     return "%s 没有空闲的会话，已到上限 %d：留在“待开工”排队，等有会话空出来。" % (role, pool.role_limit(policy, role))
 
 
@@ -720,7 +746,14 @@ def print_pool(root, policy, role=None, item=None):
             print("- 待转正：%s（%s），预登记方 %s" % (p.get("name"), p.get("role"), p.get("by")))
     for r in open_refills(pl):
         if not role or r.get("role") == role:
-            print("- 补位请求：%s ×%s（%s，%s 提）" % (r.get("role"), r.get("count", 1), r.get("by"), str(r.get("at"))[:16]))
+            where = pl["claims"].get(r.get("card_in") or "") or {}
+            card = ("；启动卡在 %s 的会话里（桌面会话 %s），研究员点一下就开" % (r["card_in"], where.get("desk") or "未知") if r.get("card_in")
+                    else "；还没有提启动卡")
+            print("- 补位请求：%s ×%s（%s，%s 提）%s" % (r.get("role"), r.get("count", 1), r.get("by"), str(r.get("at"))[:16], card))
+    for t in ([] if role else open_todos(pl)):
+        print("- 研究员待办 %d：%s（%s 提，%s%s%s）" % (
+            t["n"], t.get("text"), t.get("by"), str(t.get("at"))[:16], "，为 #%s" % t["item"] if t.get("item") else "",
+            "；做完算数：%s" % t["done_when"] if t.get("done_when") else ""))
     mixed = pool.mixed_modes(rows)
     if mixed:
         print("提醒：%s 的权限模式和池里多数会话不是一类（bypass 和其他模式之间的消息会被扣下）。" % "、".join(mixed))
@@ -863,6 +896,50 @@ def watch_cmd(root, policy, once=False, every=30):
         time.sleep(every)
 
 
+def open_todos(pl):
+    return [t for t in pl.get("todos", []) if isinstance(t.get("n"), int)]
+
+
+def todo_cmd(spec, root, action, n=None, text=None, item=None, done_when=None, note=None):
+    """研究员待办: what a session needs the researcher to do by hand where nothing is to be decided (fetch a
+    key, connect a VPN, restore a connection). Until 1.0.9 it took a decision package, six to eight turns
+    each. It is a line in pool.json that the entry lists after the decisions; no work item, no document.
+    What tells it from a decision is for the session that writes it to judge: nothing here checks."""
+    policy = need_pool(root)
+    if not policy:
+        return 0
+    by = sender_label(*caller(root, policy))
+    if action == "add":
+        if not (text or "").strip():
+            print("出错：--text 写要研究员做什么")
+            return 1
+        item = str(item).lstrip("#") if item else None
+        with pool.locked(root) as pl:
+            number = max([t["n"] for t in open_todos(pl)] + [int(pl.get("todo_seq") or 0)]) + 1
+            pl["todo_seq"] = number
+            pl["todos"].append({"n": number, "text": text.strip(), "item": item, "done_when": (done_when or "").strip() or None,
+                                "by": by, "at": now()})
+        pool.log_event(root, {"event": "todo", "n": number, "by": by, "item": item, "line": text.strip()[:200]})
+        entry = policy["agents"][policy["entry_role"]].get("fixed_session") or "PMO-p2-01"
+        append_inbox(root, entry, {"id": uuid.uuid4().hex[:12], "ts": now(), "from": by, "read": False,
+                                   "text": "研究员待办 %d：%s%s。研究员来谈时跟在决策清单后面列出，研究员待办不算决策；他做完了，运行 route.py todo done %d。" % (
+                                       number, text.strip(), "（为 #%s）" % item if item else "", number)})
+        print("已记研究员待办 %d：%s。入口向研究员列出时会带上它。研究员做完了，或者你自己核对到了结果，"
+              "运行 route.py todo done %d --note '<研究员的话或核对到的结果>'。" % (number, text.strip(), number))
+        return 0
+    with pool.locked(root) as pl:
+        hit = next((t for t in open_todos(pl) if t["n"] == n), None)
+        if hit:
+            pl["todos"].remove(hit)
+    if not hit:
+        print("没有编号 %s 的研究员待办；route.py pool 列着现在还开着的。" % n)
+        return 1
+    pool.log_event(root, {"event": "todo_done", "n": n, "by": by, "item": hit.get("item"), "line": (note or "").strip()[:200]})
+    print("研究员待办 %d 已销掉：%s。%s" % (n, hit["text"], "请书记员在 #%s 下加一条评论，写研究员做了什么%s。" % (
+        hit["item"], "（%s）" % note.strip() if (note or "").strip() else "") if hit.get("item") else ""))
+    return 0
+
+
 def refill_cmd(spec, root, role, count=1):
     policy = need_pool(root)
     if not policy:
@@ -889,9 +966,25 @@ def refill_cmd(spec, root, role, count=1):
     pool.log_event(root, {"event": "refill", "role": role, "count": count, "by": by})
     entry = policy["agents"][policy["entry_role"]].get("fixed_session") or "PMO-p2-01"
     append_inbox(root, entry, {"id": uuid.uuid4().hex[:12], "ts": now(), "from": by, "read": False,
-                               "text": "补位请求：%s 再开 %d 个会话。研究员来谈时跟在决策清单后面列出，补位请求不算决策；研究员在%s的会话里说“补位”时开。" % (
+                               "text": "补位请求：%s 再开 %d 个会话。研究员来谈时跟在决策清单后面列出，补位请求不算决策；%s的会话会提一张启动卡，"
+                                       "研究员在那个会话里点一下就开。列的时候照 route.py pool 写明卡片在哪个会话。" % (
                                    role, count, opener(policy, role, "那个序列"))})
-    print("已记补位请求：%s ×%d，研究员来谈时入口会列出。现在不开会话，也不提卡片。新会话认领后这条请求自动销掉。" % (role, count))
+    me, origin = caller(root, policy)
+    mine, target = (policy["agents"].get(me["role"]) if me else None), policy["agents"][role]
+    opens = bool(mine) and mine["sequence"] == target["sequence"] and me["role"] != role and (
+        mine["rank"] == target["rank"] + 1 or mine["rank"] == 2 and not (policy.get("pool") or {}).get("p1"))
+    if opens:
+        how = ("这个角色由你开：本轮接着提一张启动卡，照 `route.py claim %s --as %s` 输出里“补位用”的那一行"
+               "（先 expect --card，再 start_session，initiation 写 own_initiative）。" % (me["role"], me["name"]))
+    else:
+        pl, _ = pool.load(root)
+        up = sorted(c["name"] for c in pl["claims"].values() if c.get("role") in policy["agents"]
+                    and policy["agents"][c["role"]]["sequence"] == target["sequence"]
+                    and policy["agents"][c["role"]]["rank"] == target["rank"] + 1)
+        how = "这个角色由%s开：%s" % (opener(policy, role), "给 %s 发一条【%s】，请它为这条补位请求提启动卡。" % (
+            "、".join(up), spec.term("msg", "notice")) if up else "那一级还没有会话，先请研究员开出来。")
+    print("已记补位请求：%s ×%d。要研究员在提卡片的那个会话里点一下才会开，不会自动开；入口向研究员列出时附那个会话。%s新会话认领后这条请求自动销掉。" % (
+        role, count, how))
     return 0
 
 
@@ -1120,6 +1213,7 @@ def main(argv=None):
     p.add_argument("--role", required=True)
     p.add_argument("--desk")
     p.add_argument("--session")
+    p.add_argument("--card", action="store_true", help="给启动卡将要开出的会话预登记：按会话名等它认领，不带桌面会话 ID")
     p = sub.add_parser("release", allow_abbrev=False)
     p.add_argument("name")
     p = sub.add_parser("pool")
@@ -1134,6 +1228,13 @@ def main(argv=None):
     p = sub.add_parser("refill")
     p.add_argument("role")
     p.add_argument("--count", type=int, default=1, help="再要几个会话；0 是撤回这个角色的补位请求")
+    p = sub.add_parser("todo")
+    p.add_argument("action", choices=("add", "done"))
+    p.add_argument("n", nargs="?", type=int, help="done 时写：要销掉的研究员待办的编号")
+    p.add_argument("--text", help="add 时写：要研究员做什么")
+    p.add_argument("--for", dest="item", metavar="ID", help="add 时写：为哪条工作项")
+    p.add_argument("--done-when", help="add 时写：做完怎么算数")
+    p.add_argument("--note", help="done 时写：研究员的话，或者核对到的结果")
     p = sub.add_parser("audit")
     p.add_argument("--hours", type=int, default=24)
     p = sub.add_parser("listen")
@@ -1163,13 +1264,18 @@ def main(argv=None):
     if args.cmd == "claim":
         return claim_cmd(spec, root, args.role, args.name, args.desk, args.wait)
     if args.cmd == "expect":
-        return expect_cmd(spec, root, args.name, args.role, args.desk, args.session)
+        return expect_cmd(spec, root, args.name, args.role, args.desk, args.session, args.card)
     if args.cmd == "release":
         return release_cmd(spec, root, args.name)
     if args.cmd == "pool":
         return pool_cmd(spec, root, args)
     if args.cmd == "refill":
         return refill_cmd(spec, root, args.role, args.count)
+    if args.cmd == "todo":
+        if args.action == "done" and args.n is None:
+            print("出错：todo done 后面写编号，route.py pool 列着")
+            return 1
+        return todo_cmd(spec, root, args.action, args.n, args.text, args.item, args.done_when, args.note)
     if args.cmd == "audit":
         return audit_cmd(spec, root, args.hours)
     ap.print_help()

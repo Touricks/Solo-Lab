@@ -182,8 +182,9 @@ FEISHU = "照路由决策表处理"
 ENTRY_WOKEN = ("本轮由其他 agent 会话叫醒%s，研究员多半不在。面向研究员最多写一行状态：不提问，不标“等研究员回答”，"
                "不复述已经登记过的决策；收尾里的提问会被 hook 去掉。")
 POOL_WOKEN = "本轮由其他 agent 会话叫醒%s：不向研究员提问，要拍板的事照规则写进包里；收尾里的提问会被 hook 去掉。"
-QUEUED = "本轮登记了待定决策 #%s：在这一行状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和工作项链接，不超过 3 行。"
+QUEUED = "本轮登记了待定决策 #%s：在这一行状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和主文档链接，不超过 3 行。"
 URGENT = "它是插队的：本轮可以在收尾里问研究员一次。"
+URGENT_AMONG = "其中 #%s 是插队的：本轮可以在收尾里问研究员一次。"
 # The app reports a session this one opened from the wrap-up as the model wrote it, before guard.py
 # took the question out (seen 2026-11-15).
 SIDE_REPORT = "回报里说它在等研究员、带着提问的，不转告研究员：被其他 agent 会话叫醒的轮次，它收尾里的提问已被 hook 去掉。"
@@ -191,7 +192,7 @@ FIRST_TALK = "研究员来谈了。"           # no earlier message of theirs on
 BACK_AFTER = "研究员隔了 %d 分钟回来。"
 LIST_DUE = ("先回答研究员，再跑 python3 -I .claude/solo-lab/bin/ledger.py query queue，"
             "把待决定的决策和等研究员执行的决策附在末尾，每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接，"
-            "改过版的在事项后面写版本号；route.py pool 里还没处理的补位请求一起列，补位请求不算决策。都没有就不附。")
+            "改过版的在事项后面写版本号；route.py pool 里还开着的研究员待办和补位请求一起列，它们不算决策，补位请求写明启动卡在哪个会话里。都没有就不附。")
 SOURCE_SHOWN = 80                     # characters of the sender's title shown
 # The local decision state ledger.py keeps (1.0.4): the decisions still waiting, with what each of them freezes.
 GATES_FILE = "gates.json"
@@ -230,19 +231,20 @@ def announced(root, item_id):
     return any(r.get("event") == "decision_announced" and str(r.get("id")) == str(item_id) for r in pool.read_events(root))
 
 
-def woken_text(source, entry, item=None, receipt=None):
+def woken_text(source, entry, fresh=()):
     """A turn another agent session started: nobody to ask. The entry also mentions, this once, the
-    decision the turn's register receipt put into the queue (receipt), and may ask about one that
-    jumps the queue. The report of a session this one opened may still say it waits on the researcher."""
+    decisions the turn's register receipt put into the queue (fresh: (ID, receipt) each), and may ask about
+    one that jumps the queue. The report of a session this one opened may still say it waits on the researcher."""
     sender = "（来自 %s）" % source[:SOURCE_SHOWN] if source else ""
     side = SIDE_REPORT if source == pool.FROM_MY_SESSIONS else ""
     if not entry:
         return POOL_WOKEN % sender + side
     text = ENTRY_WOKEN % sender + side
-    if receipt:
-        text += QUEUED % item
-        if receipt.get("urgent") is True:
-            text += URGENT
+    if fresh:
+        text += QUEUED % "、#".join(str(item) for item, _ in fresh)
+        urgent = [str(item) for item, rec in fresh if rec.get("urgent") is True]
+        if urgent:
+            text += URGENT if len(fresh) == 1 else URGENT_AMONG % "、#".join(urgent)
     return text
 
 
@@ -365,13 +367,17 @@ def pool_prompt(data, policy, root):
     msg = pool.parse_message(policy, body) if who.origin == "claim" else None
     entry = who.origin == "claim" and who.role == policy.get("entry_role")
     pl, ok = pool.load(root)
-    receipt = None
+    fresh = []                                          # (ID, receipt) of the decisions this receipt is the first word of
     if entry and ok and origin == "agent" and msg and msg["kind"] == "register_receipt" \
             and pool.addressed_to(policy, pl, msg, who.claim):
-        receipt = queued_decision(root, msg.get("id"))
-        if receipt and (announced(root, msg["id"]) or receipt.get("revisions")):
-            receipt = None                              # a later receipt for it, or a revision: nothing new for the researcher
-    ask_ok = msg["id"] if receipt and receipt.get("urgent") is True else None
+        # every item the header names: the scribe answers several requests with one 【登记回执 #A / #B】, and until
+        # 1.0.9 only the first counted, so a decision named second was announced by a later receipt about it
+        for item in msg.get("ids") or [msg.get("id")]:
+            rec = queued_decision(root, item)
+            # a later receipt for it, or a revision: nothing new for the researcher
+            if rec and not announced(root, item) and not rec.get("revisions") and item not in [i for i, _ in fresh]:
+                fresh.append((item, rec))
+    ask_ok = next((item for item, rec in fresh if rec.get("urgent") is True), None)
     at = pool.now()
     stamp = pool.stamp(at)
 
@@ -398,9 +404,9 @@ def pool_prompt(data, policy, root):
     pending = load_pending(root)
     due = expired(pending, at, pool.expiry_hours(root)[0]) if entry and pending else []
     if origin == "agent":
-        parts.append(woken_text(source, entry, msg and msg.get("id"), receipt))
-        if receipt:
-            pool.log_event(root, {"event": "decision_announced", "id": msg["id"], "urgent": receipt.get("urgent") is True,
+        parts.append(woken_text(source, entry, fresh))
+        for item, rec in fresh:
+            pool.log_event(root, {"event": "decision_announced", "id": item, "urgent": rec.get("urgent") is True,
                                   "seen_by": me["name"], "session_id": sid})
     elif origin == "researcher" and entry and not opened:
         text = back_text(prev, at, [i for i, e in due if not pool.takes_default(e)])

@@ -226,31 +226,71 @@ class RegisterTest(LedgerCase):
                                          self.value(bare, "research_task", "sequence"))["label"], "算法")
         self.assertEqual(self.value(bare, "research_task", "sender"), "Alg-p2-01")
 
-    def test_a_revised_sheet_becomes_the_main_document_of_its_task(self):
+    def test_a_revised_sheet_takes_the_place_of_the_one_before_in_the_same_document(self):
+        """1.0.10: a 研究任务单 is revised in place, like a package. Until 1.0.9 its revision became a new document
+        (register --existing): the link changed every time, the comments stayed on the one before, and the old
+        documents piled up under the node."""
         task = self.task()
         old = self.value(task, "research_task", "main_doc")
-        revised = self.write((SHEET % ("验证", "产品 +2（Product-p2-01）")).replace("复现并测量基线", "复现基线并测波动"), "v2.md")
+        docs = len(self.fake.docs)
+        revised = self.write((SHEET % ("验证", "算法 +2（Alg-p2-01）")).replace("测出分数和波动", "测出分数、波动和耗时"), "v2.md")
         lg = self.lg()
-        _, text = self.out(ledger.register, lg, revised, existing=task)
-        self.assertEqual(lg.wrote("workitem", "create"), [])                             # the work item stays
-        self.assertNotEqual(self.value(task, "research_task", "main_doc"), old)
-        self.assertIn("原来那份留在原处", text)
+        _, text = self.out(ledger.revise, lg, task, revised, "补耗时")
+        self.assertEqual(lg.wrote("workitem", "create"), [])                             # the work item stays,
+        self.assertEqual(self.value(task, "research_task", "main_doc"), old)             # and so do the document
+        self.assertEqual(len(self.fake.docs), docs)                                      # and its link
+        self.assertIn("第 2 版（文档链接不变）", text)
+        body = self.fake.doc_of_link(old)["body"]
+        opening = body.split("## 状态包")[0]
+        self.assertIn("测出分数、波动和耗时", opening)
+        self.assertNotIn("测出分数和波动。", opening)
+        self.assertIn("## 状态包", body)                                                  # the document keeps its own
+        self.assertIn("第 2 版（%s）：补耗时" % datetime.date.today().isoformat(), body)
+        self.assertEqual(self.value(task, "research_task", "sender"), "Alg-p2-01")       # sender and sequence follow
+        self.assertEqual(self.receipt(task)["version"], 2)
         with open(revised, encoding="utf-8") as f:
             self.assertIn("- 关联工作项：#%s" % task, f.read())
-        self.assertIn("不要重复登记", self.fails(ledger.register, self.lg(), revised, existing=task))
-        with open(revised, encoding="utf-8") as f:                      # the next revision starts from the registered one
-            again = self.write(f.read().replace("产品 +2（Product-p2-01）", "算法 +2（Alg-p2-01）"), "v2b.md")
-        self.quiet(ledger.register, self.lg(), again, existing=task)
-        self.assertEqual(self.value(task, "research_task", "sender"), "Alg-p2-01")         # sender and sequence follow
+        third = self.write(SHEET % ("验证", "算法 +2（Alg-p2-01）"), "v3.md")              # no 版本 line: counted here
+        self.quiet(ledger.revise, self.lg(), task, third, "改回原来的目标")
+        self.assertEqual(self.receipt(task)["version"], 3)
+        self.assertEqual(self.value(task, "research_task", "main_doc"), old)
         other = self.task(name="t9.md")
-        self.assertIn("关联工作项", self.fails(ledger.register, self.lg(), again.replace("v2b", "v2c") if False else self.write(
-            open(again, encoding="utf-8").read(), "v2c.md"), existing=other))               # it names another task
-        probe = self.write(SHEET % ("试探", "产品 +2（Product-p2-01）"), "v3.md")
-        self.assertIn("流程在新建时选定", self.fails(ledger.register, self.lg(), probe, existing=task))
-        self.assertIn("只给研究任务换主文档", self.fails(ledger.register, self.lg(), self.write(FEEDBACK, "f.md"), existing=task))
+        with open(revised, encoding="utf-8") as f:
+            named = self.write(f.read(), "v2c.md")                                       # it names the first task
+        self.assertIn("关联工作项", self.fails(ledger.revise, self.lg(), other, named, "x"))
+        probe = self.write(SHEET % ("试探", "产品 +2（Product-p2-01）"), "v4.md")
+        self.assertIn("流程在新建时选定", self.fails(ledger.revise, self.lg(), task, probe, "x"))
+        self.assertIn("反馈的主文档没有状态包", self.fails(ledger.revise, self.lg(), task, self.write(FEEDBACK, "f.md"), "x"))
+
+    def test_a_sheet_is_revised_after_its_first_step_too_and_says_so(self):
+        """The researcher's ruling of 2026-11-20: a task past its first step may have its sheet revised, and
+        answers for it. The command says where the task is and goes on."""
+        task = self.task()
         self.quiet(ledger.confirm, self.lg(), task, *STEPS[0])
-        late = self.write(SHEET % ("验证", "产品 +2（Product-p2-01）"), "v4.md")
-        self.assertIn("已经过了第一步", self.fails(ledger.register, self.lg(), late, existing=task))
+        late = self.write((SHEET % ("验证", "产品 +2（Product-p2-01）")).replace("0.5 个点", "1 个点"), "late.md")
+        _, text = self.out(ledger.revise, self.lg(), task, late, "放宽标准")
+        self.assertIn("已经过了第一步", text)
+        self.assertIn("不会跟着研究任务单变", text)
+        self.assertIn("1 个点", self.fake.doc_of_link(self.value(task, "research_task", "main_doc"))["body"])
+
+    def test_a_revision_with_a_new_title_renames_the_item_and_its_document(self):
+        """1.0.10: nothing renamed a main document; an item whose title changed kept a document under the old
+        one. A revision whose title differs renames the item, and replaces the document's title block, which
+        renames the document and its node in the knowledge space with it."""
+        task = self.task()
+        doc = self.fake.doc_of_link(self.value(task, "research_task", "main_doc"))
+        self.assertIn("复现并测量基线", doc["title"])
+        renamed = self.write((SHEET % ("验证", "产品 +2（Product-p2-01）")).replace("# 研究任务单：复现并测量基线", "# 研究任务单：复现基线 & 测波动"), "r.md")
+        _, text = self.out(ledger.revise, self.lg(), task, renamed, "改名")
+        self.assertEqual(self.fake.item(task)["name"], "复现基线 & 测波动")
+        self.assertEqual(doc["title"], "工作项 %s｜研究任务单：复现基线 & 测波动" % task)
+        self.assertIn("改名：主文档和它的知识库节点的标题", text)
+        same = self.write(SHEET % ("验证", "产品 +2（Product-p2-01）"), "s.md")
+        self.fake.title_fails = True                                   # the rename is refused: the revision still lands
+        _, text = self.out(ledger.revise, self.lg(), task, same, "改回")
+        self.assertIn("主文档的标题没有改成", text)
+        self.assertIn("请在网页上把它改成“工作项 %s｜研究任务单：复现并测量基线”" % task, text)
+        self.assertEqual(self.receipt(task)["version"], 3)
 
     def test_the_sheet_init_writes_registers_as_it_is(self):
         import setup
@@ -1238,7 +1278,7 @@ class SourceLineTest(LedgerCase):
         for name in ("request.md", "decision.md"):
             with open(os.path.join(assets, name), encoding="utf-8") as f:
                 text = f.read()
-            self.assertIn("- 关联工作项：待建（这份包自己的工作项，登记后由书记员填）\n- 来源工作项：#<引出", text, name)
+            self.assertIn("- 关联工作项：待建\n- 来源工作项：#<引出", text, name)
             self.assertIn("没有上游的写“无”", text, name)
             self.assertNotIn("执行关系写成", text, name)                 # the line it used to share
 
@@ -1266,6 +1306,97 @@ class SourceLineTest(LedgerCase):
             "- 关联工作项：待建\n", "- 关联工作项：待建\n- 来源工作项：#%s\n" % cross)))
         self.quiet(ledger.revise, self.lg(), item, v2, "补来源工作项")
         self.assertEqual(self.value(item, "decision", "source_item"), cross)
+
+
+class WriteBackTest(LedgerCase):
+    """1.0.10: register and revise wrote the draft back as they had read it ten seconds earlier, with the work
+    item's ID in it: what the author changed in the file meanwhile was gone (it happened to version 2 of a
+    request). The file is read again and only the 关联工作项 line changes; the output and the receipt say that
+    the main document holds the earlier text."""
+
+    def meanwhile(self, added):
+        """ledger.write_back, with the author writing into the draft just before it."""
+        real = ledger.write_back
+
+        def late(path, read_text, item_id):
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(added)
+            return real(path, read_text, item_id)
+        ledger.write_back = late
+        self.addCleanup(setattr, ledger, "write_back", real)
+
+    def test_what_the_author_wrote_meanwhile_stays_in_the_draft(self):
+        self.task()
+        path = self.draft(PERMISSION)
+        self.meanwhile("\n作者在登记期间补的一句。\n")
+        item, out = self.out(ledger.register, self.lg(), path)
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("- 关联工作项：#%s\n" % item, text)
+        self.assertIn("作者在登记期间补的一句。", text)
+        self.assertIn("草稿在命令运行期间改过", out)
+        self.assertIn("没有进主文档", out)
+        self.assertTrue(self.receipt(item)["draft_changed"])
+        self.assertFalse([n for n in os.listdir(os.path.dirname(path)) if ".tmp-" in n])
+
+    def test_an_untouched_draft_gets_its_item_and_no_note(self):
+        self.task()
+        path = self.draft(PERMISSION)
+        item, out = self.out(ledger.register, self.lg(), path)
+        with open(path, encoding="utf-8") as f:
+            self.assertIn("- 关联工作项：#%s\n" % item, f.read())
+        self.assertNotIn("草稿在命令运行期间改过", out)
+        self.assertNotIn("draft_changed", self.receipt(item))
+
+    def test_a_revision_keeps_the_authors_edits_too(self):
+        self.task()
+        item = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION))
+        v2 = self.draft(PERMISSION, "v2.md", edit=version(2, "2026-11-22"))
+        self.meanwhile("\n修订期间补的一句。\n")
+        _, out = self.out(ledger.revise, self.lg(), item, v2, "改措辞")
+        with open(v2, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("- 关联工作项：#%s\n" % item, text)
+        self.assertIn("修订期间补的一句。", text)
+        self.assertIn("草稿在命令运行期间改过", out)
+        self.assertTrue(self.receipt(item)["draft_changed"])
+
+    def test_a_draft_whose_line_is_gone_is_left_alone(self):
+        path = self.write("# 决策包：x\n\n- 包类型：决策包\n- 关联工作项：待建\n\n## 背景\n")
+        with open(path, encoding="utf-8") as f:
+            read = f.read()
+        gone = read.replace("- 关联工作项：待建\n", "")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(gone)
+        note = ledger.write_back(path, read, "2140")
+        self.assertIn("#2140", note)
+        self.assertIn("草稿没有动", note)
+        with open(path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), gone)
+
+
+class PlaceholderTest(LedgerCase):
+    """1.0.10: the 关联工作项 line of two templates read 待建 with a note in brackets after it (the decision
+    template since 1.0.9), and register sent back a draft that copied the line: it knew 待建 alone. The
+    templates say 待建 and nothing else on that line; drafts written from the earlier ones still register."""
+
+    def test_the_templates_say_only_the_placeholder(self):
+        for skill, name in (("packages", "request.md"), ("packages", "decision.md"), ("charter", "charter.md")):
+            with open(os.path.join(ROOT, "skills", skill, "assets", name), encoding="utf-8") as f:
+                self.assertIn("\n- 关联工作项：待建\n", f.read(), name)
+
+    def test_a_note_after_the_placeholder_is_still_a_placeholder(self):
+        self.task()
+        noted = lambda t: t.replace("- 关联工作项：待建\n", "- 关联工作项：待建（这份包自己的工作项，登记后由书记员填）\n")
+        path = self.draft(PERMISSION, edit=noted)
+        item = self.quiet(ledger.register, self.lg(), path)
+        with open(path, encoding="utf-8") as f:
+            self.assertIn("- 关联工作项：#%s\n" % item, f.read())
+
+    def test_another_items_id_is_no_placeholder(self):
+        self.assertFalse(ledger.is_placeholder("#2100"))
+        self.assertFalse(ledger.is_placeholder("待建的那一条 #2100"))
+        self.assertTrue(ledger.is_placeholder("待登记（登记后填）"))
 
 
 class ArchiveTest(LedgerCase):
@@ -1452,6 +1583,12 @@ class MainTest(LedgerCase):
         self.ids(lambda ids: ids["meegle"].pop("bound_at"))
         code, text = self.run_main("get", "2101")
         self.assertIn("还没绑定飞书空间", text)
+
+    def test_register_existing_points_at_revise(self):
+        code, text = self.run_main("register", "x.md", "--existing", "2101", "--apply")
+        self.assertEqual(code, 1)
+        self.assertIn("register --existing 停用了", text)
+        self.assertIn("ledger.py revise 2101", text)
 
     def test_the_old_commands_are_gone(self):
         for argv in (["transition", "2101", "执行中"], ["register", "x.md", "--existing"]):
@@ -2149,7 +2286,7 @@ class DecisionStateTest(LedgerCase):
             PERMISSION, "bad.md", edit=version(4, "2026-11-24", lambda t: t.replace("## 约束的出处", "## 限制"))), "x"))
         request = self.quiet(ledger.register, self.lg(), self.draft(ASSIGN, "a.md"))
         self.assertIn("包类型不变才能修订", self.fails(ledger.revise, self.lg(), request, self.draft(PERMISSION, "v4.md", edit=version(2, "2026-11-24")), "x"))
-        self.assertIn("研究任务单不用 revise", self.fails(ledger.revise, self.lg(), request, self.write(SHEET % ("验证", "产品 +2（Product-p2-01）"), "s.md"), "x"))
+        self.assertIn("修订稿是研究任务单", self.fails(ledger.revise, self.lg(), request, self.write(SHEET % ("验证", "产品 +2（Product-p2-01）"), "s.md"), "x"))
         self.assertIn("交付包不是主文档", self.fails(ledger.revise, self.lg(), request, self.draft(DELIVERY, "dl.md", edit=lambda t: t.replace(
             "第 1 版（2026-11-02）", "第 2 版（2026-11-03）")), "x"))
         self.quiet(ledger.confirm, self.lg(), item, "研究员", ["决定内容=本机 Docker", "决定人=研究员"], option="本机 Docker")

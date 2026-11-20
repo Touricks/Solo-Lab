@@ -187,9 +187,10 @@ def check_lark(inv, c, who, policy, data, soft, rewritable):
     key, pol, name = c["key"], who.pol, who.label
     if c["help"]:
         return Verdict("allow", "查看帮助"), None
-    if c["yes"]:
+    mine = key in pol.get("lark_high_risk", ())      # the scribe's wiki +node-delete: a document goes to the recycle bin
+    if c["yes"] and not mine:
         return Verdict("deny", "带 --yes 的命令只能由研究员本人执行。不要自己加 --yes；把完整命令写进交付的内容。"), None
-    if c["tier"] == "high-risk-write":
+    if c["tier"] == "high-risk-write" and not mine:
         return Verdict("deny", "%s 是 high-risk-write，只能由研究员本人执行。把完整命令写进交付的内容。" % key), None
     if c["dry_run"]:
         return Verdict("allow", "--dry-run 只预览"), None
