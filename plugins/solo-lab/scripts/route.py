@@ -12,7 +12,10 @@ The session pool (see pool.py):
     route.py expect NAME --role R (--desk ID | --session ID)   pre-register a session you opened
     route.py release NAME                     the researcher frees a claim (it becomes a tombstone)
     route.py pool [--role R] [--item ID] [--queue NAME] [--recover] [--watch [--once]]
-    route.py refill <role> [--count N]        ask for more sessions of a role: a refill request in pool.json and the entry's inbox
+    route.py pool --prune [--apply]           take archived and terminated work items out of the table of who answers
+                                              for what (pool.json owners), read from the ledger; a preview without --apply
+    route.py refill <role> [--count N]        ask for more sessions of a role: a refill request in pool.json and the entry's
+                                              inbox; --count 0 withdraws the role's requests
     route.py audit                            the soft-rule hits, questions the hooks took out of turns
                                               other sessions woke, wrap-ups that asked by who started the
                                               turn, headers without the app's wrapper, stale work and
@@ -868,6 +871,19 @@ def refill_cmd(spec, root, role, count=1):
         print("出错：没有角色 %s" % role)
         return 1
     by = sender_label(*caller(root, policy))
+    if count < 0:
+        print("出错：--count 写 0 是撤回这个角色的补位请求，写正数是再要几个会话")
+        return 1
+    if count == 0:                                   # withdrawn: until a session of the role was opened, a request stayed
+        with pool.locked(root) as pl:
+            dropped = [r for r in pl["refills"] if r.get("role") == role]
+            pl["refills"] = [r for r in pl["refills"] if r.get("role") != role]
+        if not dropped:
+            print("没有 %s 的补位请求，没有东西可撤。" % role)
+            return 0
+        pool.log_event(root, {"event": "refill_withdrawn", "role": role, "by": by, "requests": len(dropped)})
+        print("已撤回 %s 的补位请求（%d 条）。入口的清单里不再列它。" % (role, len(dropped)))
+        return 0
     with pool.locked(root) as pl:
         pl["refills"].append({"role": role, "count": count, "by": by, "at": now()})
     pool.log_event(root, {"event": "refill", "role": role, "count": count, "by": by})
@@ -977,10 +993,50 @@ def audit_cmd(spec, root, hours=24):
     return 0
 
 
+def prune_cmd(root, apply=False):
+    """Take the work items that are archived or terminated out of pool.json's owners. A work item is terminated
+    on the web page, where no script sees it, and one archived before 1.0.9 stayed in the table too: the table
+    is checked against the ledger. Nothing is written without --apply, nothing when the ledger cannot be read,
+    and nothing but these entries is touched."""
+    pl, ok = pool.load(root)
+    if not ok:
+        print("出错：读不出 .claude/state/pool.json；请研究员先处理。")
+        return 1
+    owners = pl.get("owners") or {}
+    gone = []
+    try:
+        lg = ledger.Ledger(root, "preview")
+        for item, name in sorted(owners.items()):
+            it = lg.item(item)
+            if it is None:
+                raise ledger.LedgerError("读不到 #%s" % item)
+            if ledger.finished(lg, it.get("state"), it.get("type")):
+                gone.append((item, name, it.get("state"), it.get("name") or ""))
+    except (ledger.LedgerError, orgspec.OrgSpecError) as e:
+        print("出错：台账读不到，认领表没有动：%s" % str(e)[:300])
+        return 1
+    if not gone:
+        print("认领表里的 %d 条工作项都还没归档，也没终止，没有要移出的。" % len(owners))
+        return 0
+    print("认领表里有 %d 条工作项，其中 %d 条已经归档或终止：" % (len(owners), len(gone)))
+    for item, name, state, title in gone:
+        print("- #%s（%s）%s，认领表里记在 %s 名下" % (item, state, title, name))
+    if not apply:
+        print("这是预览，认领表没有动。加 --apply 才把这 %d 条移出。" % len(gone))
+        return 0
+    with pool.locked(root) as held:
+        done = [item for item, name, _, _ in gone if held.get("owners", {}).get(item) == name and held["owners"].pop(item)]
+    pool.log_event(root, {"event": "prune", "items": done})
+    print("已从认领表移出 %d 条。" % len(done))
+    return 0
+
+
 def pool_cmd(spec, root, args):
     policy = need_pool(root)
     if not policy:
         return 0
+    if args.prune:
+        return prune_cmd(root, args.apply)
     if args.recover:
         return recover_cmd(root, policy)
     if args.watch:
@@ -1073,9 +1129,11 @@ def main(argv=None):
     p.add_argument("--recover", action="store_true")
     p.add_argument("--watch", action="store_true")
     p.add_argument("--once", action="store_true")
+    p.add_argument("--prune", action="store_true", help="对照台账，把已归档和已终止的工作项移出认领表；不加 --apply 只预览")
+    p.add_argument("--apply", action="store_true", help="和 --prune 一起用：写入")
     p = sub.add_parser("refill")
     p.add_argument("role")
-    p.add_argument("--count", type=int, default=1)
+    p.add_argument("--count", type=int, default=1, help="再要几个会话；0 是撤回这个角色的补位请求")
     p = sub.add_parser("audit")
     p.add_argument("--hours", type=int, default=24)
     p = sub.add_parser("listen")

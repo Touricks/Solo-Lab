@@ -296,9 +296,9 @@ class RegisterTest(LedgerCase):
     def test_execute_request_hangs_under_its_source(self):
         self.task()
         source = self.quiet(ledger.register, self.lg(), self.draft(ASSIGN, "a.md", edit=lambda t: t.replace("产品 +2（Product-p2-01）", "质量 +2（Quality-p2-01）")))
-        text = self.fails(ledger.register, self.lg(), self.draft(EXECUTE, "e.md", edit=lambda t: t.replace("；来源工作项 #2100", "")))
+        text = self.fails(ledger.register, self.lg(), self.draft(EXECUTE, "e.md", edit=lambda t: t.replace("- 来源工作项：#2100\n", "")))
         self.assertIn("--source <ID>", text)
-        item_id = self.quiet(ledger.register, self.lg(), self.draft(EXECUTE, "e2.md", edit=lambda t: t.replace("；来源工作项 #2100", "")), source=source)
+        item_id = self.quiet(ledger.register, self.lg(), self.draft(EXECUTE, "e2.md", edit=lambda t: t.replace("- 来源工作项：#2100\n", "")), source=source)
         self.assertEqual(self.value(item_id, "same_seq", "source_item"), source)
         self.assertEqual(self.value(item_id, "same_seq", "owner_session"), "Quality-p0-%s" % item_id)   # the +0's work name
         parent = self.fake.doc_by(self.value(source, "same_seq", "main_doc").rsplit("/", 1)[1])["node_token"]
@@ -983,7 +983,7 @@ class StepTest(LedgerCase):
     def test_a_p0_asks_under_its_pool_name(self):
         self.task()
         source = self.quiet(ledger.register, self.lg(), self.draft(ASSIGN, "a.md", edit=lambda t: t.replace("产品 +2（Product-p2-01）", "质量 +2（Quality-p2-01）")))
-        request = self.quiet(ledger.register, self.lg(), self.draft(EXECUTE, "e.md", edit=lambda t: t.replace("；来源工作项 #2100", "")), source=source)
+        request = self.quiet(ledger.register, self.lg(), self.draft(EXECUTE, "e.md", edit=lambda t: t.replace("- 来源工作项：#2100\n", "")), source=source)
         self.assertEqual(self.value(request, "same_seq", "owner_session"), "Quality-p0-%s" % request)   # the work name
         for by in ("Alg-p0-01", "Quality-p1-02"):
             self.assertIn("不能请书记员确认这一步", self.fails(ledger.confirm, self.lg(), request, by), by)
@@ -1227,7 +1227,71 @@ class RollbackTest(LedgerCase):
         self.assertEqual(self.state(decision), "已决定")
 
 
+class SourceLineTest(LedgerCase):
+    """1.0.9: a 需求包 or 决策包 names the work item it came from in a header line of its own, 来源工作项. Until
+    then only the template of an execute request mentioned it, on the 关联工作项 line, and in a project every
+    decision and cross-sequence request was registered with the field empty: `ledger.py trace` stopped there.
+    The line is asked for by the templates and nothing checks it: a package without it, or with 无, registers."""
+
+    def test_the_templates_ask_for_the_upstream_item(self):
+        assets = os.path.join(ROOT, "skills", "packages", "assets")
+        for name in ("request.md", "decision.md"):
+            with open(os.path.join(assets, name), encoding="utf-8") as f:
+                text = f.read()
+            self.assertIn("- 关联工作项：待建（这份包自己的工作项，登记后由书记员填）\n- 来源工作项：#<引出", text, name)
+            self.assertIn("没有上游的写“无”", text, name)
+            self.assertNotIn("执行关系写成", text, name)                 # the line it used to share
+
+    def test_a_package_names_its_upstream_item_in_its_header(self):
+        self.task()
+        cross = self.quiet(ledger.register, self.lg(), self.draft(CROSS, "c.md"))
+        named = lambda value: lambda t: t.replace("- 关联工作项：待建\n", "- 关联工作项：待建\n- 来源工作项：%s\n" % value)
+        item = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION, "d.md", edit=named("#%s" % cross)))
+        self.assertEqual(self.value(item, "decision", "source_item"), cross)
+        none = self.quiet(ledger.register, self.lg(), self.draft(REVERSIBLE, "n.md", edit=named("无")))
+        self.assertFalse(self.value(none, "decision", "source_item"))    # 无 is no item, and no reason to send it back
+        plain = self.draft(REVERSIBLE, "p.md", edit=lambda t: t.replace("用 VPN 拉基线依赖", "用镜像拉基线依赖"))
+        with open(plain, encoding="utf-8") as f:
+            self.assertNotIn("来源工作项", f.read().split("\n## ", 1)[0])
+        self.assertTrue(self.quiet(ledger.register, self.lg(), plain))    # nor is a package without the line
+
+    def test_a_revision_writes_the_upstream_item(self):
+        """A package registered before its template had the line gets it with its next version: revise writes
+        the field as register does (until 1.0.8 it left the field alone)."""
+        self.task()
+        cross = self.quiet(ledger.register, self.lg(), self.draft(CROSS, "c.md"))
+        item = self.quiet(ledger.register, self.lg(), self.draft(PERMISSION))
+        self.assertFalse(self.value(item, "decision", "source_item"))
+        v2 = self.draft(PERMISSION, "v2.md", edit=version(2, "2026-11-22", lambda t: t.replace(
+            "- 关联工作项：待建\n", "- 关联工作项：待建\n- 来源工作项：#%s\n" % cross)))
+        self.quiet(ledger.revise, self.lg(), item, v2, "补来源工作项")
+        self.assertEqual(self.value(item, "decision", "source_item"), cross)
+
+
 class ArchiveTest(LedgerCase):
+    def test_an_archived_item_leaves_the_pools_table_of_owners(self):
+        """pool.json owners says which session answers for a work item; the inbox hook writes it when the item
+        is handed over, and until 1.0.8 nothing took an entry out: `route.py pool` listed archived items under
+        their sessions for good. The archive takes the item out, and touches nothing else in the file."""
+        pool = ledger.pool
+        decision, later = self.decision(), self.decision()
+        data = pool.empty()
+        data["owners"] = {str(decision): "PMO-p2-01", "2999": "Alg-p0-01"}
+        data["refills"] = [{"role": "alg-p0", "count": 1, "by": "Alg-p2-01", "at": "2026-11-19T10:00:00-05:00"}]
+        os.makedirs(pool.state_dir(self.tmp), exist_ok=True)
+        pool.save_json(pool.pool_path(self.tmp), data)
+        self.out(ledger.archive, self.lg("preview"), decision, moved=True)
+        self.assertEqual(pool.load(self.tmp)[0]["owners"], data["owners"])           # a preview writes nothing
+        _, out = self.out(ledger.archive, self.lg(), decision, moved=True)
+        self.assertIn("会话池的认领表里移除了 #%s。" % decision, out)
+        self.assertEqual(pool.load(self.tmp)[0], dict(data, owners={"2999": "Alg-p0-01"}))
+        _, out = self.out(ledger.archive, self.lg(), later, moved=True)                # an item no session answers for
+        self.assertNotIn("认领表", out)
+        os.remove(pool.pool_path(self.tmp))                                           # and a project without a pool
+        third = self.decision()
+        self.quiet(ledger.archive, self.lg(), third, moved=True)
+        self.assertFalse(os.path.exists(pool.pool_path(self.tmp)))
+
     def test_archive_only_at_the_last_step(self):
         self.task()
         request = self.quiet(ledger.register, self.lg(), self.draft(ASSIGN))
@@ -1703,7 +1767,7 @@ class ValuesAndReadsTest(LedgerCase):
             ledger.set_value(lg, "@" + gbk)
 
     def test_source_line_with_a_full_width_colon(self):
-        path = self.draft(EXECUTE, edit=lambda t: t.replace("；来源工作项 #2100", "\n- 来源工作项：#2100"))
+        path = self.draft(EXECUTE)
         self.assertEqual(ledger.Draft(self.spec, path).source, "2100")
 
     def test_query_shapes(self):
@@ -1766,7 +1830,7 @@ class ValuesAndReadsTest(LedgerCase):
     def test_trace_follows_the_source(self):
         self.task()
         source = self.quiet(ledger.register, self.lg(), self.draft(ASSIGN, "a.md", edit=lambda t: t.replace("产品 +2（Product-p2-01）", "质量 +2（Quality-p2-01）")))
-        child = self.quiet(ledger.register, self.lg(), self.draft(EXECUTE, "e.md", edit=lambda t: t.replace("；来源工作项 #2100", "")), source=source)
+        child = self.quiet(ledger.register, self.lg(), self.draft(EXECUTE, "e.md", edit=lambda t: t.replace("- 来源工作项：#2100\n", "")), source=source)
         _, text = self.out(ledger.trace, self.lg("preview"), child)
         self.assertEqual([line.split()[0] for line in text.splitlines()], ["#" + child, "#" + source])
 
@@ -2221,7 +2285,7 @@ class DecisionStateTest(LedgerCase):
         second = lambda t: re.sub(r"第 1 版（", "第 2 版（", t, 1)
         text = self.fails(ledger.revise, self.lg(), request, self.draft(CROSS, "c2.md", edit=second), "改成跨序列")
         self.assertEqual(text, "修订稿登记出来是跨序列需求（关系“跨序列”），#%s 是同序列需求：包类型和关系都不变才能修订；要改关系，另写一份登记" % request)
-        text = self.fails(ledger.revise, self.lg(), request, self.draft(EXECUTE, "e2.md", edit=lambda t: second(t).replace("；来源工作项 #2100", "")), "改成执行")
+        text = self.fails(ledger.revise, self.lg(), request, self.draft(EXECUTE, "e2.md", edit=lambda t: second(t).replace("- 来源工作项：#2100\n", "")), "改成执行")
         self.assertEqual(text, "修订稿的关系是“执行”，#%s 登记的是“下发”：包类型和关系都不变才能修订；要改关系，另写一份登记" % request)
         cross = self.quiet(ledger.register, self.lg(), self.draft(CROSS, "c.md"))
         text = self.fails(ledger.revise, self.lg(), cross, self.draft(ASSIGN, "a2.md", edit=second), "改成下发")

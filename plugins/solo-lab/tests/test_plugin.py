@@ -3119,6 +3119,63 @@ class PoolRouteTest(PoolProjectCase):
         code, text = self.route("audit", sid="s-entry")
         self.assertIn("- Alg-p1-01：", text.split("软规则命中", 1)[1].split("其他 agent 会话叫醒的轮次", 1)[0])
 
+    def test_pruning_takes_finished_items_out_of_the_owners_table(self):
+        """1.0.9: pool.json owners follows the ledger on request. A work item is terminated on the web page, where
+        no script sees it (what a researcher does with the requests under a task whose direction changed), and
+        items archived before 1.0.9 stayed in the table: `route.py pool --prune` reads each item's state and takes
+        the archived and the terminated out. A preview unless --apply; nothing written when the ledger cannot be
+        read; nothing else in the file touched."""
+        with pool_lib.locked(self.tmp) as pl:
+            pl["owners"].update({"2101": "Alg-p0-01", "2102": "Alg-p0-01", "2103": "Alg-p1-01"})
+            pl["refills"].append({"role": "alg-p0", "count": 1, "by": "Alg-p2-01", "at": "2026-11-19T10:00:00-05:00"})
+        before = self.pool()
+        states = {"2101": "归档", "2103": "已终止"}                       # the rest are still worked on
+
+        def run(*args, item=None):
+            with mock.patch.object(ledger, "Ledger") as bound:
+                lg = bound.return_value
+                lg.spec, lg.states = orgspec.OrgSpec(), {"same_seq": {"archived": {"name": "归档"}}}
+                lg.item.side_effect = item or (lambda i: {"state": states.get(i, "执行中"), "type": "same_seq", "name": "需求包 %s" % i})
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    code = route.prune_cmd(self.tmp, *args)
+            return code, out.getvalue()
+
+        code, text = run()
+        self.assertEqual(code, 0)
+        self.assertIn("其中 2 条已经归档或终止", text)
+        self.assertIn("- #2101（归档）需求包 2101，认领表里记在 Alg-p0-01 名下", text)
+        self.assertIn("- #2103（已终止）需求包 2103，认领表里记在 Alg-p1-01 名下", text)
+        self.assertNotIn("#2102", text)
+        self.assertIn("这是预览，认领表没有动。加 --apply 才把这 2 条移出。", text)
+        self.assertEqual(self.pool(), before)
+        code, text = run(True, item=mock.Mock(side_effect=ledger.LedgerError("命令失败（退出码 1）：meegle workitem get\n502")))
+        self.assertEqual(code, 1)
+        self.assertIn("出错：台账读不到，认领表没有动", text)
+        self.assertEqual(self.pool(), before)
+        code, text = run(True)
+        self.assertEqual(code, 0)
+        self.assertIn("已从认领表移出 2 条。", text)
+        left = dict(before["owners"])
+        left.pop("2101"), left.pop("2103")
+        self.assertEqual(self.pool(), dict(before, owners=left))        # claims, permits, focus, refills as they were
+        code, text = run(True)
+        self.assertIn("都还没归档，也没终止，没有要移出的。", text)
+
+    def test_a_refill_request_is_withdrawn(self):
+        """Until 1.0.8 a refill request stayed until a session of the role was opened. --count 0 withdraws it."""
+        self.route("refill", "alg-p0", "--count", "2", sid="s-alg2")
+        self.route("refill", "alg-p1", sid="s-alg2")
+        self.assertEqual(sorted(r["role"] for r in self.pool()["refills"]), ["alg-p0", "alg-p1"])
+        code, text = self.route("refill", "alg-p0", "--count", "0", sid="s-alg2")
+        self.assertEqual(code, 0)
+        self.assertIn("已撤回 alg-p0 的补位请求（1 条）", text)
+        self.assertEqual([r["role"] for r in self.pool()["refills"]], ["alg-p1"])
+        self.assertIn("没有 alg-p0 的补位请求", self.route("refill", "alg-p0", "--count", "0", sid="s-alg2")[1])
+        code, text = self.route("refill", "alg-p0", "--count", "-1", sid="s-alg2")
+        self.assertEqual(code, 1)
+        self.assertIn("--count 写 0 是撤回", text)
+
     def test_session_names_in_classify(self):
         sys.path.insert(0, os.path.join(self.tmp, ".claude", "solo-lab", "bin"))
         out = route.classify_text(self.spec, self.tmp, "alg-p1-02 那边的结果出来了吗", True)

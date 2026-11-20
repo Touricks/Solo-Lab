@@ -1327,6 +1327,32 @@ def drop_pending(lg, item_id):
     return True
 
 
+def finished(lg, state, wid):
+    """Is this the state of a work item no session answers for any more: archived, or terminated on the web page?"""
+    return bool(state) and (state in system_states(lg.spec) or bool(wid) and state == (lg.states.get(wid, {}).get("archived") or {}).get("name"))
+
+
+def drop_owner(lg, item_id):
+    """Take a finished work item out of the pool's table of who answers for it (pool.json owners), so that
+    `route.py pool` stops listing it under a session; True when it was there. The table is written by the inbox
+    hook when a session is handed the item and by nothing else, so until 1.0.8 it only grew. A project without
+    a pool, or a pool.json that cannot be read, stops no archive: route.py pool --prune takes it out later."""
+    if lg.mode != "apply":
+        return False
+    try:
+        data, ok = pool.load(lg.root)
+        if not ok or str(item_id) not in (data.get("owners") or {}):
+            return False
+        with pool.locked(lg.root) as held:
+            return held.get("owners", {}).pop(str(item_id), None) is not None
+    except (pool.PoolError, OSError):
+        return False
+
+
+def owner_note(lg, item_id):
+    return "会话池的认领表里移除了 #%s。" % item_id if drop_owner(lg, item_id) else ""
+
+
 
 def doc_from_link(lg, link, given=False):
     """/wiki/ link of a document known by a /wiki/ or /docx/ link or a document_id.
@@ -2677,6 +2703,11 @@ def revise(lg, item_id, path, note):
         except (LedgerError, KeyError, orgspec.OrgSpecError) as e:
             print("提醒：跳过字段 %s（之后可以用 update 补）：%s" % (wanted[0], e))
     updates += header_fields(lg, wid, d)
+    if d.source and "source_item" in lg.contract.slots(wid, "fields"):   # the upstream item this version names,
+        try:                                                              # as register writes it
+            updates.append(lg.entry(wid, "source_item", item_id_of(d.source)))
+        except (LedgerError, KeyError, orgspec.OrgSpecError) as e:
+            print("提醒：跳过字段 source_item（之后可以用 update 补）：%s" % e)
     body = revision_body(d, item_id, lg.item_url(wid, item_id))
     url = lg.doc_url(item_id, it)
     heads = heading_ids(lg, url)
@@ -2790,12 +2821,13 @@ def archive(lg, item_id, moved=False):
         archived = lg.state(wid, lg.contract.flow["archive_node"]["state"])
         if wid == "decision" and it["state"] in system_states(lg.spec):     # terminated on the web page
             gone = drop_pending(lg, item_id)
-            print("#%s 是“%s”，不用归档。%s" % (item_id, it["state"], "本地决策状态里移除了它：冻结解除。" if gone else ""))
+            print("#%s 是“%s”，不用归档。%s%s" % (item_id, it["state"], "本地决策状态里移除了它：冻结解除。" if gone else "",
+                                              owner_note(lg, item_id)))
             return
         if it["state"] == archived:
             if wid == "decision" and drop_pending(lg, item_id):
                 print("本地决策状态里移除了 #%s：冻结解除。" % item_id)
-            print("#%s 已经是“%s”，不用再归档。" % (item_id, archived))
+            print("#%s 已经是“%s”，不用再归档。%s" % (item_id, archived, owner_note(lg, item_id)))
             return
         nodes = lg.flow_nodes(item_id)
         last = next((n for n in nodes if is_last(n)), None)
@@ -2831,6 +2863,9 @@ def archive(lg, item_id, moved=False):
         print("归档：#%s 的主文档整棵子树移到 %s 下（移动的是原节点，文档链接不变），最后一步已确认。" % (item_id, key))
     if wid == "decision" and drop_pending(lg, item_id):
         print("本地决策状态里移除了 #%s：冻结解除。" % item_id)
+    note = owner_note(lg, item_id)
+    if note:
+        print(note)
 
 
 LIST_ITEM = re.compile(r'<li\b[^>]*?\bid="([^"]+)"[^>]*>(.*?)</li>', re.S)
