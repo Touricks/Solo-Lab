@@ -498,13 +498,24 @@ class ContractTest(unittest.TestCase):
             problems = self.contract(change).validate()
             self.assertTrue(any(part in p for p in problems), (part, problems))
 
-    def test_the_template_is_2_3_0(self):
-        """A space is made from template 2.3.0 (plugin 1.1.0 on): 2.2.0 with the research task's flows, six steps,
-        three fields and one option renamed. 2.2.0 was published as a new template with a new link (plugin 1.0.5 on);
-        2.1.0 keeps its own link for plugin 1.0.4 and earlier."""
+    def test_the_template_is_1_1_0(self):
+        """A space is made from template 1.1.0 (plugin 1.1.0 on; from this version the template carries the version
+        of the plugin it is first used with): 2.2.0 with the research task's flows, six steps, three fields and one
+        option renamed. It is published as a template of its own; 2.2.0 keeps its link for plugins 1.0.5 to 1.0.12,
+        2.1.0 for plugin 1.0.4 and earlier."""
         c = orgspec.Contract(orgspec.OrgSpec())
-        self.assertEqual(c.template, {"name": "Solo-Lab 科研模版", "version": "2.3.0",
-                                      "url": "https://project.feishu.cn/templates/detail/67ba9ba510e046fe9bd35be99b883f26"})
+        self.assertEqual((c.template["name"], c.template["version"]), ("Solo-Lab 科研模版", "1.1.0"))
+        self.assertRegex(c.template["url"], r"^https://project\.feishu\.cn/templates/detail/[0-9a-f]{32}$")
+
+    def test_plugin_1_1_0_is_not_released_with_the_link_of_template_2_2_0(self):
+        """A research-task sheet plugin 1.1.0 writes names the flow 正式实验; a space made from template 2.2.0 calls
+        it 验证 and refuses the sheet. While template 1.1.0 is not published the contract still holds the link of
+        2.2.0: the day the plugin's version says 1.1.0, the link has to be the new template's."""
+        with open(os.path.join(orgspec.PLUGIN_ROOT, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+            version = json.load(f)["version"]
+        if tuple(int(n) for n in version.split(".")[:3]) < (1, 1, 0):
+            self.skipTest("plugin %s: template 1.1.0 is not published yet" % version)
+        self.assertNotIn("67ba9ba510e046fe9bd35be99b883f26", orgspec.Contract(orgspec.OrgSpec()).template["url"])
 
     def test_former_state_names_are_checked(self):
         spec = orgspec.OrgSpec()
