@@ -1,4 +1,4 @@
-# 飞书项目模板：Solo-Lab 科研模版
+# Solo-Lab 的飞书项目模板
 
 Solo-Lab 插件把飞书项目空间当任务台账用。空间里有哪些工作项类型、每类怎么走、每一步必填什么，由这个模板决定；插件不内置这些结构，运行时读空间。模板的版本号从 1.1.0 起和插件对齐，见“版本规则”。
 
@@ -6,7 +6,7 @@ Solo-Lab 插件把飞书项目空间当任务台账用。空间里有哪些工�
 | --- | --- |
 | 模板版本 | 1.1.0 |
 | 符合的约定 | `contract_version` 1，见 `plugins/solo-lab/orgspec/contract.json` |
-| 模板中心链接 | <https://project.feishu.cn/templates/detail/67ba9ba510e046fe9bd35be99b883f26>，模板名“Solo-Lab 科研模版”；同一个链接记在约定文件的 `template.url`。这还是 2.2.0 的链接，插件 1.0.5 到 1.0.12 用它：1.1.0 的模板发布以后，这里和约定文件一起换成新链接，2.2.0 的链接留在后面。插件 1.0.4 及以前用 2.1.0：<https://project.feishu.cn/templates/detail/7f032046eb974cab877ce8df79389895>，模板名 research_template |
+| 模板中心链接 | <https://project.feishu.cn/templates/detail/e66f7ed7cc364a60942ca1e719332625>，模板名“Solo-Lab Template v3”；同一个链接记在约定文件的 `template.url`。插件 1.0.5 到 1.0.12 用 2.2.0：<https://project.feishu.cn/templates/detail/67ba9ba510e046fe9bd35be99b883f26>，模板中心里叫“Solo-Lab Template v2”。插件 1.0.4 及以前用 2.1.0：<https://project.feishu.cn/templates/detail/7f032046eb974cab877ce8df79389895>，模板名 research_template |
 | 结构 | [结构.md](结构.md) |
 | 自己搭 | [搭建手册.md](搭建手册.md) |
 | 更新记录 | [更新记录.md](更新记录.md) |
