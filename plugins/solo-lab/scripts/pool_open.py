@@ -258,10 +258,6 @@ def main(args):
     """`pool.py open`, with the arguments pool_cmd.py parsed."""
     try:
         setup.need_python()
-        if os.path.isfile(os.path.join(args.target, ".agent-org", "manifest.json")):
-            import codex_runtime
-            print(setup.dump_json(codex_runtime.Pool(args.target).plan()))
-            return 0
         if args.batch is not None and args.wait is None:
             raise setup.SetupError("--batch 要和 --wait 一起用：pool.py open --target <项目目录> --wait 180 --batch <第几批>")
         if args.wait is not None:

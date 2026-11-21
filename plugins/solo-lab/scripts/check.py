@@ -505,9 +505,6 @@ def main(argv=None):
         if args.cmd == "precheck":
             return precheck()
         if args.cmd == "check":
-            if os.path.isfile(os.path.join(args.target, ".agent-org", "manifest.json")):
-                import codex_setup
-                return codex_setup.check(os.path.abspath(args.target), setup)
             return check(os.path.abspath(args.target), args.live, args.sessions, args.readback)
     except (setup.SetupError, ValueError, OSError) as e:
         print("出错：%s" % e)

@@ -108,9 +108,6 @@ def main(argv=None):
         return 2
     spec = orgspec.OrgSpec()
     root = ledger_core.project_root()
-    if os.path.isfile(os.path.join(root, ".agent-org", "manifest.json")):
-        print("Codex 的会话操作使用 codex_runtime.py；本入口只复用 classify 的业务路由")
-        return 2
     if args.cmd == "done" and args.n is None:
         print("出错：todo done 后面写编号，pool.py show 列着")
         return 1

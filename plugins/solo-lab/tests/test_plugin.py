@@ -630,12 +630,6 @@ class RouteTest(ProjectCase):
         steps = "\n".join(route.classify_draft(self.spec, self.tmp, self.draft(2, "c.md"))["steps"])
         self.assertIn("路由对照台账查重复和冲突", steps)
         self.assertIn("把工作项 ID 用【通知 #ID】回给发起方，由它直接委托 alg-p2", steps)
-        delivery = lambda t: t.replace("- 包类型：需求包", "- 包类型：交付包")
-        # where the entry still passes every package on (the Codex adapter), the hop is the receiving +2 as before
-        for block, hop in ((2, "alg-p2"), (4, "quality-p2")):
-            out = route.classify_draft(self.spec, self.tmp, self.draft(block, "o%d.md" % block), pool_run=False)
-            self.assertEqual((out["row"], out.get("next_hop")), ("R7", hop), block)
-            self.assertIn("请 %s 接单" % hop, "\n".join(out["steps"]))
 
     def test_in_sequence_package_not_routed(self):
         out = route.classify_draft(self.spec, self.tmp, self.draft(0))
@@ -5628,11 +5622,10 @@ class TextsAfterTheGatesTest(PoolProjectCase):
 
     def test_the_side_that_runs_the_experiment_has_its_own_word(self):
         """2026-11-16: 执行方 names one thing only, the line in a decision package's header. Whoever runs the
-        experiment and reports development scores is 实验方, in every text but the changelog's earlier sections
-        and the Codex skills."""
+        experiment and reports development scores is 实验方, in every text but the changelog's earlier sections."""
         old = re.compile(r"执行方[^。；;\n]{0,14}(?:开发分|开发集|正式集)|执行方(?:自己跑|只碰|报的)")
         seen = 0
-        for base, _, files in repo_walk(skip=("skills-codex",)):
+        for base, _, files in repo_walk():
             for name in files:
                 if not name.endswith((".md", ".json", ".py", ".tmpl")) or os.path.join(base, name) == os.path.abspath(__file__):
                     continue

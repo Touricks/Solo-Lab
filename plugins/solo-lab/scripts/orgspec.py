@@ -296,7 +296,7 @@ class OrgSpec:
         crit = self.irreversible().get("criteria") or {}
         return "，".join("%s %s" % (k, v.split("：")[0]) for k, v in sorted(crit.items()))
 
-    # No hook checks the list (1.0.6): the rule stands on its own, in a Claude project and in a Codex one alike.
+    # No hook checks the list (1.0.6): the rule stands on its own.
     IRREVERSIBLE_RULE = ("清单里的事要先有一条研究员批准、所选选项里列了它的决策再做；决策待定期间，包里“冻结的动作”谁都不做。"
                          "hook 不拦这些命令，也不按待定决策冻结，命令的权限照会话自己的权限检查。上面两条规矩不变，靠各会话照规则办和包检查："
                          "选项里列了清单里类别的决策包必须写不可逆，到期只能等研究员。")

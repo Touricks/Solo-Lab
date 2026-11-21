@@ -1297,8 +1297,6 @@ def sender_label(me, origin):
 
 # ------------------------------------------------------------------ pool
 def load_policy(root):
-    if os.path.isfile(os.path.join(root, ".agent-org", "manifest.json")):
-        return load_json(os.path.join(root, ".agent-org", "policy.json"), None)
     return load_json(os.path.join(root, ".claude", "hooks", "policy.json"), None)
 
 

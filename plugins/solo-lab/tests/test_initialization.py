@@ -12,7 +12,6 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-import codex_onboarding
 import onboarding
 import space
 import ledger
@@ -22,56 +21,6 @@ import setup
 
 
 class InitializationTest(unittest.TestCase):
-    def test_begin_before_initialization_keeps_original_clock(self):
-        with tempfile.TemporaryDirectory(prefix="onboarding[scope]-") as root:
-            start = dt.datetime(2026, 11, 4, tzinfo=dt.timezone.utc)
-            codex_onboarding.clock(root, "begin", start)
-            task = Path(__file__).resolve().parents[1] / "scaffold/task.codex.example.json"
-            with mock.patch.object(setup, "run", return_value=(None, "", "offline")), contextlib.redirect_stdout(io.StringIO()):
-                plan = setup.build_plan(root, str(task), None)
-                setup.apply_plan(root, plan, setup.actions_for(root, plan))
-            result = codex_onboarding.clock(root, "status", start + dt.timedelta(seconds=70))
-            self.assertEqual(result["started_at"], start.isoformat())
-            self.assertEqual(result["elapsed_seconds"], 70)
-            self.assertTrue((Path(root) / ".agent-org/pool-plan.json").is_file())
-
-    def test_timer_includes_waits_and_never_resets_on_resume(self):
-        with tempfile.TemporaryDirectory() as root:
-            start = dt.datetime(2026, 11, 4, tzinfo=dt.timezone.utc)
-            first = codex_onboarding.clock(root, "begin", start)
-            again = codex_onboarding.clock(root, "begin", start + dt.timedelta(seconds=301))
-            self.assertEqual(first["started_at"], again["started_at"])
-            self.assertFalse(again["within_budget"])
-            def check(_):
-                print(json.dumps({"ready": True, "issues": []})); return 0
-            with mock.patch.object(codex_onboarding.codex_setup, "check", side_effect=check):
-                result = codex_onboarding.clock(root, "finish", start + dt.timedelta(seconds=301))
-                self.assertFalse(result["timing_pass"])
-                self.assertEqual(result["live_acceptance"], "requires_fresh_remote_readbacks")
-            self.assertEqual(len(codex_onboarding.clock(root, "status", start + dt.timedelta(seconds=302))["attempts"]), 1)
-
-    def test_timer_cannot_begin_after_completion_or_ignore_missing_setup(self):
-        with tempfile.TemporaryDirectory() as root:
-            with self.assertRaises(ValueError): codex_onboarding.clock(root, "finish")
-            start = dt.datetime(2026, 11, 4, tzinfo=dt.timezone.utc)
-            codex_onboarding.clock(root, "begin", start)
-            def check(_):
-                print(json.dumps({"ready": False, "issues": ["缺少绑定"]})); return 1
-            with mock.patch.object(codex_onboarding.codex_setup, "check", side_effect=check):
-                result = codex_onboarding.clock(root, "finish", start + dt.timedelta(seconds=20))
-                self.assertFalse(result["timing_pass"])
-
-    def test_final_verification_time_is_included(self):
-        with tempfile.TemporaryDirectory() as root:
-            start = dt.datetime(2026, 11, 4, tzinfo=dt.timezone.utc)
-            codex_onboarding.clock(root, "begin", start)
-            def check(_):
-                print(json.dumps({"ready": True})); return 0
-            with mock.patch.object(codex_onboarding, "now", side_effect=[start + dt.timedelta(seconds=299),
-                                                                         start + dt.timedelta(seconds=301)]), \
-                 mock.patch.object(codex_onboarding.codex_setup, "check", side_effect=check):
-                self.assertFalse(codex_onboarding.clock(root, "finish")["timing_pass"])
-
     def test_metadata_reads_overlap_and_keep_type_identity(self):
         barrier = threading.Barrier(4)
         def read(key, t):

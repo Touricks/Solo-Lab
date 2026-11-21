@@ -51,20 +51,6 @@ def role_of_session(spec, session):
     return "%s-p%d" % (seq, rank)
 
 
-def focus_state(root):
-    if os.path.isfile(os.path.join(root, ".agent-org", "manifest.json")):
-        import codex_runtime
-        return {b["role"]: b["focus"] for b in codex_runtime.Pool(root).load()["bindings"].values() if b.get("focus")}
-    return {}       # a Claude pool keeps "the researcher is using it" in pool.json; pool_info reports it
-
-
-def focus_for_sequence(root, seq):
-    for role, info in focus_state(root).items():
-        if role.startswith(seq + "-p2"):
-            return role
-    return None
-
-
 # ------------------------------------------------------------- classify
 def classify_text(spec, root, text, offline):
     rows = {r["id"]: r for r in spec.rules["routing"]}
@@ -88,24 +74,21 @@ def classify_text(spec, root, text, offline):
             seq_cn = lg.text_of(it, "sequence")
             seq = next((s for s, cn, _ in spec.sequences() if cn == seq_cn), None)
             owner = lg.text_of(it, "owner_session")
-            focus = focus_for_sequence(root, seq) if seq else None
             return result(spec, "R1", "#%s 存在，状态“%s”" % (item_id, it["state"]), work_item=item_id,
-                          session=owner, focus=focus, pool=pool_info(root, owner, item_id))
+                          session=owner, pool=pool_info(root, owner, item_id))
         for s in sessions:
             role = role_of_session(spec, s)
             if role:
-                return result(spec, "R1", "带会话名 %s" % s, session=s, role=role,
-                              focus=role if role in focus_state(root) else None, pool=pool_info(root, s))
+                return result(spec, "R1", "带会话名 %s" % s, session=s, role=role, pool=pool_info(root, s))
     out = result(spec, None, "没带工作项 ID 或会话名；要按工作项名称、字段和状态包匹配（R2/R3），或判断是不是新任务（R4）、要人拍板（R5）")
     out["needs_router"] = True
     out["candidates"] = [rows[k]["id"] for k in ("R2", "R3", "R4", "R5") if k in rows]
     return out
 
 
-def classify_draft(spec, root, path, pool_run=True):
-    """pool_run: the session pool of the desktop app, where from 1.0.12 a request to another sequence is
-    checked and registered by the router and then goes between the two +2. False keeps the older way, in
-    which the entry passes every package on (the Codex adapter still works like that)."""
+def classify_draft(spec, root, path):
+    """Where a package goes. From 1.0.12 a request to another sequence is checked and registered by the router
+    and then goes between the two +2."""
     with open(path, encoding="utf-8") as f:
         text = f.read()
     errors, _ = orgspec.lint_text(spec, text)
@@ -129,8 +112,7 @@ def classify_draft(spec, root, path, pool_run=True):
                              "研究员主动来谈时，连同其余待决定的决策和等研究员执行的决策列给他",
                              "研究员定了，书记员确认“决定”这一步，决策到“待执行”；" + carry])
     route = next((r for r in spec.rules["package_routes"] if r["pkg"] == d.pid and (r["rel"] or None) == d.rel), None)
-    steps, hop = [], None
-    if pool_run and d.pid == "request" and d.rel == "cross":
+    if d.pid == "request" and d.rel == "cross":
         hop = "%s-p2" % to_seq if to_seq else None
         steps = ["路由对照台账查重复和冲突：ledger.py query cross、ledger.py query open --sequence <承接序列>；所属研究任务冻结的字段和待定决策“冻结的动作”",
                  "没有问题：请书记员 register（“提出”随登记确认，停在待接单），把工作项 ID 用【%s #ID】回给发起方，由它直接委托 %s" % (notice, hop),
@@ -138,22 +120,9 @@ def classify_draft(spec, root, path, pool_run=True):
         return result(spec, "R7", "%s（%s → %s）" % (spec.pkg(d.pid) + "（%s）" % spec.term("rel", d.rel),
                                                   route["from"] if route else "?", route["to"] if route else "?"),
                       next_hop="pmo-router", steps=steps)
-    if pool_run and d.pid == "delivery" and d.rel == "cross":
+    if d.pid == "delivery" and d.rel == "cross":
         return result(spec, None, "跨序列的%s不经过入口和路由：承接方请书记员上传答复、确认“执行”，再直接交付给发起方 +2" % spec.pkg(d.pid), next_hop=None)
-    if d.pid == "request" and d.rel == "cross":
-        hop = "%s-p2" % to_seq if to_seq else None
-        steps = ["书记员 register，建跨序列需求（“提出”随登记确认，停在待接单）", "请 %s 接单：复述需求、承接范围、预计交付时间" % hop]
-    elif d.pid == "delivery" and d.rel == "cross":
-        hop = "%s-p2" % to_seq if to_seq else None
-        steps = ["书记员 reply，把交付包挂到跨序列需求下；承接方请书记员确认“执行”这一步，工作项到“待验收”",
-                 "给 %s 的会话发消息【%s #ID】，写交付包路径；它验收通过就请书记员确认“验收”，不通过就回滚到“执行”并写原因" % (hop, notice)]
-    else:
-        return result(spec, None, "序列内的%s不经过入口，交给本序列上一级" % spec.pkg(d.pid), next_hop=None)
-    if hop and hop.endswith("-p2") and to_seq and focus_for_sequence(root, to_seq):
-        steps.append("%s 正开着聚焦会话：用 notify.py send 留言，不另发消息" % hop)
-    return result(spec, "R7", "%s（%s → %s）" % (spec.pkg(d.pid) + ("（%s）" % spec.term("rel", d.rel) if d.rel else ""),
-                                              route["from"] if route else "?", route["to"] if route else "?"),
-                  next_hop=hop, steps=steps)
+    return result(spec, None, "序列内的%s不经过入口，交给本序列上一级" % spec.pkg(d.pid), next_hop=None)
 
 
 def result(spec, row, reason, **extra):
@@ -168,15 +137,6 @@ def result(spec, row, reason, **extra):
 def pool_info(root, session=None, item_id=None):
     """Where the owner session stands (desktop ID, status, the researcher using it). A +0
     work name such as the ledger's 负责会话 (Alg-p0-2101) stands for the claim that owns the item."""
-    if os.path.isfile(os.path.join(root, ".agent-org", "manifest.json")):
-        import codex_runtime
-        state = codex_runtime.Pool(root).load()
-        b = state["bindings"].get(session)
-        if not b:
-            return {"session": session, "claimed": False}
-        return {"session": session, "claimed": True, "thread_id": b["thread_id"], "host_id": b["host_id"],
-                "status": state["sessions"].get(b["thread_id"], {}).get("status", "unknown"),
-                "researcher_using": bool(b.get("focus"))}
     policy = pool.load_policy(root)
     if not policy:
         return None
@@ -368,14 +328,8 @@ def main(argv=None):
     args = ap.parse_args(argv)
     spec = orgspec.OrgSpec()
     root = ledger_core.project_root()
-    codex = os.path.isfile(os.path.join(root, ".agent-org", "manifest.json"))
-    if codex and args.cmd != "classify":
-        print("Codex 的会话操作使用 codex_runtime.py；本入口只复用 classify 的业务路由")
-        return 2
     if args.cmd == "classify":
-        out = classify_text(spec, root, args.text, args.offline) if args.text else classify_draft(spec, root, args.draft, pool_run=not codex)
-        if codex:
-            out = json.loads(json.dumps(out, ensure_ascii=False).replace("notify.py send", "entry 技能的通知流程"))
+        out = classify_text(spec, root, args.text, args.offline) if args.text else classify_draft(spec, root, args.draft)
         print(json.dumps(out, ensure_ascii=False, indent=2))
         return 0
     if args.cmd == "audit":

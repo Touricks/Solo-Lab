@@ -50,7 +50,6 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import orgspec  # noqa: E402
-import ledger  # noqa: E402
 import ledger_core  # noqa: E402
 import pool as pool_state  # noqa: E402
 import space  # noqa: E402
@@ -196,7 +195,7 @@ def legacy_text(raw, key):
     return v.strip() if isinstance(v, str) else ""
 
 
-def load_task_and_seeds(path, runtime=None):
+def load_task_and_seeds(path):
     """The task file in its current form, plus the one-line descriptions an earlier file gave.
 
     The task file holds only what scripts and hooks use: names, editable_paths (可改范围),
@@ -209,10 +208,10 @@ def load_task_and_seeds(path, runtime=None):
         raise SetupError("读不到研究任务 %s：%s" % (path, e))
     if not isinstance(raw, dict):
         raise SetupError("研究任务 %s 要写成一个 JSON 对象" % path)
-    return parse_task(raw, runtime)
+    return parse_task(raw)
 
 
-def parse_task(raw, runtime=None):
+def parse_task(raw):
     """What a task file says, checked and filled in with the defaults: (task, seeds, legacy keys)."""
     for key in ("name", "description"):
         if not isinstance(raw.get(key), str) or not raw[key].strip():
@@ -261,14 +260,11 @@ def parse_task(raw, runtime=None):
     if raw.get("models") is not None and not (
             isinstance(raw["models"], dict) and all(isinstance(v, str) for v in raw["models"].values())):
         raise SetupError("研究任务的 models 要写成 {\"角色或职级\": \"模型名\"}")
-    runtime = runtime or raw.get("runtime", "claude")
-    if runtime not in ("claude", "codex"):
-        raise SetupError("runtime 只能是 claude 或 codex")
-    task["runtime"] = runtime
-    models = {} if runtime == "codex" else dict(DEFAULT_MODELS)
+    if raw.get("runtime", "claude") != "claude":
+        raise SetupError("这一版只在 Claude 桌面端运行：把研究任务里 runtime 那一行删掉，或者写成 claude")
+    task["runtime"] = "claude"
+    models = dict(DEFAULT_MODELS)
     models.update(raw.get("models") or {})
-    if runtime == "codex" and any(v in MODEL_TIERS for v in models.values()):
-        raise SetupError("Codex 不沿用 Claude 的模型别名；移除 models 以继承用户设置，或填写明确选定的 Codex 模型")
     task["models"] = models
     if raw.get("mode", "pool") != "pool":
         raise SetupError("研究任务的 mode 只支持 pool（桌面会话池）：CLI 模式已取消，把 mode 这一行删掉或写成 pool")
@@ -348,9 +344,9 @@ def project_dir(path):
     return target
 
 
-def refuse_other_runtime(target, task):
-    other = ".claude/solo-lab" if task["runtime"] == "codex" else ".agent-org"
-    if os.path.isfile(os.path.join(target, other, "manifest.json")):
+def refuse_other_runtime(target):
+    """A directory with the organisation of the Codex adapter (.agent-org/, in the plugin until 1.0.12) is left alone."""
+    if os.path.isfile(os.path.join(target, ".agent-org", "manifest.json")):
         raise SetupError("目标目录已有另一运行平台的组织。请使用独立目录，先保留原绑定、任务包与回执，再迁移")
 
 
@@ -1359,13 +1355,13 @@ class Plan:
         self.manifest = {}
 
 
-def build_plan(target, task_path, seq_arg, runtime=None):
+def build_plan(target, task_path, seq_arg):
     spec = orgspec.OrgSpec()
     problems = spec.validate()
     if problems:
         raise SetupError("规则文件有问题，先修好：\n" + "\n".join(problems))
-    task, seeds, legacy = load_task_and_seeds(task_path, runtime)
-    refuse_other_runtime(target, task)
+    task, seeds, legacy = load_task_and_seeds(task_path)
+    refuse_other_runtime(target)
     seqs = pick_sequences(spec, seq_arg)
     ids = load_ids(target)
     risk, note = resolve_risk(target)
@@ -1458,9 +1454,6 @@ def build_plan(target, task_path, seq_arg, runtime=None):
         "lark_risk": {"lark_cli_version": risk.get("lark_cli_version"), "commands": len(risk.get("commands", {}))},
         "files": {p: sha256(c) for p, (c, _, _) in sorted(f.items())},
     }
-    if task.get("runtime") == "codex":
-        import codex_setup
-        return codex_setup.adapt(sys.modules[__name__], plan, target, spec, task, policy, seqs)
     return plan
 
 
@@ -1481,13 +1474,13 @@ def announce(target, name=None, task_path=None, seq_arg=None):
         task = load_task(known)
         seq_arg = seq_arg or ",".join(enabled_sequences(target) or [])
     else:
-        refuse_other_runtime(target, {"runtime": "claude"})
+        refuse_other_runtime(target)
         name = (name or "").strip()
         if not name:                               # a directory's name is no project's name: it may not follow any rule
             raise SetupError("还没有项目名：先问研究员这个项目叫什么，再用 --name 传进来。研究员只说了飞书项目空间或知识空间的名字的，"
                              "就用那个名字。它会用作项目名、两个空间的名字和会话标题的前缀，不拿目录名代替")
         task = parse_task({"name": name, "description": "待立项访谈补充", "feishu": {"meegle_space": name}})[0]
-    refuse_other_runtime(target, task)
+    refuse_other_runtime(target)
     seqs = pick_sequences(spec, seq_arg)
     policy = build_policy(spec, task, seqs)
     settle_later(task, seqs)
@@ -1528,9 +1521,6 @@ def previous_hashes(target):
 
 
 def actions_for(target, plan):
-    if plan.manifest.get("runtime") == "codex":
-        import codex_setup
-        return codex_setup.actions_for(target, plan)
     acts = []
     before = previous_hashes(target)
     for rel, (content, executable, keep) in sorted(plan.files.items()):
@@ -1659,9 +1649,6 @@ def report(target, plan, acts, apply):
 
 
 def apply_plan(target, plan, acts):
-    if plan.manifest.get("runtime") == "codex":
-        import codex_setup
-        return codex_setup.apply_plan(target, plan, acts)
     written = 0
     for kind, rel, _ in acts:
         path = os.path.join(target, rel)
@@ -1960,7 +1947,6 @@ def main(argv=None):
     p.add_argument("--target", required=True)
     p.add_argument("--task", required=True)
     p.add_argument("--sequences")
-    p.add_argument("--runtime", choices=("claude", "codex"))
     p.add_argument("--apply", action="store_true")
     p = sub.add_parser("login")
     p.add_argument("--wait", action="store_true", help="研究员授权以后：等到登录完成，读回登录状态")
@@ -1975,11 +1961,8 @@ def main(argv=None):
             return announce(project_dir(args.target), args.name, args.task, args.sequences)
         if args.cmd == "init":
             target = project_dir(args.target)
-            plan = build_plan(target, args.task, args.sequences, args.runtime)
+            plan = build_plan(target, args.task, args.sequences)
             acts = actions_for(target, plan)
-            if plan.manifest.get("runtime") == "codex":
-                import codex_setup
-                return codex_setup.execute(target, plan, acts, args.apply)
             report(target, plan, acts, args.apply)
             if args.apply:
                 apply_plan(target, plan, acts)

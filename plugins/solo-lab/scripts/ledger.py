@@ -25,7 +25,6 @@ sys.path.insert(0, HERE)
 import orgspec  # noqa: E402
 import pool  # noqa: E402
 import ledger_core as core  # noqa: E402
-from ledger_core import Ledger, LedgerError, find_receipt, other_space, save_receipt, write_lock  # noqa: E402,F401  (reached through this module by code that is older than the split)
 
 def step_lines(lg, wid, it, node, nodes):
     """What `next` shows for the node an item is at."""

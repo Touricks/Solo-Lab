@@ -47,11 +47,8 @@ def now():
 
 
 def state_path(target):
-    """.claude/state/onboarding.json; a Codex project keeps its own whole-run clock under that name."""
-    runtime = project_paths.runtime_dir(target)
-    if os.path.basename(runtime) == ".agent-org":
-        return os.path.join(runtime, "state", "onboarding-stages.json")
-    return os.path.join(os.path.dirname(runtime), "state", "onboarding.json")
+    """.claude/state/onboarding.json"""
+    return os.path.join(os.path.dirname(project_paths.runtime_dir(target)), "state", "onboarding.json")
 
 
 @contextlib.contextmanager
