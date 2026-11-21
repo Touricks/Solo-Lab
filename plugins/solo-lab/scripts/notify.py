@@ -124,7 +124,7 @@ def listen(root, max_events=None):
     researcher = (ids.get("lark") or {}).get("researcher_open_id")
     if not researcher:
         print("feishu/ids.json 里没有研究员的 open_id（lark.researcher_open_id），不启动监听：否则谁私聊机器人都会进入口。"
-              "先跑 setup.py feishu --live --apply 读回。")
+              "先跑 space.py feishu --live --apply 读回。")
         return 2
     path = os.path.join(root, "inbox", "feishu.jsonl")
     seen = set()

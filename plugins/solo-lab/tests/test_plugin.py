@@ -24,6 +24,8 @@ if not os.path.isfile(os.path.join(REPO, ".claude-plugin", "marketplace.json")):
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 import orgspec  # noqa: E402
 import setup  # noqa: E402
+import check  # noqa: E402
+import space_cmd  # noqa: E402
 import ledger  # noqa: E402
 import ledger_core  # noqa: E402
 import workitem  # noqa: E402
@@ -279,7 +281,7 @@ class SetupTest(ProjectCase):
             self.assertEqual(f.read(), written)
         with open(manifest, encoding="utf-8") as f:
             self.assertEqual(json.load(f)["pending_new"], [])
-        _, out = self.run_quiet(setup.check, self.tmp)
+        _, out = self.run_quiet(check.check, self.tmp)
         self.assertIn("本地配置：就绪", out)
         self.assertNotIn("runs/README.md", out)
         os.remove(path + ".new")                                        # with the leftover gone nothing is written again
@@ -487,7 +489,7 @@ class DecisionsFileTest(ProjectCase):
         self.assertIn("## 补充决定\n\n" + self.MINE, new)
         with open(os.path.join(self.tmp, ".claude", "solo-lab", "manifest.json"), encoding="utf-8") as f:
             self.assertIn("org/decisions.md", json.load(f)["pending_new"])
-        _, out = self.run_quiet(setup.check, self.tmp)
+        _, out = self.run_quiet(check.check, self.tmp)
         self.assertIn("待合并：org/decisions.md.new", out)
         self.assertEqual(self.init()[0], "pending")
 
@@ -546,13 +548,13 @@ class DecisionsFileTest(ProjectCase):
             shutil.rmtree(tmp)
 
     def test_ids_of_another_shape_start_empty(self):
-        ids, notes = setup.normalise_ids({"meegle": {"project_key": "pk"}})
+        ids, notes = space_cmd.normalise_ids({"meegle": {"project_key": "pk"}})
         self.assertEqual(ids, {"schema": "solo-lab/ids-v2", "lark": {}, "meegle": {}, "wiki": {}})
         self.assertTrue(notes)
-        old, notes = setup.normalise_ids({"schema": "solo-lab/ids-v1", "meegle": {"project_key": "pk", "types": {"project": {}}}})
+        old, notes = space_cmd.normalise_ids({"schema": "solo-lab/ids-v1", "meegle": {"project_key": "pk", "types": {"project": {}}}})
         self.assertEqual(old["meegle"], {})                           # a binding to a state-flow space is not carried over
         self.assertIn("节点流程", notes[0])
-        same, notes = setup.normalise_ids({"schema": "solo-lab/ids-v2", "meegle": {"project_key": "pk"}})
+        same, notes = space_cmd.normalise_ids({"schema": "solo-lab/ids-v2", "meegle": {"project_key": "pk"}})
         self.assertEqual((same["meegle"]["project_key"], notes), ("pk", []))
 
 
@@ -914,13 +916,13 @@ class FifthRoundLedgerTest(ProjectCase):
     """Ledger, setup and parser fixes from the fourth check."""
 
     def test_check_regenerates_and_compares(self):
-        code, out = self.run_quiet(setup.check, self.tmp)       # setUp wrote ids.json after init
+        code, out = self.run_quiet(check.check, self.tmp)       # setUp wrote ids.json after init
         self.assertEqual(code, 1)
         self.assertIn("CLAUDE.md", out)
         with contextlib.redirect_stdout(io.StringIO()):
             plan = setup.build_plan(self.tmp, os.path.join(self.tmp, "spec", "task.json"), None)
             setup.apply_plan(self.tmp, plan, setup.actions_for(self.tmp, plan))
-        code, out = self.run_quiet(setup.check, self.tmp)
+        code, out = self.run_quiet(check.check, self.tmp)
         self.assertIn("本地配置：就绪", out)                      # the other layers wait for the pool and the first task
 
     def test_python_clusters_and_heredocs_hiding_feishu_calls(self):
@@ -1120,7 +1122,7 @@ class SixthRoundLedgerTest(ProjectCase):
         m["files"][".claude/hooks/lark-risk.json"] = setup.sha256(setup.read_text(risk))
         with open(mpath, "w", encoding="utf-8") as f:
             json.dump(m, f)
-        code, out = self.run_quiet(setup.check, self.tmp)
+        code, out = self.run_quiet(check.check, self.tmp)
         self.assertIn("lark-cli 风险表", out)
         self.assertNotIn("现在的插件", out)
         task = os.path.join(self.tmp, "spec", "task.json")
@@ -1129,7 +1131,7 @@ class SixthRoundLedgerTest(ProjectCase):
         t["feishu"]["meegle_space"] = "ar1"
         with open(task, "w", encoding="utf-8") as f:
             json.dump(t, f)
-        code, out = self.run_quiet(setup.check, self.tmp)
+        code, out = self.run_quiet(check.check, self.tmp)
         self.assertIn("改过：spec/task.json", out)
         self.assertNotIn("现在的插件", out)
 
@@ -1301,7 +1303,7 @@ class SpecAndRoutingTest(ProjectCase):
             self.assertEqual(code, 1)
             self.assertIn("绑定的是“旧空间”", out)
             with self.assertRaises(setup.SetupError):          # the local dictionary belongs to the old space
-                self.run_quiet(setup.feishu, self.tmp, [], False, False)
+                self.run_quiet(space_cmd.feishu, self.tmp, [], False, False)
         finally:
             if old is None:
                 os.environ.pop("CLAUDE_PROJECT_DIR", None)
@@ -1465,7 +1467,7 @@ class SpecAndRoutingTest(ProjectCase):
         with contextlib.redirect_stdout(io.StringIO()):
             plan = setup.build_plan(self.tmp, os.path.join(self.tmp, "spec", "task.json"), None)
         self.assertTrue(any("UTF-8" in n for n in plan.notes))
-        code, out = self.run_quiet(setup.check, self.tmp)
+        code, out = self.run_quiet(check.check, self.tmp)
         self.assertNotIn("Traceback", out)
 
     def test_path_errors_quote_the_entry_as_written(self):
@@ -1523,20 +1525,20 @@ class FeishuDocsTest(ProjectCase):
 
     def test_check_reports_what_the_feishu_side_lacks(self):
         self.edit_json("feishu/ids.json", lambda d: d["wiki"]["nodes"].pop("archive/alg"))
-        _, out = self.run_quiet(setup.check, self.tmp)
+        _, out = self.run_quiet(check.check, self.tmp)
         self.assertIn("知识库节点还缺 1 个（archive/alg）", out)
         self.assertIn("ensure-node all", out)
         self.edit_json("feishu/ids.json", lambda d: d["wiki"]["nodes"].pop("archive/infra"))
         self.edit_json(".claude/solo-lab/manifest.json",
                        lambda m: m.update(sequences=[s for s, _, _ in self.spec.sequences() if s != "infra"]))
-        _, out = self.run_quiet(setup.check, self.tmp)
+        _, out = self.run_quiet(check.check, self.tmp)
         self.assertIn("知识库节点还缺 1 个（archive/alg）", out)       # infra is not enabled: its node is not expected
         self.edit_json("feishu/ids.json", lambda d: d["wiki"].pop("space_id"))
-        _, out = self.run_quiet(setup.check, self.tmp)
+        _, out = self.run_quiet(check.check, self.tmp)
         self.assertIn("还没有知识空间", out)
         self.assertNotIn("知识库节点还缺", out)
         self.edit_json("feishu/ids.json", lambda d: d["meegle"].pop("bound_at"))
-        code, out = self.run_quiet(setup.check, self.tmp)
+        code, out = self.run_quiet(check.check, self.tmp)
         self.assertEqual(code, 1)
         self.assertIn("飞书项目空间还没绑定", out)
         self.assertNotIn("还没有知识空间", out)
@@ -1903,7 +1905,7 @@ class PoolSetupTest(PoolProjectCase):
         self.assertIn("已写入 0 处", out.getvalue())
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            setup.check(self.tmp)
+            check.check(self.tmp)
         self.assertNotIn("现在的插件", out.getvalue())
         self.assertIn("会话池还没开齐", out.getvalue())
 
@@ -1944,7 +1946,7 @@ class PoolSetupTest(PoolProjectCase):
     def test_pool_checklist(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            self.assertEqual(setup.main(["pool", "--target", self.tmp]), 0)
+            self.assertEqual(pool_cmd.main(["open", "--target", self.tmp]), 0)
         text = out.getvalue()
         self.assertIn("1. PMO-p2-01（未认领）", text)
         self.assertIn("只开下面这 7 个 +2，分 4 批、2 轮开", text)
@@ -1964,7 +1966,7 @@ class PoolSetupTest(PoolProjectCase):
         self.assertNotIn("--watch", text)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            self.assertEqual(setup.main(["pool", "--target", self.tmp, "--manual"]), 0)
+            self.assertEqual(pool_cmd.main(["open", "--target", self.tmp, "--manual"]), 0)
         self.assertIn("认领 pmo-p2（会话名 PMO-p2-01），然后照认领输出开出 PMO-p1-01。本会话由研究员手工开出。", out.getvalue())
         self.assertIn("书记员由路由开出", out.getvalue())
         self.assertIn("--wait 240", text)                                         # how the initialising session waits for the levels below
@@ -2065,14 +2067,14 @@ class SpaceNameTest(unittest.TestCase):
 
 
 class PoolModeTest(PoolProjectCase):
-    """setup.py pool: in bypass mode the app asks the researcher before every start_session, so it is said first."""
+    """pool.py open: in bypass mode the app asks the researcher before every start_session, so it is said first."""
 
     def checklist(self, mode, sid="s-init"):
         if mode:
             pool_lib.update_session(self.tmp, sid, lambda st: st.update({"session_id": sid, "permission_mode": mode}))
         out = io.StringIO()
         with mock.patch.dict(os.environ, {pool_lib.SESSION_ENV: sid}), contextlib.redirect_stdout(out):
-            self.assertEqual(setup.main(["pool", "--target", self.tmp]), 0)
+            self.assertEqual(pool_cmd.main(["open", "--target", self.tmp]), 0)
         return out.getvalue()
 
     def test_bypass_mode_is_told_before_the_pool_opens(self):
@@ -2097,12 +2099,12 @@ class PoolModeTest(PoolProjectCase):
         pool_lib.update_session(self.tmp, "s-init", lambda st: st.update({"session_id": "s-init", "permission_mode": "bypassPermissions"}))
         out = io.StringIO()
         with mock.patch.dict(os.environ, {pool_lib.SESSION_ENV: "s-init"}), contextlib.redirect_stdout(out):
-            self.assertEqual(setup.main(["pool", "--target", self.tmp, "--manual"]), 0)
+            self.assertEqual(pool_cmd.main(["open", "--target", self.tmp, "--manual"]), 0)
         self.assertNotIn("bypass 模式", out.getvalue())                  # the researcher opens those sessions by hand
 
 
 class CheckLayersTest(PoolProjectCase):
-    """setup.py check: the project's own files, the Feishu side, the sessions, the first research task."""
+    """check.py check: the project's own files, the Feishu side, the sessions, the first research task."""
 
     def setUp(self):
         super().setUp()
@@ -2115,7 +2117,7 @@ class CheckLayersTest(PoolProjectCase):
     def check(self, *args):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = setup.main(["check", "--target", self.tmp] + list(args))
+            code = check.main(["check", "--target", self.tmp] + list(args))
         return code, out.getvalue()
 
     def claim_all(self):
@@ -2149,7 +2151,7 @@ class CheckLayersTest(PoolProjectCase):
     def wait(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = setup.main(["pool", "--target", self.tmp, "--wait", "0"])
+            code = pool_cmd.main(["open", "--target", self.tmp, "--wait", "0"])
         return code, out.getvalue()
 
     def test_wait_says_who_is_missing_and_who_opens_it(self):
@@ -2171,7 +2173,7 @@ class CheckLayersTest(PoolProjectCase):
     def wait_batch(self, n):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = setup.main(["pool", "--target", self.tmp, "--wait", "0", "--batch", str(n)])
+            code = pool_cmd.main(["open", "--target", self.tmp, "--wait", "0", "--batch", str(n)])
         return code, out.getvalue()
 
     def test_wait_for_a_batch_ends_when_its_first_turns_are_over(self):
@@ -2209,7 +2211,7 @@ class CheckLayersTest(PoolProjectCase):
         self.assertEqual(self.wait_batch(5)[0], 2)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            self.assertEqual(setup.main(["pool", "--target", self.tmp, "--batch", "1"]), 2)
+            self.assertEqual(pool_cmd.main(["open", "--target", self.tmp, "--batch", "1"]), 2)
         self.assertIn("--batch 要和 --wait 一起用", out.getvalue())
 
     def test_wait_ends_when_the_scribe_has_done_its_first_writes(self):
@@ -2682,7 +2684,7 @@ class PoolOpenedByTheResearcherTest(PoolProjectCase):
         self.assertNotEqual(out.get("permissionDecision"), "deny")
         _, out = self.bash("s-researcher", cmd, agent_id="a1")
         self.assertEqual(out.get("permissionDecision"), "deny")           # a subagent of the researcher's session
-        _, out = self.bash("s-alg2", "python3.12 -I /opt/plugins/solo-lab/scripts/setup.py check --target .")
+        _, out = self.bash("s-alg2", "python3.12 -I /opt/plugins/solo-lab/scripts/check.py check --target .")
         self.assertEqual(out.get("permissionDecision"), "deny")           # every setup.py command is the researcher's
         self.assertIn("只由研究员的会话运行", out.get("permissionDecisionReason", ""))
 
@@ -2710,15 +2712,15 @@ class PoolOpenedByTheResearcherTest(PoolProjectCase):
         manifest = os.path.join(self.tmp, ".claude", "solo-lab", "manifest.json")
         with open(manifest, encoding="utf-8") as f:
             m = json.load(f)
-        self.assertEqual(sorted(os.path.basename(p) for p in m["plugin_scripts"]), ["onboarding.py", "setup.py", "space.py"])
+        self.assertEqual(sorted(os.path.basename(p) for p in m["plugin_scripts"]), ["check.py", "onboarding.py", "pool.py", "setup.py", "space.py"])
         m["plugin_scripts"][real] = "0" * 64                                 # another build of the plugin
         with open(manifest, "w", encoding="utf-8") as f:
             json.dump(m, f)
-        _, out = self.bash("s-researcher", "python3.12 -I %s feishu --target . --live" % shlex.quote(real), permission_mode="bypassPermissions")
+        _, out = self.bash("s-researcher", "python3.12 -I %s announce --target ." % shlex.quote(real), permission_mode="bypassPermissions")
         self.assertEqual(out.get("permissionDecision"), "deny")
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            setup.check(self.tmp)
+            check.check(self.tmp)
         self.assertIn("hook 不再放行研究员会话里的 setup.py", out.getvalue())
 
 
@@ -2782,7 +2784,7 @@ class DefaultModelTest(PoolProjectCase):
         self.assertEqual(set(models.values()), {"opus"})
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            self.assertEqual(setup.main(["pool", "--target", self.tmp]), 0)
+            self.assertEqual(pool_cmd.main(["open", "--target", self.tmp]), 0)
         self.assertNotRegex(out.getvalue(), "注意：\\S+ 的模型")              # opus under fable, opus under opus
 
 
@@ -2803,7 +2805,7 @@ class PoolModelTest(PoolProjectCase):
     def test_the_checklist_names_a_model_above_its_opener(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            self.assertEqual(setup.main(["pool", "--target", self.tmp]), 0)
+            self.assertEqual(pool_cmd.main(["open", "--target", self.tmp]), 0)
         text = out.getvalue()
         self.assertIn("注意：Alg-p0-01 的模型 opus 高于开它的 Alg-p1-01（sonnet）", text)
         self.assertEqual(text.count("注意："), 1)                   # opus under opus, sonnet under opus: nothing to say
@@ -2821,7 +2823,7 @@ class PoolBatchTest(PoolProjectCase):
                                            ["Quality-p2-01", "Liaison-p2-01"]])
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            self.assertEqual(setup.main(["pool", "--target", self.tmp]), 0)
+            self.assertEqual(pool_cmd.main(["open", "--target", self.tmp]), 0)
         text = out.getvalue()
         self.assertEqual(plan["rounds"], [[1, 2], [3], [4], [5], [6]])
         self.assertIn("分 6 批、5 轮开", text)
@@ -3558,7 +3560,7 @@ class PythonVersionTest(unittest.TestCase):
         setup.need_python((3, 12, 0))
         setup.need_python()                                        # the tests themselves run under 3.12 or later
         with mock.patch.object(setup.sys, "version_info", (3, 11, 9, "final", 0)), contextlib.redirect_stdout(io.StringIO()) as out:
-            self.assertEqual(setup.main(["precheck"]), 2)          # before anything else is looked at
+            self.assertEqual(check.main(["precheck"]), 2)          # before anything else is looked at
         self.assertIn("现在是 3.11.9", out.getvalue())
 
     def test_every_command_the_plugin_writes_names_the_interpreter(self):
@@ -3581,10 +3583,10 @@ class PythonVersionTest(unittest.TestCase):
 
     def test_the_precheck_says_whether_the_interpreter_is_there(self):
         with mock.patch.object(setup.shutil, "which", return_value=None):
-            self.assertEqual(setup.python_on_path(), (False, "PATH 里找不到 python3.12：hook 和角色说明里的命令都用它；先装一个，比如 brew install python@3.12"))
+            self.assertEqual(check.python_on_path(), (False, "PATH 里找不到 python3.12：hook 和角色说明里的命令都用它；先装一个，比如 brew install python@3.12"))
         with mock.patch.object(setup.shutil, "which", return_value="/x/python3.12"), \
                 mock.patch.object(setup, "run", return_value=(0, "Python 3.12.13\n", "")):
-            self.assertEqual(setup.python_on_path(), (True, "Python 3.12.13（/x/python3.12）"))
+            self.assertEqual(check.python_on_path(), (True, "Python 3.12.13（/x/python3.12）"))
 
 
 class PoolReviewIdentityTest(PoolProjectCase):
@@ -3986,12 +3988,12 @@ class ReviewTextTest(PoolProjectCase):
         self.started_pool()
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            setup.check(self.tmp)
+            check.check(self.tmp)
         self.assertIn("会话池还没开齐", out.getvalue())
         self.route("release", "Alg-p2-01", sid="s-researcher")
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            setup.main(["pool", "--target", self.tmp, "--manual"])
+            pool_cmd.main(["open", "--target", self.tmp, "--manual"])
         self.assertIn("重建句", out.getvalue())
 
 
@@ -4195,7 +4197,7 @@ class SecondReviewSetupTest(ProjectCase):
             json.dump(policy, f)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            setup.check(self.tmp)
+            check.check(self.tmp)
         self.assertIn("guard.py 和 policy.json 不配套", out.getvalue())
 
     def test_hard_rule_wording_says_what_denies_and_what_asks(self):
@@ -4410,13 +4412,13 @@ class ThirdReviewSetupTest(ProjectCase):
             f.write(text.replace("POLICY_VERSION = %d\n" % setup.POLICY_VERSION, ""))   # a guard from before policy versions
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            setup.check(self.tmp)
+            check.check(self.tmp)
         self.assertIn("旧 guard 在按新规则跑", out.getvalue())
         self.assertNotIn("改过：.claude/hooks/policy.json", out.getvalue())
 
     def test_pool_health_on_an_old_policy(self):
         self.set_policy(entry_role=None)                            # as left by a plugin from before the pool
-        problems, _ = setup.pool_health(self.tmp, {})
+        problems, _ = check.pool_health(self.tmp, {})
         self.assertTrue(problems and "还是旧版的" in problems[0])
 
 
@@ -4453,7 +4455,7 @@ class BracketPathTest(PoolProjectCase):
         self.assertIn("#2102", out)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            setup.check(self.tmp)
+            check.check(self.tmp)
         self.assertNotIn("还停在旧版插件规则上", out.getvalue())
 
 
@@ -5701,7 +5703,9 @@ class TextsAfterTheGatesTest(PoolProjectCase):
             places["mechanisms.md"] = next(x for x in f.read().splitlines() if x.startswith("- **升到 1.0.5。**"))
         places["docs/使用说明.md"] = next(x for x in places["docs/使用说明.md"].splitlines() if x.startswith("**升到 1.0.5。**"))
         for rel, text in places.items():
-            for part in ("python3.12 -I .claude/solo-lab/bin/space.py snapshot --target . --apply", "setup.py feishu --target <项目目录> --live",
+            # the template's record of changes is history: it names the binding command as it was called when 2.2.0 came out
+            bind = "setup.py feishu" if rel.endswith("更新记录.md") else "space.py feishu"
+            for part in ("python3.12 -I .claude/solo-lab/bin/space.py snapshot --target . --apply", bind + " --target <项目目录> --live",
                          "核对后加 `--apply`", "任何会话", "重新绑定"):
                 self.assertIn(part, text, rel)
             self.assertIn("研究员的会话" if rel != "docs/使用说明.md" else "初始化会话", text, rel)

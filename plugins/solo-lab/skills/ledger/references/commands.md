@@ -6,8 +6,8 @@
 
 | 文件 | 里面是什么 | 谁写 |
 | --- | --- | --- |
-| `feishu/ids.json` | 绑定：project_key，约定里每个槽位对应这个空间的哪个类型、字段、角色和状态，知识库空间和节点 | `setup.py feishu --apply`；`ensure-node` 往里加节点 |
-| `feishu/space.json` | 空间结构的快照：每个类型的字段和选项、角色、状态、流程、新建时的必填字段 | `setup.py feishu --live --apply`、`space.py snapshot --apply` |
+| `feishu/ids.json` | 绑定：project_key，约定里每个槽位对应这个空间的哪个类型、字段、角色和状态，知识库空间和节点 | `space.py feishu --apply`；`ensure-node` 往里加节点 |
+| `feishu/space.json` | 空间结构的快照：每个类型的字段和选项、角色、状态、流程、新建时的必填字段 | `space.py feishu --live --apply`、`space.py snapshot --apply` |
 | `.claude/solo-lab/orgspec/` | 规则文件、术语表和约定文件：包名、命名、文档放在哪、槽位 | 初始化时从插件复制 |
 
 字段名和选项名靠快照换成空间里的键。节点不看快照，每次从这条工作项现读。
@@ -457,7 +457,7 @@ lark-cli 只读当前目录、`/tmp`、`~/files` 下的 `@文件`，所以台账
 
 | 报错 | 原因 | 怎么办 |
 | --- | --- | --- |
-| 这个项目还没绑定飞书空间。… | 还没写入过绑定，或者一种类型都没绑上 | 退回请求方，请研究员照技能 `solo-lab:setup` 绑定：`setup.py feishu --target <项目目录> --live` 预览，核对后加 `--apply`。书记员不代跑 |
+| 这个项目还没绑定飞书空间。… | 还没写入过绑定，或者一种类型都没绑上 | 退回请求方，请研究员照技能 `solo-lab:setup` 绑定：`space.py feishu --target <项目目录> --live` 预览，核对后加 `--apply`。书记员不代跑 |
 | feishu/ids.json 是旧版的绑定（…）。… | 绑定是给旧版空间做的，这一版只认用节点流程的空间 | 同上：照 `solo-lab:setup` 用模板建空间，重新绑定 |
 | spec/task.json 里的飞书项目空间是“…”，绑定的是“…”。… | 任务文件换了空间，还没重新绑定 | 同上：请研究员照 `solo-lab:setup` 重新绑定 |
 | …还没绑定到空间里的类型：… | 这个类型的槽位没绑上 | 退回请求方，请研究员安排重新绑定；对不上的地方用技能 `solo-lab:space-bind` 处理 |
@@ -481,7 +481,7 @@ lark-cli 只读当前目录、`/tmp`、`~/files` 下的 `@文件`，所以台账
 | 台账正在被别的写入占用（…），等了 60 秒还没放开；… | 另一条 `--apply` 还在写 | 等它写完再试，不删锁文件 |
 | 写命令超时（120 秒）：… 这一步可能已经写进飞书。… | 写命令没在 120 秒内返回 | 先在网页上核对这一步写进去没有，再决定要不要重跑 |
 | 命令超时（120 秒）：… | 读命令没在 120 秒内返回 | 重试一次；还不行，报给研究员 |
-| 运行不了 …（…）；先装好并登录，见 setup.py precheck | meegle 或 lark-cli 没装好 | 请研究员照 `solo-lab:setup` 做预检 |
+| 运行不了 …（…）；先装好并登录，见 check.py precheck | meegle 或 lark-cli 没装好 | 请研究员照 `solo-lab:setup` 做预检 |
 | 命令失败（退出码 …）：… | meegle 或 lark-cli 返回了错误，原文附在后面 | 读后面的原文再处理；登录过期、没有权限的，请研究员处理。连续失败两次就停，把命令、原文和 logid 写进异常清单 |
 | workitem query 的输出读不懂，没法确定有没有结果：… | 返回的形状不对，比如登录过期时的错误文本；翻页时前面带着“第 N 页（前面已读出 M 项）” | 用 `mql <查询名>` 拿到 MQL 手工跑一次看输出，再报给研究员；不要当成没有结果 |
 | meegle user me 的输出里找不到 user_key：… | 登录状态或 meegle 的版本变了 | 看 `meegle user me --format json` 的输出，报给研究员 |

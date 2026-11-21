@@ -2,7 +2,7 @@
 
 ## 脚本查的项
 
-`setup.py precheck` 逐项打印“通过、提醒、失败、跳过”，有失败项时最后一行是“预检：N 项失败。”，退出码是 1。失败项先处理。要升级、要改配置的，把命令给研究员，由他本人在终端里执行；登录由初始化会话发起，研究员扫码。
+`check.py precheck` 逐项打印“通过、提醒、失败、跳过”，有失败项时最后一行是“预检：N 项失败。”，退出码是 1。失败项先处理。要升级、要改配置的，把命令给研究员，由他本人在终端里执行；登录由初始化会话发起，研究员扫码。
 
 | 项 | 查什么 | 没通过时 |
 | --- | --- | --- |
@@ -16,10 +16,10 @@
 | 飞书项目权限 | `meegle project search` 能看到至少一个空间 | 一个空间都看不到只是提醒：初始化会用模板建出项目空间，接着做。说明写着“输出不是 JSON”的才是失败，先看 meegle 版本和 meegle 登录这两项 |
 | meegle 诊断上报 | `meegle telemetry status` | 开着时提醒研究员决定是否关闭；`meegle telemetry disable` 由研究员本人执行 |
 | 飞书私聊事件订阅 | `lark-cli event consume im.message.receive_v1 --as bot --dry-run`：凭证、开发者后台已发布事件订阅、权限 `im:message.p2p_msg:readonly` | 只是提醒：没就绪时入口收不到飞书私聊，研究员转述也行。要用的话请应用管理员在开发者后台开事件订阅和权限 |
-| Python | 3.12，命令行里有 `python3.12`（`setup.py precheck` 的第一行）。脚本只用标准库 | 装一个，比如 `brew install python@3.12`；不用改系统自带的 `python3` |
+| Python | 3.12，命令行里有 `python3.12`（`check.py precheck` 的第一行）。脚本只用标准库 | 装一个，比如 `brew install python@3.12`；不用改系统自带的 `python3` |
 | 技能 lark-doc、lark-wiki、meegle | `~/.claude/skills` 或 `~/.agents/skills` 下有没有 | 只是提醒：书记员用台账脚本，不依赖它们，人工排查时有用 |
 
-三个版本下限写在 `setup.py` 的 `MIN_VERSIONS` 里，以它为准。
+三个版本下限写在 `check.py` 的 `MIN_VERSIONS` 里，以它为准。
 
 ## 脚本查不了、会话自己确认的
 

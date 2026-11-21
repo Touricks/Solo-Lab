@@ -157,7 +157,7 @@ def text(result):
         lines.append("%s：%s" % (head, parts))
     if not result["timing_pass"]:
         lines.append("最慢的 3 段：%s" % "、".join("%s %s 秒" % (STAGES[n][1], result["stages"][n]["seconds"]) for n in result["slowest"]))
-    lines.append("飞书操作这一项只是指标，不影响 setup.py check 的结论；Claude 平台、本机和等人的时间不计入。")
+    lines.append("飞书操作这一项只是指标，不影响 check.py check 的结论；Claude 平台、本机和等人的时间不计入。")
     return "\n".join(lines)
 
 

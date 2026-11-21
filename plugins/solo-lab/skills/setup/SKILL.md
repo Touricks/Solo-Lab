@@ -27,7 +27,7 @@ description: 在 Claude 桌面端把一个项目目录初始化成智能体组�
 
 插件根目录是本技能目录往上两级。先把它解析成绝对路径，下面的命令里 `$PLUGIN` 指这个路径，`<项目目录>` 是项目目录的绝对路径。两个路径写进命令时都加双引号：路径里常有空格和方括号。
 
-- 插件自带的脚本：`python3.12 -I "$PLUGIN/scripts/setup.py" <子命令>`。项目目录用 `--target` 给，在哪里运行都行。
+- 插件自带的脚本：`python3.12 -I "$PLUGIN/scripts/<脚本>" <子命令>`，脚本是 `setup.py`、`check.py`、`space.py` 和开池用的 `pool.py`。项目目录用 `--target` 给，在哪里运行都行。
 - 项目里的副本：`python3.12 -I .claude/solo-lab/bin/<脚本>`。第 3 步生成以后才有，在项目目录里照这个写法原样运行，前面不加环境变量，后面不接管道。
 
 ### 支持的环境
@@ -78,7 +78,7 @@ description: 在 Claude 桌面端把一个项目目录初始化成智能体组�
 第 3 步的 `init --apply` 把 hook 写进项目的 `.claude/settings.json`。hook 在本会话里什么时候开始生效，没有实测。生效以后会遇到两件事：
 
 - 项目里的脚本照规定的写法运行，不受影响。写台账的 `workitem.py` 和 `docs.py` 只有书记员能运行，本会话不运行。
-- 插件目录里的 `setup.py`、`space.py`、`onboarding.py`：`init --apply` 把它们的路径和内容校验值记进项目清单，hook 照这份记录放行本会话运行它们，bypass 模式下也一样；角色会话运行 `setup.py` 会被拒绝。命令里的插件路径就写初始化时用的那个绝对路径。插件升级或换了位置以后记录对不上，hook 会拦：默认权限模式下弹确认，请研究员点允许；bypass 和 dontAsk 模式下直接拒绝，这时把第 3 步 `init --apply` 那条完整命令交给研究员在终端里运行一次，记录更新后就恢复。不改写命令去绕开 hook。
+- 插件目录里的 `setup.py`、`check.py`、`space.py`、`pool.py`、`onboarding.py`：`init --apply` 把它们的路径和内容校验值记进项目清单，hook 照这份记录放行本会话运行它们，bypass 模式下也一样；角色会话运行这几个初始化脚本会被拒绝。命令里的插件路径就写初始化时用的那个绝对路径。插件升级或换了位置以后记录对不上，hook 会拦：默认权限模式下弹确认，请研究员点允许；bypass 和 dontAsk 模式下直接拒绝，这时把第 3 步 `init --apply` 那条完整命令交给研究员在终端里运行一次，记录更新后就恢复。不改写命令去绕开 hook。
 
 ### 计时
 
@@ -104,7 +104,7 @@ python3.12 -I .claude/solo-lab/bin/onboarding.py end <阶段>
 
 | 阶段 | 归类 | 包住什么 | 谁打点 |
 | --- | --- | --- | --- |
-| `precheck` | 本机 | 第 1 步的 `setup.py precheck` | 本会话 |
+| `precheck` | 本机 | 第 1 步的 `check.py precheck` | 本会话 |
 | `login` | 等人 | 第 2 步，从发出二维码到读回已登录 | 本会话 |
 | `resume` | 等人 | 第 6 步两轮之间，从请研究员回话到他回一句“继续开池” | 本会话 |
 | `init` | 本机 | 第 3 步和第 5 步的 `init --apply` | 本会话 |
@@ -148,7 +148,7 @@ python3.12 -I "$PLUGIN/scripts/onboarding.py" begin --target <项目目录>
 重复运行不会重置起点。上一次初始化已经结束的，这次记成“补齐”，和首次分开。
 
 ```bash
-python3.12 -I "$PLUGIN/scripts/setup.py" precheck
+python3.12 -I "$PLUGIN/scripts/check.py" precheck
 ```
 
 打点：`precheck`。它逐项打印“通过、提醒、失败、跳过”，最后一行是“预检：没有失败项。”或“预检：N 项失败。”。
@@ -231,7 +231,7 @@ python3.12 -I "$PLUGIN/scripts/setup.py" init --target <项目目录> --task <�
 先预览。它读 `spec/task.json` 里写的空间，只读飞书，不写文件：
 
 ```bash
-python3.12 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live
+python3.12 -I "$PLUGIN/scripts/space.py" feishu --target <项目目录> --live
 ```
 
 打点：`project_space`，到预览能读到空间为止。约定核对有问题，或者空间里没有一种类型对得上时，这条命令的退出码是 1；预览和写入都一样。
@@ -251,7 +251,7 @@ python3.12 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live
 ## 第 5 步：绑定
 
 ```bash
-python3.12 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live --apply
+python3.12 -I "$PLUGIN/scripts/space.py" feishu --target <项目目录> --live --apply
 ```
 
 打点：`binding`。它读空间结构，把约定里的槽位绑到这个空间，写入 `feishu/ids.json`（绑定）、`feishu/space.json` 和 `feishu/space.md`（空间结构）、`feishu/binding.md`、`org/phases.md`。知识空间找不到同名的，这一次新建，打印“知识空间：没有叫“<名字>”的，已新建。”。
@@ -270,7 +270,7 @@ python3.12 -I "$PLUGIN/scripts/setup.py" init --target <项目目录> --task <�
 然后核对一次：
 
 ```bash
-python3.12 -I "$PLUGIN/scripts/setup.py" check --target <项目目录>
+python3.12 -I "$PLUGIN/scripts/check.py" check --target <项目目录>
 ```
 
 这时该看到“本地配置：就绪”，“飞书”一层只剩“知识库节点还缺 21 个…”。
@@ -284,7 +284,7 @@ python3.12 -I "$PLUGIN/scripts/setup.py" check --target <项目目录>
 ## 第 6 步：开池
 
 ```bash
-python3.12 -I "$PLUGIN/scripts/setup.py" pool --target <项目目录>
+python3.12 -I "$PLUGIN/scripts/pool.py" open --target <项目目录>
 ```
 
 只读。第一行是“开池清单：<项目名>（共 15 个会话，总上限 30）。会话标题的前缀和侧栏分区的名字：<分区名>”。下面按批列出本会话要开的 7 个 +2，每个带 name、title、model、prompt、background 和 expect，后面缩进列出它下面的会话。
@@ -322,7 +322,7 @@ python3.12 -I "$PLUGIN/scripts/setup.py" pool --target <项目目录>
 4. **等这一批**（打点：`claims`）。Bash 的超时给 240000 毫秒：
 
    ```bash
-   python3.12 -I "$PLUGIN/scripts/setup.py" pool --target <项目目录> --wait 180 --batch <第几批>
+   python3.12 -I "$PLUGIN/scripts/pool.py" open --target <项目目录> --wait 180 --batch <第几批>
    ```
 
    它等到这一批的会话都认领、首轮都结束才返回，最后一句写明下一步：接着开哪一批，“这一轮到此为止”，或者“这是最后一批”。返回 1 是超时，输出里列着谁没认领、谁的首轮还没结束。有首轮还没结束的，重跑这条命令再等一次，它们在跑的时候占着名额；只是没认领的不用等，接着开下一批，没开出来的最后一并处理。
@@ -388,7 +388,7 @@ python3.12 -I "$PLUGIN/scripts/setup.py" pool --target <项目目录>
 2. **等全部认领、书记员做完**（打点：`claims`）。Bash 的超时给 300000 毫秒：
 
    ```bash
-   python3.12 -I "$PLUGIN/scripts/setup.py" pool --target <项目目录> --wait 240
+   python3.12 -I "$PLUGIN/scripts/pool.py" open --target <项目目录> --wait 240
    ```
 
    它每 5 秒看一次认领表，等到清单里的会话都认领、书记员的首轮结束才返回。返回 0 时第一句是“会话池已开齐：19/19 条认领。”。返回 1 时照输出办：
@@ -402,7 +402,7 @@ python3.12 -I "$PLUGIN/scripts/setup.py" pool --target <项目目录>
 
 3. **改标题**。本会话的标题是应用自动起的，用 `set_session_title` 改成 `[<分区名>] Initialization`；用户自己起的不动。这个会话是做初始化的会话，以后只用来重新登录、检查和升级；研究员平时找入口 `PMO-p2-01`。
 
-想看每个会话现在忙不忙，运行 `python3.12 -I .claude/solo-lab/bin/pool.py show`；想再看一遍全貌，运行不带 `--wait` 的 `setup.py pool --target <项目目录>`，末尾是“当前：19/19 条认领；入口 1 条，书记员 1 条；待转正的许可 0 条。”。
+想看每个会话现在忙不忙，运行 `python3.12 -I .claude/solo-lab/bin/pool.py show`；想再看一遍全貌，运行不带 `--wait` 的 `pool.py open --target <项目目录>`，末尾是“当前：19/19 条认领；入口 1 条，书记员 1 条；待转正的许可 0 条。”。
 
 真实初始化里走通过的：本会话开七个 +2，+2 在首轮里开出 +1，嵌着的会话在分区里显示成多层。没走通过的：分批以后 +1 开出 +0，书记员在第三层做两件写入。
 
@@ -413,16 +413,16 @@ python3.12 -I "$PLUGIN/scripts/setup.py" pool --target <项目目录>
 1. 打印手工开池的做法：
 
    ```bash
-   python3.12 -I "$PLUGIN/scripts/setup.py" pool --target <项目目录> --manual
+   python3.12 -I "$PLUGIN/scripts/pool.py" open --target <项目目录> --manual
    ```
 
 2. 请研究员照它做：在桌面应用里新建 7 个会话，目录选本项目，不开 worktree，模型照括号里的选，每个粘贴清单里的一句。hook 按这句话认领 +2；它在首轮里照认领输出开出本序列的 +1，+1 再开出 +0，开出来的是和默认档同一棵树。
-3. 书记员由路由开出，开局句里带着两件初始化写入。它没做的话，`setup.py pool --manual` 的输出里有一行“…把这段话发给它：…”，把这段话发给它；本会话发不了消息，就请研究员点开书记员的会话粘贴。
+3. 书记员由路由开出，开局句里带着两件初始化写入。它没做的话，`pool.py open --manual` 的输出里有一行“…把这段话发给它：…”，把这段话发给它；本会话发不了消息，就请研究员点开书记员的会话粘贴。
 4. 每个 +2 认领以后照认领输出把自己的标题改成 `[<分区名>] <会话名>`，归入分区，下面的会话跟着走。第 8 步带 `--sessions` 的检查会列出没改、没归的，请研究员在那个会话里交代一句。
 5. 想先少开一些：改任务文件，把暂时用不到的序列写进 `pool.later`，重跑第 3 步的 `init --apply`。这些序列开池时只有 +2，第一次有活时研究员在它的 +2 会话里说一句“补位”。
 6. 某一级首轮没把下一级开出来的：请研究员点开那个会话，说一句“照认领输出开出下一级”。
 
-核对还是用 `setup.py pool`，认领数等于清单的会话数就开齐了。
+核对还是用 `pool.py open`，认领数等于清单的会话数就开齐了。
 
 ## 第 7 步：写 .env
 
@@ -445,7 +445,7 @@ python3.12 -I "$PLUGIN/scripts/setup.py" env --target <项目目录> --apply
 流程图只能从一条工作项读出来。首条研究任务登记以后重读一次，验证流程的节点、负责角色和必填项才进 `feishu/space.md` 和 `org/phases.md`：
 
 ```bash
-python3.12 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live --apply
+python3.12 -I "$PLUGIN/scripts/space.py" feishu --target <项目目录> --live --apply
 ```
 
 再取会话列表：调 `list_sessions`，`include_archived` 写 `true`，`limit` 写 200。把返回的 JSON 数组原样存成一个文件，放在系统临时目录里，不放进项目目录。
@@ -458,7 +458,7 @@ python3.12 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live -
 ```
 
 ```bash
-python3.12 -I "$PLUGIN/scripts/setup.py" check --target <项目目录> --live --sessions <会话列表文件> --readback <回读文件>
+python3.12 -I "$PLUGIN/scripts/check.py" check --target <项目目录> --live --sessions <会话列表文件> --readback <回读文件>
 ```
 
 它分四层报告，每层一行“就绪”或“N 个问题”，下面列“提醒：”和“问题：”。四层都就绪，最后一行是“检查：四层都就绪”，退出码 0；有问题时退出码是 1。`--live` 只读回读飞书。带 `--readback` 时，最后一行之前还打印一张回读表：本会话一行，每个认领的会话一行，列出开池清单里的模型、实际模型、推理强度和窗口，没读到的写“读不到”。
@@ -515,7 +515,7 @@ python3.12 -I .claude/solo-lab/bin/onboarding.py finish
 | 把飞书空间接上，空间配置改过要重读 | 第 4、5 步 |
 | 换到另一个项目空间 | `references/feishu-space.md` 的“换空间” |
 | 开池，补开没开齐的会话 | 第 6 步 |
-| 研究员说“继续开池” | 第 6 步的下一轮。不记得开到哪了，先运行 `setup.py pool --target <项目目录>`，从第一个还有“未认领”的批接着开 |
+| 研究员说“继续开池” | 第 6 步的下一轮。不记得开到哪了，先运行 `pool.py open --target <项目目录>`，从第一个还有“未认领”的批接着开 |
 | 补位，某个会话丢了，升级插件 | `references/mechanisms.md` 的“会话池” |
 | 改模型、路径这类设置 | 改任务文件，重跑第 3 步的 `init --apply` |
 

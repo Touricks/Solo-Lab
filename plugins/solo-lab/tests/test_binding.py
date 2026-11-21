@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for `setup.py feishu` and `setup.py template` on a node-flow space:
+"""Tests for `space.py feishu` and `space.py template` on a node-flow space:
 python3.12 -I -B tests/test_binding.py
 
 The space is replayed from tests/fixtures/feishu/v2/space-calls.json; nothing calls Feishu.
@@ -20,6 +20,8 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 import orgspec  # noqa: E402
 import setup  # noqa: E402
+import check  # noqa: E402
+import space_cmd  # noqa: E402
 import ledger_core  # noqa: E402
 import space  # noqa: E402
 from test_space import Replay, fixture  # noqa: E402
@@ -82,7 +84,7 @@ class BindingCase(unittest.TestCase):
     def feishu(self, *args, edit=None, **kw):
         out = io.StringIO()
         with mock.patch.object(setup, "run", self.cli), mock.patch.object(space, "call", Replay(edit)), contextlib.redirect_stdout(out):
-            code = setup.feishu(self.tmp, *args, **kw)
+            code = space_cmd.feishu(self.tmp, *args, **kw)
         return code, out.getvalue()
 
 
@@ -119,7 +121,7 @@ class FeishuTest(BindingCase):
         with mock.patch.object(space, "call", side_effect=AssertionError("read the space")):
             out = io.StringIO()
             with mock.patch.object(setup, "run", self.cli), contextlib.redirect_stdout(out):
-                self.assertEqual(setup.feishu(self.tmp, [], False, True), 0)
+                self.assertEqual(space_cmd.feishu(self.tmp, [], False, True), 0)
         self.assertEqual(before, {n: self.read("feishu/" + n) for n in before})
         self.assertIn("[相同] feishu/space.json", out.getvalue())
 
@@ -308,7 +310,7 @@ class FeishuTest(BindingCase):
         """An old project: bound to a space made from template 2.1.0, which the template maintainer then brought up
         to 2.2.0 by hand (two fields on the decision, the state 已决定 renamed 待执行, a view). Reading the snapshot
         again, which any session may do, gives the ledger the two fields: they are no slots and are found by name
-        in the snapshot. The renamed state is a slot: its name is in the binding, which only `setup.py feishu
+        in the snapshot. The renamed state is a slot: its name is in the binding, which only `space.py feishu
         --live --apply` writes, and that reads the snapshot too. `space.py check` says when the binding is behind."""
         decision = next(k for k, t in SNAP["types"].items() if t["api_name"] == "decision")
 
@@ -345,7 +347,7 @@ class FeishuTest(BindingCase):
         self.assertEqual(seen(), ("已决定", ("field_d22001", "field_d22002"), True, False))    # ...the state's name is not
         code, text = tool("check")
         self.assertEqual(code, 1)
-        self.assertIn("| 决策的状态“待执行” | 空间里现在是 “待执行”，绑定记的是 “已决定” | 重跑 setup.py feishu --target <项目目录> --live，核对后加 --apply |", text)
+        self.assertIn("| 决策的状态“待执行” | 空间里现在是 “待执行”，绑定记的是 “已决定” | 重跑 space.py feishu --target <项目目录> --live，核对后加 --apply |", text)
         code, text = self.feishu([], True, False, edit=by_hand)           # the researcher's session: a preview first
         self.assertEqual(code, 0)
         self.assertIn("[更新] feishu/ids.json", text)
@@ -381,7 +383,7 @@ class TemplateTest(BindingCase):
     def template(self, name, edit=None):
         out = io.StringIO()
         with mock.patch.object(setup, "run", self.cli), mock.patch.object(space, "call", Replay(edit)), contextlib.redirect_stdout(out):
-            code = setup.check_template(None, name)
+            code = space_cmd.check_template(None, name)
         return code, out.getvalue()
 
     def test_the_reference_template_passes(self):
@@ -542,7 +544,7 @@ class EnvTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("租户域名", text)
         self.assertFalse(os.path.exists(os.path.join(self.tmp, ".env")))
-        self.assertTrue(setup.env_gaps(self.tmp))
+        self.assertTrue(check.env_gaps(self.tmp))
 
     def test_a_new_file_holds_the_two_links(self):
         self.ids(space_id="sp_1", tenant_domain="example.feishu.cn")
@@ -553,7 +555,7 @@ class EnvTest(unittest.TestCase):
         self.assertEqual(self.read(), "# solo-lab：由 feishu/ids.json 生成\nFEISHU_PROJECT_URL=https://project.feishu.cn/codeopt\n"
                                       "FEISHU_WIKI_URL=https://example.feishu.cn/wiki/space/sp_1\n")
         self.assertEqual(os.stat(os.path.join(self.tmp, ".env")).st_mode & 0o777, 0o600)
-        self.assertEqual(setup.env_gaps(self.tmp), [])
+        self.assertEqual(check.env_gaps(self.tmp), [])
         self.assertIn("没有改", self.env(True)[1])
 
     def test_other_lines_stay_and_are_never_shown(self):
@@ -568,7 +570,7 @@ class EnvTest(unittest.TestCase):
         self.assertTrue(self.read().startswith("# 我自己的\nSOME_PASSWORD=hunter2\n\nOTHER=1\n\n# solo-lab：由 feishu/ids.json 生成\n"))
         self.assertEqual(self.read().count("FEISHU_WIKI_URL="), 1)
         self.ids(space_id="sp_2", tenant_domain="example.feishu.cn")
-        self.assertTrue(setup.env_gaps(self.tmp))                     # the binding moved on
+        self.assertTrue(check.env_gaps(self.tmp))                     # the binding moved on
         self.env(True)
         self.assertIn("/wiki/space/sp_2\n", self.read())
         self.assertIn("SOME_PASSWORD=hunter2\n", self.read())

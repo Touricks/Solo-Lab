@@ -110,6 +110,7 @@ def project_file(root):
     scripts = os.path.join(root, PLUGIN, "scripts")
     sys.path.insert(0, scripts)
     import setup
+    import check
     setup.run = lambda cmd, timeout=30: (None, "", "lint does not call %s" % cmd[0])     # no lark-cli, meegle or claude
     source = os.path.join(scripts, "setup.py")
     findings = []
@@ -127,7 +128,7 @@ def project_file(root):
         task = os.path.join(tmp, "spec", "task.json")
         kinds = {rel: kind for kind, rel, _ in setup.actions_for(tmp, setup.build_plan(tmp, task, None))}
         with open(os.path.join(tmp, ".claude", "solo-lab", "manifest.json"), encoding="utf-8") as f:
-            problems, _ = setup.local_layer(tmp, json.load(f))
+            problems, _ = check.local_layer(tmp, json.load(f))
         for rel in invited:
             if not plan.files[rel][2]:
                 continue

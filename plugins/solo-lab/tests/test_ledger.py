@@ -755,7 +755,7 @@ class Template220Test(LedgerCase):
         the space for 已决定, so a decided decision the researcher carries out is missing from the queue, the
         confirmation does not say who carries it out, and a signature that names it is refused. The snapshot read
         again (space.py snapshot --apply, any session): the two fields are written; the state is still asked for
-        by its old name. Bound again (setup.py feishu --live --apply, the researcher's session): everything."""
+        by its old name. Bound again (space.py feishu --live --apply, the researcher's session): everything."""
         new = fake_space.template_220()
         self.fake = fake_space.FakeSpace(new)                         # the space is 2.2.0; feishu/ids.json and space.json are old
         task = self.task()
@@ -775,7 +775,7 @@ class Template220Test(LedgerCase):
         rows = self.quiet(ledger.query, self.lg("preview"), "queue")
         self.assertEqual([str(r["work_item_id"]) for r in rows], [other])                 # the decided one is still missing
         with open(os.path.join(self.tmp, "feishu", "ids.json"), "w", encoding="utf-8") as f:
-            json.dump(fake_space.bound_ids(new), f, ensure_ascii=False)                   # what setup.py feishu --live --apply writes
+            json.dump(fake_space.bound_ids(new), f, ensure_ascii=False)                   # what space.py feishu --live --apply writes
         rows = self.quiet(ledger.query, self.lg("preview"), "queue")
         self.assertEqual([(str(r["work_item_id"]), r["stage"]) for r in rows], [(hand, "待执行"), (other, "待决定")])
         self.walk(task, 5)

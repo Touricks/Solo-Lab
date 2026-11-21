@@ -399,7 +399,7 @@ def ensure_node(lg, key):
     title = lg.spec.term("node", head) if not seq else lg.spec.term("seq", seq)
     space = (lg.ids.get("wiki") or {}).get("space_id")
     if not space and lg.mode != "offline":
-        raise core.LedgerError("ids.json 里没有知识空间 space_id；先建知识空间，再跑 setup.py feishu --live --apply")
+        raise core.LedgerError("ids.json 里没有知识空间 space_id；先建知识空间，再跑 space.py feishu --live --apply")
     parent = None
     if seq:
         parent = (lg.nodes.get(head) or {}).get("node_token")

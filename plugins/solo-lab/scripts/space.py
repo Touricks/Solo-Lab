@@ -17,7 +17,7 @@ in order with their roles and required form items. Binding says which object of 
 fills each slot; it matches by --map, then what was bound last time, then the identifier
 (api_name, role id, the field alias shown on the new-item page), then the name (a state also
 by a name it had in an earlier template: terms.zh.json state_former). The binding
-itself (feishu/ids.json) is written by `setup.py feishu --apply` only, which the researcher's
+itself (feishu/ids.json) is written by `space.py feishu --apply` only, which the researcher's
 own session runs: every session can read a space, one place changes what the ledger trusts.
 
 Only read-only meegle commands are used. A flow chart can only be read from a work item
@@ -583,7 +583,7 @@ def stale(contract, binding, fresh):
     """Problems where feishu/ids.json records something else than the snapshot now shows:
     any session may re-read the snapshot, the binding is written in one place only, so a
     renamed state or a slot the space has since gained leaves the ledger on old names."""
-    rows, fix = [], "重跑 setup.py feishu --target <项目目录> --live，核对后加 --apply"
+    rows, fix = [], "重跑 space.py feishu --target <项目目录> --live，核对后加 --apply"
     shown = lambda v: "“%s”" % v.get("name") if isinstance(v, dict) else str(v)
     for wid, new in (fresh.get("types") or {}).items():
         cn, was = contract.name("types", wid), (binding.get("types") or {}).get(wid)
@@ -626,8 +626,20 @@ def report(contract, snap, binding, problems, notes):
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and argv[0] in ("feishu", "template"):
+        # binding a project and checking a template need what setup.py knows about the project; they are in
+        # space_cmd.py, which exists where the plugin is installed and not among a project's copies
+        try:
+            import space_cmd
+        except ImportError:
+            print("出错：space.py %s 从插件安装目录运行：python3.12 -I <插件目录>/scripts/space.py %s …" % (argv[0], argv[0]))
+            return 2
+        return space_cmd.main(argv)
     ap = argparse.ArgumentParser(description="读飞书项目空间的结构，把插件的约定绑定到它")
     sub = ap.add_subparsers(dest="cmd")
+    for name in ("feishu", "template"):           # carried out by space_cmd.py, above; listed here for --help
+        sub.add_parser(name)
     p = sub.add_parser("export")
     p.add_argument("--space", required=True, help="要读的空间（模板）：名字、simple_name 或 project_key")
     p.add_argument("--out", required=True, help="快照写到这个文件")
@@ -683,7 +695,7 @@ def main(argv=None):
         m = ids.get("meegle") or {}
         if args.cmd == "snapshot":
             if not m.get("project_key"):
-                raise SpaceError("feishu/ids.json 里没有 project_key：先跑 setup.py feishu --live --apply 找到项目空间")
+                raise SpaceError("feishu/ids.json 里没有 project_key：先跑 space.py feishu --live --apply 找到项目空间")
             old = load_json(os.path.join(fdir, "space.json"))
             snap = snapshot({"project_key": m["project_key"], "simple_name": m.get("simple_name"), "name": m.get("space_name")},
                             wanted_by(contract, old=binding_of(ids)))
@@ -704,7 +716,7 @@ def main(argv=None):
             binding, problems = bind(contract, snap, binding_of(ids), parse_maps(contract, args.map))
             more, notes = check(contract, snap, binding)
             report(contract, snap, binding, problems + more, notes)
-            print("这是预览，照本地的快照算的。绑定由研究员的会话写入：setup.py feishu --target <项目目录> --live，核对后加 --apply。")
+            print("这是预览，照本地的快照算的。绑定由研究员的会话写入：space.py feishu --target <项目目录> --live，核对后加 --apply。")
             return 1 if problems + more else 0
         binding = binding_of(ids)
         if args.cmd == "check":
@@ -713,7 +725,7 @@ def main(argv=None):
             more, notes = check(contract, snap, binding)
             if m.get("contract_version") not in (None, contract.version):
                 problems.append(["feishu/ids.json", "绑定按约定第 %s 版做的，插件现在是第 %d 版" % (m.get("contract_version"), contract.version),
-                                 "重跑 setup.py feishu --target <项目目录> --live，核对后加 --apply"])
+                                 "重跑 space.py feishu --target <项目目录> --live，核对后加 --apply"])
             report(contract, snap, binding, problems + more, notes)
             return 1 if problems + more else 0
         if args.what == "binding":

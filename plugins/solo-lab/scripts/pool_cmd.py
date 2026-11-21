@@ -11,6 +11,7 @@ load that file on every tool call and must not pay for what the commands import.
                                               asked to terminate or delete, read from the ledger; a preview without --apply
     pool.py refill <role> [--count N]         ask for more sessions of a role: a refill request in pool.json and the entry's
                                               inbox; --count 0 withdraws the role's requests
+    pool.py open --target DIR [...]           the sessions an initialisation opens (pool_open.py, where the plugin is installed)
 
 Standard library only.
 """
@@ -727,7 +728,21 @@ def main(argv=None):
     p = sub.add_parser("refill")
     p.add_argument("role")
     p.add_argument("--count", type=int, default=1, help="再要几个会话；0 是撤回这个角色的补位请求")
+    p = sub.add_parser("open")
+    p.add_argument("--target", required=True)
+    p.add_argument("--manual", action="store_true", help="研究员的会话开不了会话时：打印手工开池的做法")
+    p.add_argument("--wait", type=int, metavar="SECONDS", help="等到清单里的会话都认领、书记员的首轮结束，最多等这么多秒")
+    p.add_argument("--batch", type=int, metavar="N", help="和 --wait 一起用：只等第 N 批的会话认领、首轮结束")
     args = ap.parse_args(argv)
+    if args.cmd == "open":
+        # the list of sessions an initialisation opens comes from what setup.py knows about the project; it is in
+        # pool_open.py, which exists where the plugin is installed and not among a project's copies
+        try:
+            import pool_open
+        except ImportError:
+            print("出错：pool.py open 从插件安装目录运行：python3.12 -I <插件目录>/scripts/pool.py open --target <项目目录>")
+            return 2
+        return pool_open.main(args)
     spec = orgspec.OrgSpec()
     root = ledger_core.project_root()
     if os.path.isfile(os.path.join(root, ".agent-org", "manifest.json")):

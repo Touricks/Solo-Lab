@@ -320,7 +320,7 @@ def flow_entry(lg, wid, name=None):
             return {"field_key": "template", "field_value": "<流程 ID>"}
         flows = "、".join(f.get("name") or "" for f in (lg.space_type(wid).get("flows") or {}).values())
         if not flows:
-            raise core.LedgerError("feishu/space.json 里没有%s的流程；先跑 setup.py feishu --live --apply" % lg.spec.term("wi", wid))
+            raise core.LedgerError("feishu/space.json 里没有%s的流程；先跑 space.py feishu --live --apply" % lg.spec.term("wi", wid))
         raise core.LedgerError("%s有这些流程：%s；%s" % (lg.spec.term("wi", wid), flows,
                                                "没有“%s”" % name if name else "要写明走哪一个"))
     return {"field_key": "template", "field_value": str(tid)}
@@ -627,7 +627,7 @@ def reply(lg, path, doc=None):
                 parent_id, last, spec.pkg(d.pid), receipt, d.version, how))
     it = lg.item(parent_id)
     if it is not None and not it.get("type"):
-        raise core.LedgerError("认不出 #%s 的类型（type_key %s）；确认工作项 ID 没写错，或者先跑 setup.py feishu --live --apply 重读类型" % (
+        raise core.LedgerError("认不出 #%s 的类型（type_key %s）；确认工作项 ID 没写错，或者先跑 space.py feishu --live --apply 重读类型" % (
             parent_id, it.get("type_key")))
     wid = (it and it.get("type")) or "same_seq"
     if wid not in lg.contract.types_with("fields", "delivery_link"):
@@ -1254,7 +1254,7 @@ def archive(lg, item_id, moved=False):
     last, archived = None, None
     if it is not None:
         if not wid:
-            raise core.LedgerError("认不出 #%s 的类型（type_key %s）；先跑 setup.py feishu --live --apply 重读类型" % (item_id, it.get("type_key")))
+            raise core.LedgerError("认不出 #%s 的类型（type_key %s）；先跑 space.py feishu --live --apply 重读类型" % (item_id, it.get("type_key")))
         archived = lg.state(wid, lg.contract.flow["archive_node"]["state"])
         if wid == "decision" and it["state"] in core.system_states(lg.spec):     # terminated on the web page
             gone = drop_pending(lg, item_id)

@@ -7,7 +7,7 @@
 | 层 | 内容 | 在哪里 | 谁写 |
 | --- | --- | --- | --- |
 | 约定 | 脚本按含义处理的槽位：5 个类型，18 个字段，9 个角色，各类型要有的状态，归档节点、签字关和冻结核对的规则，参考模板的链接 | 插件的 `orgspec/contract.json`，项目里的副本在 `.claude/solo-lab/orgspec/` | 插件 |
-| 绑定 | 每个槽位对应这个空间里的哪个类型、字段、角色和状态 | 项目的 `feishu/ids.json` | `setup.py feishu --apply`，只在研究员的会话里运行 |
+| 绑定 | 每个槽位对应这个空间里的哪个类型、字段、角色和状态 | 项目的 `feishu/ids.json` | `space.py feishu --apply`，只在研究员的会话里运行 |
 | 流程和表单 | 有哪些流程、节点怎么排、每一步谁负责、必填什么、新建时必填什么 | 只在飞书空间里。读出来的快照在 `feishu/space.json` 和 `feishu/space.md` | 模板 |
 
 - 槽位以外的字段，脚本按名字读写。模板加字段、改流程、改必填项而槽位都在时，插件不用改。
@@ -26,11 +26,11 @@
 ## 绑定
 
 ```bash
-python3.12 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live
+python3.12 -I "$PLUGIN/scripts/space.py" feishu --target <项目目录> --live
 ```
 
 ```bash
-python3.12 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live --apply
+python3.12 -I "$PLUGIN/scripts/space.py" feishu --target <项目目录> --live --apply
 ```
 
 不加 `--apply` 是预览：只读飞书，不写文件，末尾打印 `feishu/binding.md` 的全文。它读的是项目里的 `spec/task.json`，所以要先做过 `init --apply`。
@@ -68,9 +68,9 @@ python3.12 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live -
 
 | 什么时候 | 谁 | 命令 |
 | --- | --- | --- |
-| 首条研究任务登记以后 | 初始化会话 | `setup.py feishu --target <项目目录> --live --apply`，`org/phases.md` 一起更新 |
+| 首条研究任务登记以后 | 初始化会话 | `space.py feishu --target <项目目录> --live --apply`，`org/phases.md` 一起更新 |
 | 某个流程登记了第一条工作项，或者空间配置改过 | 任何会话 | `python3.12 -I .claude/solo-lab/bin/space.py snapshot --target . --apply`，只更新快照，见技能 `solo-lab:space-read` |
-| 状态改名、槽位有增减 | 研究员的会话 | 重新绑定：`setup.py feishu --live`，核对后加 `--apply` |
+| 状态改名、槽位有增减 | 研究员的会话 | 重新绑定：`space.py feishu --live`，核对后加 `--apply` |
 
 推进节点时 `workitem.py` 每一步都现读这条工作项的节点，不依赖快照。快照用来把字段名和选项名换成空间里的键，也用来讲清空间。
 
@@ -78,7 +78,7 @@ python3.12 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live -
 
 每个项目一个知识空间，名字写在任务文件的 `feishu.wiki_space`，不写就用项目名。
 
-- `setup.py feishu --live` 翻完研究员能看到的全部知识空间再判断。正好一个同名的就记下 space_id；没有同名的，预览时只提示，`--apply` 时新建；两个以上不自动选，停下请研究员定。
+- `space.py feishu --live` 翻完研究员能看到的全部知识空间再判断。正好一个同名的就记下 space_id；没有同名的，预览时只提示，`--apply` 时新建；两个以上不自动选，停下请研究员定。
 - 节点骨架是 21 个：研究任务、同序列需求包、跨序列需求包、决策包、反馈包、汇报文档、归档文档这 7 个一级节点，同序列需求包和归档文档下面各 7 个序列节点。
 - 节点由书记员建：`docs.py ensure-node all --apply`，先建一级节点，再建各序列的节点，结果写进 `feishu/ids.json`。上一级下已经有标题相同的节点就直接用，不再建；重跑不会重复建。
 - 已有的节点只是名字不同的，先请研究员在网页上改成清单里的名字，否则会另建一个。命令行没有给节点改名的命令，节点标题跟着节点文档的一级标题走。
@@ -100,7 +100,7 @@ FEISHU_WIKI_URL=https://<租户域名>/wiki/space/<space_id>
 
 - 两行都从 `feishu/ids.json` 生成，脚本读绑定仍然只认 `ids.json`。重跑只换这两行；`.env` 里的其他行不动，也不显示。只写链接，不写令牌和密码。
 - 租户域名在书记员建出第一篇文档时才记进 `ids.json`，所以这一步排在首条研究任务登记之后。
-- `setup.py check` 的“飞书”一层核对这两行在不在、和 `ids.json` 对不对得上。
+- `check.py check` 的“飞书”一层核对这两行在不在、和 `ids.json` 对不对得上。
 
 ## 换空间
 
@@ -109,11 +109,11 @@ FEISHU_WIKI_URL=https://<租户域名>/wiki/space/<space_id>
 1. **准备新空间。** 用模板创建。绑定之前可以先只读核对一遍，最后一行是“这个空间符合约定：用它建出来的项目空间，绑定不用 --map。”才往下做：
 
    ```bash
-   python3.12 -I "$PLUGIN/scripts/setup.py" template --space <新空间的名字、simple_name 或 project_key>
+   python3.12 -I "$PLUGIN/scripts/space.py" template --space <新空间的名字、simple_name 或 project_key>
    ```
 
 2. **改任务文件。** `feishu.meegle_space` 写新空间。新旧空间同名时写新空间的 simple_name 或 project_key，不写名字。重跑 `init --apply`。
-3. **预览。** `setup.py feishu --live` 打印“换空间：旧空间…→ 新空间…”，`feishu/binding.md` 多出“换空间”一节，列出两个空间的名字、simple_name 和 project_key，以及旧空间里还有没有工作项。
+3. **预览。** `space.py feishu --live` 打印“换空间：旧空间…→ 新空间…”，`feishu/binding.md` 多出“换空间”一节，列出两个空间的名字、simple_name 和 project_key，以及旧空间里还有没有工作项。
 4. **旧空间里有工作项就先停。** 在新空间重建会换掉工作项 ID，本地的回执、草稿和会话名里的 ID 指的都是旧空间。旧空间留作档案，台账以后不再读写它；没办完的工作项要不要在新空间重建，由研究员逐条决定。研究员确认以后，写入时加 `--leave-old-items`。旧空间没查成的，也要加这个参数才写入。
 5. **写入。** `feishu/ids.json` 的 `previous_spaces` 记下旧空间的 key、名字、原来的绑定时间、换出的时间和留在旧空间的工作项类型。写入后重跑一次 `init --apply`。
 

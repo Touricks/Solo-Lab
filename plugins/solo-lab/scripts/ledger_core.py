@@ -249,7 +249,7 @@ class Ledger:
     def bound_type(self, wid):
         t = self.types.get(wid) or {}
         if not t.get("type_key"):
-            raise LedgerError("%s还没绑定到空间里的类型：先跑 setup.py feishu --live，核对后加 --apply" % self.spec.term("wi", wid))
+            raise LedgerError("%s还没绑定到空间里的类型：先跑 space.py feishu --live，核对后加 --apply" % self.spec.term("wi", wid))
         return t
 
     def api(self, wid):
@@ -285,7 +285,7 @@ class Ledger:
             found = {"field_key": key, "name": self.spec.field_name(ref), "field_type": self.contract.field(ref)["type"]}
         if found is None:
             if ref in self.contract.data["fields"]:
-                raise LedgerError("%s的字段 %s（%s）还没绑定：报给模板维护者补上，名字不同的用 --map 指认，再跑 setup.py feishu --live --apply" % (
+                raise LedgerError("%s的字段 %s（%s）还没绑定：报给模板维护者补上，名字不同的用 --map 指认，再跑 space.py feishu --live --apply" % (
                     self.spec.term("wi", wid), ref, self.spec.field_name(ref)))
             raise LedgerError("%s上没有字段“%s”：写字段名、约定里的标识或 field_key；这个类型有哪些字段见 feishu/space.md" % (
                 self.spec.term("wi", wid), ref))
@@ -307,7 +307,7 @@ class Ledger:
         """The name of a state slot in this space."""
         s = (self.states.get(wid) or {}).get(slot)
         if not s or not s.get("name"):
-            raise LedgerError("%s的状态“%s”还没绑定：先跑 setup.py feishu --live --apply" % (
+            raise LedgerError("%s的状态“%s”还没绑定：先跑 space.py feishu --live --apply" % (
                 self.spec.term("wi", wid), self.spec.term("state", slot)))
         return s["name"]
 
@@ -392,7 +392,7 @@ class Ledger:
                 raise WriteMaybeDone("写命令超时（120 秒）：%s\n这一步可能已经写进飞书。先在网页上核对，再决定要不要重跑。" % shown)
             raise LedgerError("命令超时（120 秒）：%s" % shown)
         except OSError as e:
-            raise LedgerError("运行不了 %s（%s）；先装好并登录，见 setup.py precheck" % (argv[0], e))
+            raise LedgerError("运行不了 %s（%s）；先装好并登录，见 check.py precheck" % (argv[0], e))
         out = p.stdout.strip()
         if write:
             self.log(argv, p.returncode, out[-2000:])
@@ -1477,16 +1477,16 @@ def run(ap, argv, command):
     lg = Ledger(project_root(), mode)
     m = lg.ids.get("meegle") or {}
     if mode != "offline" and not (m.get("bound_at") and m.get("types")):  # a binding time with no type is no binding
-        print("出错：这个项目还没绑定飞书空间。先跑 setup.py feishu --target <项目目录> --live 看绑定结果，核对后加 --apply；"
+        print("出错：这个项目还没绑定飞书空间。先跑 space.py feishu --target <项目目录> --live 看绑定结果，核对后加 --apply；"
               "绑定以前台账脚本不读也不写飞书。")
         return 1
     if mode != "offline" and lg.ids.get("schema") != space.IDS_SCHEMA:
         print("出错：feishu/ids.json 是旧版的绑定（%s）。这一版只认用节点流程的空间：照 setup 技能用模板建空间，"
-              "再跑 setup.py feishu --target <项目目录> --live --apply 重新绑定。" % (lg.ids.get("schema") or "没有 schema"))
+              "再跑 space.py feishu --target <项目目录> --live --apply 重新绑定。" % (lg.ids.get("schema") or "没有 schema"))
         return 1
     moved = other_space(load_json(os.path.join(lg.root, "spec", "task.json"), {}), m)
     if mode != "offline" and moved:
-        print("出错：spec/task.json 里的飞书项目空间是“%s”，绑定的是“%s”。重跑 setup.py feishu --target <项目目录> --live 核对，"
+        print("出错：spec/task.json 里的飞书项目空间是“%s”，绑定的是“%s”。重跑 space.py feishu --target <项目目录> --live 核对，"
               "再加 --apply；在这以前台账脚本不读也不写飞书。" % (moved, m["space_name"]))
         return 1
     lock = write_lock(lg.root) if mode == "apply" else contextlib.nullcontext()

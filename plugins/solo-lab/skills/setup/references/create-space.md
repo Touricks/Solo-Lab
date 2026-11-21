@@ -1,6 +1,6 @@
 # 用模板创建项目空间
 
-初始化第 4 步用。`setup.py feishu --target <项目目录> --live` 报“没有叫“<空间名>”的飞书项目空间”时才创建；按名字查到一个就沿用，查到两个以上停下。
+初始化第 4 步用。`space.py feishu --target <项目目录> --live` 报“没有叫“<空间名>”的飞书项目空间”时才创建；按名字查到一个就沿用，查到两个以上停下。
 
 脚本不建项目空间：meegle 命令行管空间的只有 `project search` 这一条查找命令。所以这一步是界面操作，初始化里的界面操作也只有这一处。
 
@@ -46,7 +46,7 @@
 重跑预览：
 
 ```bash
-python3.12 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live
+python3.12 -I "$PLUGIN/scripts/space.py" feishu --target <项目目录> --live
 ```
 
 | 输出 | 意思 | 怎么办 |

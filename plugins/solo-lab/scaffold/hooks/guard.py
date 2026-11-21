@@ -1011,26 +1011,32 @@ def check_pool_command(data, who, policy, root, command):
     return Verdict("deny", "只有研究员能释放认领（pool.py release）。")
 
 
+# The scripts of an initialisation, and which of their subcommands are the researcher's session's alone (None: all).
+# Until 1.1.0 these were setup.py's subcommands, and space.py export.
+SETUP_SCRIPTS = {"setup.py": None, "check.py": ("precheck", "check"), "space.py": ("export", "feishu", "template"),
+                 "pool.py": ("open",)}
+
+
 def setup_sub(argv):
-    """(script, subcommand) when argv runs the plugin's setup.py or space.py with python; else None."""
+    """(script, subcommand) when argv runs one of the plugin's initialisation scripts with python; else None."""
     if not argv or not PYTHON.search(os.path.basename(argv[0])):
         return None
     kind, target, rest = fc.python_target(argv[1:])
     name = os.path.basename(target or "").lstrip("\\")
-    if kind != "script" or name not in ("setup.py", "space.py"):
+    if kind != "script" or name not in SETUP_SCRIPTS:
         return None
     return name, next((x for x in rest if not x.startswith("-")), "")
 
 
 def check_setup(data, who, root, command):
-    """setup.py changes what the project is bound to, starts logins and opens the pool: it is for
+    """Initialising changes what the project is bound to, starts logins and opens the pool: it is for
     the researcher's own session. So is space.py export, which writes a file wherever it is told."""
-    if "setup.py" not in command and "space.py" not in command:
+    if not any(s in command for s in SETUP_SCRIPTS):
         return None
     hits = []
     for argv, text in command_runs(command, data.get("cwd") or root, root):
         found = setup_sub(argv) if argv else (("setup.py", "") if "setup.py" in text else None)
-        if found and (found[0] == "setup.py" or found[1] == "export"):
+        if found and (SETUP_SCRIPTS[found[0]] is None or found[1] in SETUP_SCRIPTS[found[0]]):
             hits.append(found)
     if not hits or (who.researcher and not data.get("agent_id")):
         return None

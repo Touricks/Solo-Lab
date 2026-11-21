@@ -360,7 +360,7 @@ class CliTest(SpaceCase):
             json.dump(obj, f, ensure_ascii=False)
 
     def bound(self, snap=None):
-        """The binding as `setup.py feishu --apply` writes it."""
+        """The binding as `space.py feishu --apply` writes it."""
         binding, _ = space.bind(self.contract, snap or self.snap)
         ids = space.apply_binding(json.loads(self.get("ids.json")), self.contract, binding)
         self.put("ids.json", ids)
@@ -385,8 +385,8 @@ class CliTest(SpaceCase):
             self.assertEqual(self.run_cli("snapshot", "--target", self.tmp, "--apply")[0], 0)
         code, out = self.run_cli("bind", "--target", self.tmp)
         self.assertEqual(code, 0)
-        self.assertIn("setup.py feishu --target <项目目录> --live", out)
-        self.assertNotIn("types", json.loads(self.get("ids.json"))["meegle"])   # only setup.py feishu writes the binding
+        self.assertIn("space.py feishu --target <项目目录> --live", out)
+        self.assertNotIn("types", json.loads(self.get("ids.json"))["meegle"])   # only space.py feishu writes the binding
         with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
             self.run_cli("bind", "--target", self.tmp, "--apply")
         ids = self.bound()
@@ -427,7 +427,7 @@ class CliTest(SpaceCase):
         self.assertIn("空间里现在是 “等研究员”，绑定记的是 “待决定”", out)
         self.assertIn("研究任务的字段“结论”", out)
         self.assertIn("空间里有，绑定里还没记", out)
-        self.assertIn("setup.py feishu --target <项目目录> --live", out)
+        self.assertIn("space.py feishu --target <项目目录> --live", out)
 
     def test_export_puts_any_space_into_a_file_outside_the_project(self):
         path = os.path.join(self.tmp, "template.json")

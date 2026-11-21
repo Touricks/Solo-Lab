@@ -1,6 +1,6 @@
 ---
 name: space-bind
-description: 把插件的约定绑定到飞书项目空间时，处理对不上的地方。约定核对报出缺项、类型或字段在空间里名字不同、绑定数不满时，对照空间快照提出槽位对应方案（--map 类型槽位=空间里的类型名，--map 类型槽位.字段槽位=字段名），请研究员确认后写入；空间里确实没有的，给模板维护者写缺项清单。初始化会话绑定空间时、换模板或模板大改之后、台账命令报“还没绑定”、space.py check 列出问题时使用。不在网页上改空间配置，不拿别的字段顶替；setup.py feishu --live 是预览，研究员核对后才加 --apply。
+description: 把插件的约定绑定到飞书项目空间时，处理对不上的地方。约定核对报出缺项、类型或字段在空间里名字不同、绑定数不满时，对照空间快照提出槽位对应方案（--map 类型槽位=空间里的类型名，--map 类型槽位.字段槽位=字段名），请研究员确认后写入；空间里确实没有的，给模板维护者写缺项清单。初始化会话绑定空间时、换模板或模板大改之后、台账命令报“还没绑定”、space.py check 列出问题时使用。不在网页上改空间配置，不拿别的字段顶替；space.py feishu --live 是预览，研究员核对后才加 --apply。
 ---
 
 # 绑定空间
@@ -9,14 +9,14 @@ description: 把插件的约定绑定到飞书项目空间时，处理对不上�
 
 做法是先看清哪些槽位没绑上。名字不同的，提出对应方案请研究员确认；空间里确实没有的，写成缺项清单交给模板维护者。
 
-绑定只由 `setup.py feishu --apply` 写入，在研究员自己的会话里跑，也就是做初始化的那个会话。池里的角色会话可以读空间、试对应方案，不写绑定。
+绑定只由 `space.py feishu --apply` 写入，在研究员自己的会话里跑，也就是做初始化的那个会话。池里的角色会话可以读空间、试对应方案，不写绑定。
 
 下面的 `<插件目录>` 是插件根目录，也就是本技能目录往上两级。槽位的全表见技能 `solo-lab:ledger` 的 `references/structure.md`。
 
 ## 先看核对结果
 
 ```bash
-python3.12 -I <插件目录>/scripts/setup.py feishu --target <项目目录> --live
+python3.12 -I <插件目录>/scripts/space.py feishu --target <项目目录> --live
 ```
 
 这是预览：只读飞书，不写文件。它按任务文件里写的空间读出结构，逐个槽位找对应的对象，再核对流程能不能被脚本推进。输出里看三处：
@@ -71,8 +71,8 @@ python3.12 -I <插件目录>/scripts/setup.py feishu --target <项目目录> --l
 **预览，再写入。** 研究员确认后带着 `--map` 再预览一遍，问题少了、绑定数满了，再加 `--apply`：
 
 ```bash
-python3.12 -I <插件目录>/scripts/setup.py feishu --target <项目目录> --live --map research_task=研究课题 --map decision.sign_result=批不批
-python3.12 -I <插件目录>/scripts/setup.py feishu --target <项目目录> --live --map research_task=研究课题 --map decision.sign_result=批不批 --apply
+python3.12 -I <插件目录>/scripts/space.py feishu --target <项目目录> --live --map research_task=研究课题 --map decision.sign_result=批不批
+python3.12 -I <插件目录>/scripts/space.py feishu --target <项目目录> --live --map research_task=研究课题 --map decision.sign_result=批不批 --apply
 ```
 
 写入的是 `feishu/ids.json`（绑定）、`feishu/space.json` 和 `feishu/space.md`（快照）、`feishu/binding.md`（绑定结果和还缺什么）、`org/phases.md`（研究任务的流程对照）。写入后在项目目录里核对一遍，最后一行以“通过”结尾，或者剩下的问题都已经进了缺项清单：
@@ -96,7 +96,7 @@ python3.12 -I .claude/solo-lab/bin/space.py check --target .
 
 ## 给模板维护者写缺项清单
 
-空间是用模板建出来的，缺的东西要在模板里补。清单交给研究员，由研究员转给模板维护者；模板更新、空间重建或补齐以后，重跑 `setup.py feishu --live`。
+空间是用模板建出来的，缺的东西要在模板里补。清单交给研究员，由研究员转给模板维护者；模板更新、空间重建或补齐以后，重跑 `space.py feishu --live`。
 
 清单这样写：
 
@@ -109,7 +109,7 @@ python3.12 -I .claude/solo-lab/bin/space.py check --target .
 
 ## 换模板或模板大改之后
 
-- 模板改了流程、表单、字段或选项，槽位都还在：不用重新指认。重跑 `setup.py feishu --live`，指认过类型的带上原来的 `--map`。预览里的“变化：”各行就是结构上的改动，核对通过后加 `--apply`。
+- 模板改了流程、表单、字段或选项，槽位都还在：不用重新指认。重跑 `space.py feishu --live`，指认过类型的带上原来的 `--map`。预览里的“变化：”各行就是结构上的改动，核对通过后加 `--apply`。
 - `space.py check` 报“绑定按约定第 … 版做的，插件现在是第 … 版”：插件升级后约定的槽位增减过，从“先看核对结果”重新走一遍。
 - 项目换到另一个空间：预览会打印“换空间”，`feishu/binding.md` 多出“换空间”一节。旧空间的工作项搬不过来，研究员确认它们留在旧空间以后，才加 `--leave-old-items` 写入。步骤照技能 `solo-lab:setup`。
 

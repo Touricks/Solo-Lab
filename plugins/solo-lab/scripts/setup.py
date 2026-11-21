@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Initialise a project directory for the agent organisation (the plugin's init step).
+"""Initialise a project directory for the agent organisation (the plugin's init step), and what the
+other initialisation scripts share: what the project should look like, the role texts, the hook policy.
 
-    python3.12 -I scripts/setup.py precheck
     python3.12 -I scripts/setup.py announce --target DIR [--name NAME | --task task.json] [--sequences ...]
     python3.12 -I scripts/setup.py init --target DIR --task task.json [--sequences product,alg,...] [--apply]
-    python3.12 -I scripts/setup.py feishu --target DIR [--map ID=NAME ...] [--live] [--apply]
-    python3.12 -I scripts/setup.py template [--space NAME] [--target DIR]
-    python3.12 -I scripts/setup.py check --target DIR [--live] [--sessions FILE] [--readback FILE]
-    python3.12 -I scripts/setup.py pool --target DIR [--manual]
     python3.12 -I scripts/setup.py login [--wait]
     python3.12 -I scripts/setup.py env --target DIR [--apply]
+
+The checks are check.py (precheck, check), the binding to the Feishu space is space.py (feishu, template),
+the list of sessions to open is pool.py open.
 
 announce says what an initialisation is about to create: the project space and the knowledge
 space by name, the knowledge-base nodes, the first research task, the sessions and the files in
@@ -21,43 +20,14 @@ packages/, inbox/, spec/ and a copy of the plugin's scripts and rules into
 overwritten: a different version goes next to them as <file>.new. Running it
 twice with the same inputs writes nothing.
 
-feishu binds the project to the space spec/task.json names. With --live it reads the
-space's structure (space.py snapshot), fills the slots of the contract
-(orgspec/contract.json) by --map, else what was bound last time, else identifier, else
-name, and checks that the flows can be driven. It writes feishu/ids.json (the binding),
-feishu/space.json and space.md (the structure), feishu/binding.md (what is missing) and
-org/phases.md (the flows of the main-line type). It only reads Feishu; the ledger
-refuses to touch Feishu until a binding has been applied. When no type matches, it
-points to creating the space from the template, and --apply records the space without
-a binding time.
-
-template runs the same contract check on any space, such as the one a template is
-published from (--space, or feishu.template_space in the task file). It only reads
-Feishu and writes nothing.
-
 Every role runs as a desktop session the researcher can see (the session pool): init adds
 the pool hooks, .claude/solo-lab/pool-plan.json and the draft of a first research-task
-sheet. `setup.py pool` prints, for the session that initialises, the +2 sessions it opens
-with their titles, models and opening lines, the tree below each, and the claims so far
-(read only). The desktop app runs at most five sessions at once that sessions started on
-their own, and starts at most ten of them after each message from the user. So the +2s are
-opened in batches, and the batches in rounds, one round per message of the researcher:
---wait SECONDS --batch N waits until batch N has claimed and its first turns are over, and
-says whether the next batch may follow or the round ends there; --wait SECONDS alone waits
-until every session has claimed and the scribe has done its first writes. --manual prints how the researcher opens
-the top sessions by hand when that session cannot open any. A task file may say
-"mode": "pool"; any other mode is refused.
+sheet. A task file may say "mode": "pool"; any other mode is refused.
 
 login starts a device-code login of the command-line tool whose login is gone and prints a
 QR code and a link for the researcher; --wait reads the login back. No device code, password
 or token is printed. env writes the links of the project space and the knowledge space into
 the project's .env and touches no other line of it.
-
-check reports four layers: the project's own files, the Feishu side, the sessions, the first
-research task. It returns 0 only when all four are ready. --live reads Feishu back (read
-only); --sessions takes the client's own list of sessions saved as JSON; --readback takes each
-session's model, effort and context window as the client reported them, holds the model against
-the pool plan and the window against the session that initialised, and prints the table.
 Python 3.12 standard library only (1.0.12: until then 3.9, the python3 macOS ships).
 """
 import argparse
@@ -89,7 +59,6 @@ import project_paths  # noqa: E402
 PLUGIN_ROOT = orgspec.PLUGIN_ROOT
 SCAFFOLD = os.path.join(PLUGIN_ROOT, "scaffold")
 TEMPLATES = os.path.join(PLUGIN_ROOT, "skills", "packages", "assets")
-MIN_VERSIONS = {"lark-cli": "1.0.96", "meegle": "1.0.23", "claude": "2.1.219"}
 DEFAULT_MODELS = {"p2": "opus", "p1": "opus", "p0": "opus", "pmo-p2": "fable"}
 REQUIRED_SEQUENCES = ("pmo", "quality")
 BIN_SCRIPTS = ("orgspec.py", "ledger_core.py", "ledger.py", "docs.py", "workitem.py", "route.py", "notify.py", "todo.py", "space.py",
@@ -101,7 +70,7 @@ SHARED_HOOK_SCRIPTS = ("pool.py",)         # kept in scripts/, copied into the h
 # work is one line of thought, and of 1217 messages a real pool sent in a day their +1 and +0 received five.
 POOL_DEFAULTS = {"p1": 1, "p0": 1, "later": ["liaison", "product", "alg"], "max_sessions": 30, "label": ""}
 # plugin scripts the researcher's own session runs from the plugin directory; the hook trusts them by path and hash
-PLUGIN_RUN = ("setup.py", "space.py", "onboarding.py")
+PLUGIN_RUN = ("setup.py", "check.py", "space.py", "pool.py", "onboarding.py")
 FIRST_TASK = "packages/drafts/pmo/研究任务单-首条.md"
 POOL_SESSIONS = (7, 57)
 
@@ -198,10 +167,6 @@ def code_list(items):
     return "、".join("`%s`" % p for p in items) if items else "无"
 
 
-def version_tuple(v):
-    return tuple(int(x) for x in re.findall(r"\d+", v or "")[:3])
-
-
 def run(cmd, timeout=30):
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
@@ -289,7 +254,7 @@ def parse_task(raw, runtime=None):
         raise SetupError("研究任务的 feishu 要写成 {\"meegle_space\": \"...\", ...}，值都是文字")
     if not (feishu.get("meegle_space") or "").strip():
         raise SetupError("研究任务要写明这个项目用哪个飞书项目空间：feishu.meegle_space 填空间名、simple_name 或 project_key。"
-                         "初始化以后用 setup.py feishu --live 绑定这个空间")
+                         "初始化以后用 space.py feishu --live 绑定这个空间")
     if feishu.get("template_url") is not None and not re.match(r"https://[^\s/]+/\S+$", feishu["template_url"]):
         raise SetupError("研究任务的 feishu.template_url 要写成飞书项目模板的 https 链接")
     task["feishu"] = feishu
@@ -913,22 +878,6 @@ def task_summary(task):
     return "\n".join(lines)
 
 
-def old_owners_out(target):
-    """A project that moved to another space: the work items its sessions answer for (pool.json owners) are
-    the old space's, and the ledger reads none of them any more. `pool.py show --prune` stops when it cannot
-    read an item, so they could never be taken out; the switch takes them out, and writes them into the log.
-    Returns what it took out, {} when there was nothing or the file cannot be read."""
-    try:
-        with pool_state.locked(target) as pl:
-            left = dict(pl.get("owners") or {})
-            pl["owners"] = {}
-    except (pool_state.PoolError, OSError):
-        return {}
-    if left:
-        pool_state.log_event(target, {"event": "owners_out", "why": "space_switch", "owners": left})
-    return left
-
-
 def space_names(task, ids):
     """(project space, knowledge space) by the names Feishu gave when they were bound, else as the
     task file wrote them: the task file may name the project space by simple_name or project_key."""
@@ -945,7 +894,7 @@ def where_text(task, ids):
              "开池清单在 `.claude/solo-lab/pool-plan.json`；飞书写操作的日志在 `feishu/write-log.jsonl`；收件箱在 `inbox/`。")
     return "\n".join([
         "- 台账：飞书项目空间「%s」，project_key %s；空间的结构（类型、流程、字段）在 `feishu/space.md`。" % (
-            meegle, "`%s`" % m["project_key"] if m.get("project_key") else "待填（跑 `setup.py feishu`）"),
+            meegle, "`%s`" % m["project_key"] if m.get("project_key") else "待填（跑 `space.py feishu`）"),
         "- 任务包：飞书知识库空间「%s」%s；发出前的草稿在 `packages/drafts/<序列>/`。" % (
             wiki, "，space_id `%s`" % w["space_id"] if w.get("space_id") else ""),
         "- 实验规格、评测协议和需求文档在 `spec/`，运行记录在 `runs/`，研究任务的流程（每一步谁负责、必填什么）在 `org/phases.md`。",
@@ -1134,7 +1083,6 @@ MESSAGE_STARTS = 10
 ROUND_BUDGET = MESSAGE_STARTS - 2
 RESUME_WORDS = "继续开池"                  # what the researcher is asked to say between two rounds
 PLAN_VERSION = 5
-TURN_RUNNING = ("busy", "unknown", "uncertain")       # a session whose turn is not over, as far as the hooks know
 # what the researcher pastes into a +2 opened by hand ends with this: that +2 titles and files itself
 BY_HAND = "本会话由研究员手工开出。"
 # ...and when the session opens the next level in its first turn
@@ -1282,11 +1230,11 @@ def registered_tasks(target):
 
 def phases_md(spec, snap=None, binding=None):
     """org/phases.md: the flows of the main-line type as the space has them. Before the space
-    is bound there is nothing to show; `setup.py feishu --apply` writes it again from the snapshot."""
+    is bound there is nothing to show; `space.py feishu --apply` writes it again from the snapshot."""
     main = (((binding or {}).get("types") or {}).get(orgspec.Contract(spec).main_line()) or {}).get("type_key")
     flows = space.flows_md(snap, types=[main]) if snap and main else ""
     return render(scaffold("org/phases.md.tmpl"), {
-        "flows": flows or "还没读到空间里的流程：绑定飞书空间后，`setup.py feishu --live --apply` 会把两个流程的节点、负责角色和必填项写在这里。",
+        "flows": flows or "还没读到空间里的流程：绑定飞书空间后，`space.py feishu --live --apply` 会把两个流程的节点、负责角色和必填项写在这里。",
         "rules": spec.task_rules()})
 
 
@@ -1424,7 +1372,7 @@ def build_plan(target, task_path, seq_arg, runtime=None):
     plan = Plan()
     plan.notes.append(note)
     if not (ids.get("meegle") or {}).get("project_key"):
-        plan.notes.append("提醒：项目还没绑定飞书空间。初始化以后跑 `setup.py feishu --target <项目目录> --live`，看任务文件里那个空间的匹配结果，核对后加 --apply；绑定以前台账脚本不能用。")
+        plan.notes.append("提醒：项目还没绑定飞书空间。初始化以后跑 `space.py feishu --target <项目目录> --live`，看任务文件里那个空间的匹配结果，核对后加 --apply；绑定以前台账脚本不能用。")
     policy = build_policy(spec, task, seqs)
     f = plan.files
 
@@ -1453,7 +1401,7 @@ def build_plan(target, task_path, seq_arg, runtime=None):
         if name.endswith(".md"):
             put(".claude/solo-lab/templates/" + name, read_text(os.path.join(TEMPLATES, name)))
     put(".claude/solo-lab/pool-plan.json", dump_json(pool_plan(spec, task, policy, seqs, ids)))
-    plan.notes.append("init 和绑定都做完以后开池：`setup.py pool --target <项目目录>` 打印开池清单。")
+    plan.notes.append("init 和绑定都做完以后开池：`pool.py open --target <项目目录>` 打印开池清单。")
     put(FIRST_TASK, first_task_sheet(task), keep=True)
     put("org/org.md", org_md(spec, seqs, task))
     put("org/grants.md", grants_md(spec, task, policy))
@@ -1751,680 +1699,15 @@ def need_python(version=None):
                              MIN_PYTHON + (".".join(str(x) for x in found), PYTHON, PYTHON)))
 
 
-def python_on_path():
-    """(found, detail) for the precheck: the hooks and every command in the role texts start with PYTHON."""
-    path = shutil.which(PYTHON)
-    if not path:
-        return False, "PATH 里找不到 %s：hook 和角色说明里的命令都用它；先装一个，比如 brew install python@3.12" % PYTHON
-    code, out, err = run([path, "--version"])
-    return code == 0, "%s（%s）" % ((out or err or "").strip() or "?", path)
-
-
-def precheck():
-    rows = []
-
-    def add(item, status, detail):
-        rows.append((item, status, detail))
-
-    found, detail = python_on_path()
-    add(PYTHON, "通过" if found else "失败", detail)
-
-    if sys.platform == "darwin":
-        apps = [p for p in ("/Applications/Lark.app", "/Applications/Feishu.app",
-                            os.path.expanduser("~/Applications/Lark.app"),
-                            os.path.expanduser("~/Applications/Feishu.app")) if os.path.isdir(p)]
-        add("飞书客户端", "通过" if apps else "提醒", apps[0] if apps else "没找到 Lark.app 或 Feishu.app；网页版也能用")
-    else:
-        add("飞书客户端", "跳过", "不是 macOS，请人工确认")
-    for cli, cmd in (("lark-cli", ["lark-cli", "--version"]), ("meegle", ["meegle", "version"]),
-                     ("claude", ["claude", "--version"])):
-        code, out, err = run(cmd)
-        found = re.findall(r"\d+\.\d+\.\d+", out or "")
-        if code != 0 or not found:
-            add("%s 版本" % cli, "提醒" if cli == "claude" else "失败",
-                (err or out or "未安装").strip()[:120] + ("；只装了桌面应用时没有这条命令，不影响" if cli == "claude" else ""))
-        else:
-            ok = version_tuple(found[0]) >= version_tuple(MIN_VERSIONS[cli])
-            add("%s 版本" % cli, "通过" if ok else "失败", "%s（最低 %s）" % (found[0], MIN_VERSIONS[cli]))
-    code, out, _ = run(["lark-cli", "doctor"], 60)
-    try:
-        doctor = json.loads(out)
-        bad = [c for c in doctor.get("checks", []) if c.get("status") != "pass"]
-        add("lark-cli doctor", "通过" if doctor.get("ok") else "失败",
-            "；".join("%s=%s" % (c.get("name"), c.get("status")) for c in bad) or "全部通过")
-    except ValueError:
-        add("lark-cli doctor", "失败", "输出不是 JSON（退出码 %s）" % code)
-    code, out, _ = run(["lark-cli", "auth", "status"])
-    try:
-        ok, user = lark_user_ready(json.loads(out))
-        add("lark-cli 用户身份", "通过" if ok else "失败", "status=%s tokenStatus=%s%s" % (
-            user.get("status"), user.get("tokenStatus"), "" if ok else "；运行 setup.py login 发起登录，研究员扫码"))
-    except ValueError:
-        add("lark-cli 用户身份", "失败", "auth status 输出不是 JSON（退出码 %s）" % code)
-    code, _, _ = run(["meegle", "auth", "status"])
-    add("meegle 登录", "通过" if code == 0 else "失败",
-        "退出码 %s%s" % (code, "" if code == 0 else "；运行 setup.py login 发起登录，研究员扫码"))
-    code, out, _ = run(["meegle", "project", "search", "--page-num", "1", "--format", "json"], 60)
-    try:
-        projects = (json.loads(out) or {}).get("projects") or []
-        add("飞书项目权限", "通过" if projects else "提醒",
-            "能访问 %d 个空间" % len(projects) if projects else "这个账号还看不到任何空间；初始化时用模板新建一个")
-    except ValueError:
-        add("飞书项目权限", "失败", "project search 输出不是 JSON（退出码 %s）" % code)
-    code, out, _ = run(["meegle", "telemetry", "status"])
-    try:
-        enabled = json.loads(out).get("enabled")
-        add("meegle 诊断上报", "提醒" if enabled else "通过",
-            "开着，请研究员决定是否关闭（meegle telemetry disable，本人执行）" if enabled else "已关闭")
-    except ValueError:
-        add("meegle 诊断上报", "跳过", "telemetry 子命令不可用（退出码 %s）" % code)
-    code, out, _ = run(["lark-cli", "event", "consume", "im.message.receive_v1", "--as", "bot", "--dry-run"], 60)
-    try:
-        decision = (json.loads(out).get("data") or {}).get("decision") or {}
-        bad = [c.get("name") for c in decision.get("preconditions", []) if c.get("status") != "ok"]
-        ok = decision.get("status") == "ready" and not bad
-        add("飞书私聊事件订阅", "通过" if ok else "提醒",
-            "凭证、开发者后台的事件订阅、权限 im:message.p2p_msg:readonly 都就绪" if ok else
-            "没就绪：%s；入口收不到飞书私聊，研究员转述也行" % ("、".join(bad) or decision.get("status") or "未知"))
-    except (ValueError, AttributeError):
-        add("飞书私聊事件订阅", "提醒", "event consume 的预览输出读不懂（退出码 %s）" % code)
-    add("Python", "通过" if sys.version_info[:2] >= (3, 9) else "失败", sys.version.split()[0])
-    for name in ("lark-doc", "lark-wiki", "meegle"):
-        here = any(os.path.isdir(os.path.expanduser(os.path.join(b, name))) for b in ("~/.claude/skills", "~/.agents/skills"))
-        add("技能 %s" % name, "通过" if here else "提醒", "已安装" if here else "没找到；书记员用台账脚本，不依赖它，但人工排查时有用")
-    width = max(len(r[0]) for r in rows)
-    for item, status, detail in rows:
-        print("%s  %s  %s" % (item.ljust(width), status, detail))
-    failed = [r for r in rows if r[1] == "失败"]
-    print("预检：%d 项失败。" % len(failed) if failed else "预检：没有失败项。")
-    return 1 if failed else 0
-
-
-# --------------------------------------------------------------- check
-def local_layer(target, m):
-    """(problems, reminders) of the project's own files against the plugin that made them."""
-    problems, notes = [], []
-    if m.get("plugin_version") != plugin_version():
-        problems.append("插件版本：项目是 %s，插件是 %s；重跑 init 预览差异" % (m.get("plugin_version"), plugin_version()))
-    rules = read_text(os.path.join(orgspec.ORGSPEC_DIR, "rules.json"))
-    if m.get("rules_sha256") != sha256(rules):
-        problems.append("规则文件和项目里的副本不一致；重跑 init 预览差异")
-    if m.get("terms_sha256") != sha256(read_text(os.path.join(orgspec.ORGSPEC_DIR, "terms.zh.json"))):
-        problems.append("术语表和项目里的副本不一致；重跑 init 预览差异")
-    if m.get("contract_sha256") != sha256(read_text(os.path.join(orgspec.ORGSPEC_DIR, "contract.json"))):
-        problems.append("约定文件和项目里的副本不一致；重跑 init 预览差异，再跑 setup.py feishu --live 核对绑定")
-    if m.get("plugin_scripts") != plugin_scripts():
-        problems.append("插件脚本的位置或内容和初始化时不同，hook 不再放行研究员会话里的 setup.py；重跑 init --apply"
-                        "（hook 拦下时，请研究员在自己的终端里运行这一次）")
-    task_path = os.path.join(target, "spec", "task.json")
-    fresh = None
-    if os.path.isfile(task_path) and m.get("files", {}).get("spec/task.json") not in (None, sha256(read_text(task_path))):
-        problems.append("改过：spec/task.json（和 init 用的任务文件不同）。它跟着 init --task 的任务文件走：要改设置，改任务文件再重跑 init --apply；"
-                        "有 spec/task.json.new 的，对照合并。改回来之前，先不比对插件更新")
-    else:
-        try:      # regenerate from the project's own task and sequences: catches script, template and ID changes
-            fresh = build_plan(target, task_path, ",".join(m.get("sequences") or []) or None)
-        except SetupError as e:
-            problems.append("没法按现在的插件重新生成来比对：%s" % e)
-    if fresh:
-        stale = [rel for rel, (content, _, keep) in sorted(fresh.files.items())
-                 if not keep and m.get("files", {}).get(rel) != sha256(content)]
-        risk_reported = ".claude/hooks/lark-risk.json" in stale
-        if risk_reported:                                   # follows the lark-cli on this machine, not the plugin
-            stale.remove(".claude/hooks/lark-risk.json")
-            table = (load_json_file(os.path.join(target, ".claude", "hooks", "lark-risk.json")) or {}).get("lark_cli_version")
-            problems.append("lark-cli 风险表和本机的 lark-cli 对不上：项目里的表按 %s 生成，本机是 %s；重跑 init 会换成对应的表" % (
-                table or "未知版本", installed_lark_version() or "没装 lark-cli"))
-        table = (load_json_file(os.path.join(target, ".claude", "hooks", "lark-risk.json")) or {}).get("lark_cli_version")
-        installed = installed_lark_version()
-        if table and installed and installed != table and not risk_reported:
-            notes.append("本机 lark-cli 是 %s，项目的风险表按 %s 生成（插件自带的表）；新命令的风险等级可能缺失，未知的写命令一律按写处理" % (installed, table))
-        if stale:
-            problems.append("现在的插件、规则或 feishu/ids.json 生成的内容和初始化时不同（%d 个文件：%s）；重跑 init 预览差异" % (
-                len(stale), "、".join(stale[:12]) + ("等" if len(stale) > 12 else "")))
-    for rel, digest in sorted(m.get("files", {}).items()):
-        path = os.path.join(target, rel)
-        if not os.path.isfile(path):
-            problems.append("缺文件：%s" % rel)
-        elif rel in ("org/decisions.md", "org/phases.md", "runs/README.md") or rel.startswith(("spec/", "packages/drafts/")):
-            continue            # the researcher's and the project's documents; a draft gets its work item written in
-        else:
-            try:
-                changed = sha256(read_text(path)) != digest
-            except (UnicodeDecodeError, OSError):
-                problems.append("读不了：%s（不是 UTF-8 编码？）" % rel)
-                continue
-            if changed and not (fresh and rel in fresh.files and read_text(path) == fresh.files[rel][0]):
-                problems.append("改过：%s（和初始化时不同）" % rel)
-    for rel in m.get("pending_new", []):
-        if os.path.isfile(os.path.join(target, rel + ".new")):
-            problems.append("待合并：%s.new" % rel)
-    problem = pair_problem(target)
-    if problem:
-        problems.append(problem)
-    return problems, notes
-
-
-def live_feishu(target, seqs):
-    """Read the space and the knowledge nodes as they are now: the binding still holds and
-    every node is in the knowledge space. Reads only."""
-    spec = orgspec.OrgSpec()
-    contract = orgspec.Contract(spec)
-    ids = load_json_file(os.path.join(target, "feishu", "ids.json")) or {}
-    m, wiki = ids.get("meegle") or {}, ids.get("wiki") or {}
-    problems, notes = [], []
-    try:
-        old = space.binding_of(ids)
-        _, now_, found, notes = read_space(
-            contract, {"project_key": m["project_key"], "simple_name": m.get("simple_name"), "name": m.get("space_name")}, {}, old)
-        problems += ["空间结构：%s，%s。%s" % tuple(row) for row in found + space.stale(contract, old, now_)]
-    except (SetupError, KeyError) as e:
-        problems.append("读不了飞书项目空间：%s" % e)
-    nodes = wiki.get("nodes") or {}
-
-    def lost(key):
-        code, out, _ = run(["lark-cli", "wiki", "+node-get", "--node-token", (nodes.get(key) or {}).get("node_token") or "", "--as", "user"], 60)
-        try:
-            doc = json.loads(out) if code == 0 else None
-        except ValueError:
-            doc = None
-        where = ledger_core._find(doc or {}, ("space_id",))
-        return not doc or bool(where) and str(where) != str(wiki.get("space_id"))
-    keys = spec.node_keys(seqs)
-    with ThreadPoolExecutor(max_workers=4) as workers:          # independent read-only requests
-        bad = [k for k, gone in zip(keys, workers.map(lost, keys)) if gone]
-    if bad:
-        problems.append("知识库节点读不到，或者不在这个知识空间里（%d 个）：%s" % (len(bad), "、".join(bad[:8]) + ("等" if len(bad) > 8 else "")))
-    return problems, list(notes)
-
-
-def feishu_layer(target, m, live):
-    """(problems, reminders): the binding, the knowledge space and its nodes, the links in .env."""
-    seqs = m.get("sequences") or None
-    problems = feishu_gaps(target, seqs)
-    if problems:
-        return problems, []
-    problems = env_gaps(target)
-    notes = []
-    if live:
-        more, notes = live_feishu(target, seqs)
-        problems += more
-    return problems, notes
-
-
-def first_task_layer(target, live):
-    """(problems, reminders): a research task is registered, its receipt has the main document
-    and its draft names the work item; --live reads the three of them back."""
-    tasks = registered_tasks(target)
-    if not tasks and live:
-        try:
-            with contextlib.redirect_stdout(io.StringIO()):
-                rows = ledger.query(ledger_core.Ledger(target, "preview"), "tasks")
-        except (ledger_core.LedgerError, orgspec.OrgSpecError, space.SpaceError, KeyError) as e:
-            return ["查不了空间里的研究任务：%s" % str(e)[:200]], []
-        if rows:
-            return [], ["空间里已有 %d 条研究任务，这个目录里没有它们的登记回执（是从别处登记的）" % len(rows)]
-    if not tasks:
-        return ["还没有登记过研究任务：开池时由书记员登记 %s，清单见 setup.py pool%s" % (
-            FIRST_TASK, "" if live else "；空间里已经有研究任务的，加 --live 核对")], []
-    rec, draft = tasks[0]
-    item_id, doc = str(rec.get("work_item_id")), str(rec.get("doc") or "")
-    problems = []
-    if not doc.startswith("http"):
-        problems.append("研究任务 #%s 的回执里没有主文档的地址" % item_id)
-    try:
-        line = ledger_core.header_of(read_text(draft)).get("关联工作项", "")
-    except (OSError, UnicodeDecodeError):
-        line = ""
-    if item_id not in re.findall(r"#(\d+)", line):
-        problems.append("草稿 %s 的“关联工作项”一行不是 #%s" % (rec["draft"], item_id))
-    if live and not problems:
-        try:
-            lg = ledger_core.Ledger(target, "preview")
-            main = lg.contract.main_line()
-            it = lg.item(item_id)
-            if not it or it.get("type") != main:
-                return ["工作项 #%s 读不到，或者不是研究任务" % item_id], []
-            link = ledger_core.plain(it["fields"].get(lg.field(main, "main_doc")["field_key"]))
-            if link != doc:
-                problems.append("研究任务 #%s 的主文档字段是 %s，回执记的是 %s" % (item_id, link or "空的", doc))
-            node = lg.lark("wiki", "+node-get", "--node-token", doc.rstrip("/").rsplit("/", 1)[-1])
-            above, want = ledger_core._find(node or {}, ("parent_node_token",)), (lg.nodes.get(main) or {}).get("node_token")
-            if it["state"] != lg.state(main, "archived") and want and above != want:
-                problems.append("研究任务 #%s 的主文档不在“%s”节点下" % (item_id, lg.spec.term("node", main)))
-        except (ledger_core.LedgerError, orgspec.OrgSpecError, space.SpaceError, KeyError) as e:
-            problems.append("回读研究任务 #%s 没读成：%s" % (item_id, str(e)[:200]))
-    return problems, []
-
-
-def listed_sessions(target, path, plan, pl):
-    """(problems, reminders) of the claims against the client's own list of sessions: the
-    result of list_sessions saved as it came."""
-    rows = load_json_file(path)
-    if not isinstance(rows, list):
-        return ["--sessions 给的文件不是会话列表：把 list_sessions 的结果原样存成 JSON 文件（include_archived 写 true，limit 写够）"], []
-    by_id = {str(r.get("sessionId")): r for r in rows if isinstance(r, dict)}
-    label, here = plan.get("label"), os.path.realpath(target)
-    desks = {str(c.get("desk")) for c in pl["claims"].values()}      # the session that initialised is not one of them
-    gone, archived, elsewhere, loose, pinned, titled, unknown = [], [], [], [], [], [], []
-    for name, claim in sorted(pl["claims"].items()):
-        row = by_id.get(str(claim.get("desk")))
-        if not row:
-            gone.append(name)
-            continue
-        if row.get("isArchived"):
-            archived.append(name)
-        if row.get("cwd") and os.path.realpath(row["cwd"]) != here:
-            elsewhere.append(name)
-        above, seen = row, set()                       # a nested session is filed where the pool session above it is
-        while above.get("startedBy") in desks and above["startedBy"] in by_id and above["startedBy"] not in seen:
-            seen.add(above["startedBy"])
-            above = by_id[above["startedBy"]]
-        if "group" not in row and "group" not in above:
-            unknown.append(name)
-        elif label not in ((row.get("group") or {}).get("name"), (above.get("group") or {}).get("name")):
-            loose.append(name)
-        if row.get("pinned"):
-            pinned.append(name)
-        if row.get("title") != "[%s] %s" % (label, name):
-            titled.append(name)
-    some = lambda names: "、".join(names[:8]) + ("等" if len(names) > 8 else "")
-    problems = [text % some(names) for names, text in (
-        (gone, "客户端的会话列表里没有这些认领的会话：%s（会话被删了，或者列表没取全）"),
-        (archived, "已经归档的会话还占着认领：%s"),
-        (elsewhere, "工作目录不是项目目录的会话：%s"),
-        (loose, "不在侧栏分区“" + str(label) + "”里的会话：%s")) if names]
-    notes = [text % some(names) for names, text in (
-        (unknown, "客户端还没报告这些会话的分区，没核对：%s"),
-        (pinned, "置顶了的会话：%s（会话池的会话归分区，不置顶）"),
-        (titled, "标题不是“[" + str(label) + "] <会话名>”的会话：%s")) if names]
-    return problems, notes
-
-
-def session_readback(target, path):
-    """(problems, reminders, rows): what each claimed session actually runs, against the pool plan
-    and the session that initialised. The file is what get_session and get_usage reported, saved by
-    that session: {"self": {model, effort, contextWindow}, "sessions": [{sessionId, model, effort,
-    contextWindow}, ...]}; a value it could not read is null."""
-    import pool
-    data = load_json_file(path)
-    if not isinstance(data, dict) or not isinstance(data.get("self"), dict) or not isinstance(data.get("sessions"), list):
-        return ["--readback 给的文件不是回读表：要写成 {\"self\": {...}, \"sessions\": [...]}，每条带 sessionId、model、effort、"
-                "contextWindow，读不到的写 null；做法见 setup 技能第 8 步"], [], []
-    pl, ok = pool.load(target)
-    if not ok:
-        return [], [], []                              # pool_health reports the broken claims table
-    plan = load_json_file(os.path.join(target, ".claude", "solo-lab", "pool-plan.json")) or {}
-    entries = list(plan_entries(plan))
-    planned = {e["name"]: e["model"] for e in entries}
-    by_role = {e["role"]: e["model"] for e in entries}
-    window = lambda r: r.get("contextWindow") if type(r.get("contextWindow")) is int else None
-    own, by_id = data["self"], {str(r.get("sessionId")): r for r in data["sessions"] if isinstance(r, dict)}
-    names = [e["name"] for e in entries if e["name"] in pl["claims"]] + sorted(set(pl["claims"]) - set(planned))
-    models, narrow, efforts, unread = [], [], [], []
-    rows = [("本会话", "—", own.get("model"), own.get("effort"), window(own))]
-    for name in names:
-        claim = pl["claims"][name]
-        r = by_id.get(str(claim.get("desk"))) or {}
-        want = planned.get(name) or by_role.get(claim.get("role")) or "inherit"
-        model, effort, size = r.get("model"), r.get("effort"), window(r)
-        rows.append((name, want, model, effort, size))
-        if not model or size is None:
-            unread.append(name)
-        if model and model_tier(want) >= 0 and model_tier(model) != model_tier(want):
-            models.append(name)
-        if size is not None and window(own) and size < window(own):
-            narrow.append(name)
-        if effort and own.get("effort") and effort != own["effort"]:
-            efforts.append(name)
-    some = lambda names: "、".join(names[:8]) + ("等" if len(names) > 8 else "")
-    problems, notes = [], []
-    if models:
-        problems.append("模型和开池清单不在一档的会话：%s。会话的模型不能高于开它的会话，入口要用 fable，做初始化的会话本身就得是 fable；"
-                        "照回读表在应用里切换模型，要换默认就改任务文件的 models 重跑 init --apply" % some(models))
-    if narrow:
-        problems.append("窗口小于本会话（%d）的会话：%s。查用户设置、项目设置、项目本地设置里的 autoCompactWindow 和环境变量 "
-                        "CLAUDE_CODE_AUTO_COMPACT_WINDOW；设置只在会话进程启动时读，改完请研究员退出并重开桌面应用" % (window(own), some(narrow)))
-    if window(own) is None:
-        notes.append("回读表里没有本会话的窗口，各会话的窗口没比对")
-    if efforts:
-        notes.append("推理强度和本会话（%s）不同的会话：%s" % (own["effort"], some(efforts)))
-    if unread:
-        notes.append("没读到模型或窗口的会话：%s（会话进程没在跑、还在启动或已归档时读不到；过一会儿重读，还读不到就写进交接）" % some(unread))
-    return problems, notes, rows
-
-
-def session_layer(target, m, listing=None):
-    """(problems, reminders): every planned session holds its claim, one entry and one scribe,
-    no pre-registration left over, one class of permission mode, all working in the project."""
-    problems, notes = pool_health(target, m)
-    if listing:
-        import pool
-        pl, ok = pool.load(target)
-        plan = load_json_file(os.path.join(target, ".claude", "solo-lab", "pool-plan.json")) or {}
-        if ok:
-            more, extra = listed_sessions(target, listing, plan, pl)
-            problems += more
-            notes += extra
-    return problems, notes
-
-
-def check(target, live=False, sessions=None, readback=None):
-    """Is the project ready, layer by layer: its own files, the Feishu side, the sessions, the
-    first research task. 0 only when every layer is. --live reads Feishu back (read only);
-    --readback holds each session's model, window and effort against the pool plan."""
-    mpath = os.path.join(target, ".claude", "solo-lab", "manifest.json")
-    if not os.path.isfile(mpath):
-        print("没有 %s：这个目录还没初始化。" % mpath)
-        return 2
-    m = json.loads(read_text(mpath))
-    layers = [("本地配置",) + local_layer(target, m), ("飞书",) + feishu_layer(target, m, live),
-              ("会话",) + session_layer(target, m, sessions), ("首条研究任务",) + first_task_layer(target, live)]
-    more, extra, rows = session_readback(target, readback) if readback else ([], [], [])
-    layers[2] = ("会话", layers[2][1] + more, layers[2][2] + extra)
-    for name, problems, notes in layers:
-        print("%s：%s" % (name, "%d 个问题" % len(problems) if problems else "就绪"))
-        for n in notes:
-            print("  提醒：" + n)
-        for p in problems:
-            print("  问题：" + p)
-    if rows:
-        print("回读表：")
-        print("| 会话 | 清单模型 | 实际模型 | 推理强度 | 窗口 |")
-        print("| --- | --- | --- | --- | --- |")
-        for row in rows:
-            print("| %s |" % " | ".join("读不到" if v is None else str(v) for v in row))
-    bad = [(name, len(problems)) for name, problems, _ in layers if problems]
-    print("检查：%s%s" % ("还有 %d 个问题（%s）" % (sum(n for _, n in bad), "、".join("%s %d" % x for x in bad)) if bad else "四层都就绪",
-                        "" if live else "。飞书一侧只看了本地记下的标识；加 --live 回读飞书"))
-    return 1 if bad else 0
-
-
-def pool_health(target, manifest):
-    """(problems, reminders) from the claims and the sessions' status files."""
-    import pool
-    policy = load_json_file(os.path.join(target, ".claude", "hooks", "policy.json")) or {}
-    if not policy.get("agents"):
-        return ["读不到 .claude/hooks/policy.json"], []
-    if not policy.get("entry_role") or not policy.get("scribe_role"):
-        return ["policy.json 还是旧版的：先在 Claude 以外的终端里合并 .claude/hooks/ 下的 .new，重跑 init --apply，再查会话池"], []
-    pl, ok = pool.load(target)
-    if not ok:
-        return ["读不出 .claude/state/pool.json：认领表坏了，台账写入会全部被拒；请研究员先看这个文件"], []
-    problems, notes = [], []
-    plan = load_json_file(os.path.join(target, ".claude", "solo-lab", "pool-plan.json")) or {}
-    planned = [e["name"] for e in plan_entries(plan)]
-    held = {}
-    for c in pl["claims"].values():
-        held.setdefault(c["role"], []).append(c["name"])
-    for role in (policy["entry_role"], policy["scribe_role"]):
-        if len(held.get(role, [])) > 1:
-            problems.append("%s 有 %d 条认领（%s），只能有一条；请研究员 pool.py release 多余的" % (role, len(held[role]), "、".join(held[role])))
-    missing = sorted(set(planned) - set(pl["claims"]))
-    if missing:
-        problems.append("会话池还没开齐：%s 没人认领（共 %d/%d 条认领）；清单见 setup.py pool" % (
-            "、".join(missing[:8]) + ("等" if len(missing) > 8 else ""), len(set(planned) & set(pl["claims"])), len(planned)))
-    if pl["permits"]:
-        problems.append("有 %d 条预登记还没转正：%s" % (len(pl["permits"]), "、".join(p["name"] for p in pl["permits"])))
-    over = [r for r, names in held.items() if len(names) > pool.role_limit(policy, r)]
-    if over:
-        problems.append("超过上限的角色：%s" % "、".join(over))
-    rows = pool.session_view(target, policy, pl)
-    at = pool.now()
-    gone = [r["name"] for r in rows if r["status"] == "offline" and r["last"] and at - pool.parse_time(r["last"]) > pool.OFFLINE_LONG]
-    if gone:
-        notes.append("离线超过 24 小时的会话：%s" % "、".join(gone))
-    mixed = pool.mixed_modes(rows)
-    if mixed:
-        problems.append("权限模式和多数会话不是一类：%s（bypass 和其他模式之间的消息会被扣下）" % "、".join(mixed))
-    away = [r["name"] for r in rows if r.get("cwd") and os.path.realpath(r["cwd"]) != os.path.realpath(target)]
-    if away:
-        problems.append("工作目录不是项目目录的会话：%s（会话要在项目目录里开，不开 worktree）" % "、".join(away))
-    old = [r["name"] for r in rows if r.get("plugin_version") != manifest.get("plugin_version")]
-    if old:
-        notes.append("还停在旧版插件规则上的会话：%s；它们下次开局、压缩或清空上下文时收到新的角色说明，研究员退出并重开桌面应用的话下一轮就收到" % "、".join(old))
-    versions = sorted({r["version"] for r in rows if r.get("version")})
-    if len(versions) > 1:
-        notes.append("池里的 Claude Code 版本不一致（%s）；行为有变化时重跑一遍会话池实验" % "、".join(versions))
-    return problems, notes
-
-
-def own_mode(target):
-    """The permission mode the hooks recorded for the session that runs this command; None when unknown."""
-    import pool
-    sid = os.environ.get(pool.SESSION_ENV) or ""
-    return pool.load_session(target, sid).get("permission_mode") if sid else None
-
-
-def pool_checklist(target, manual=False):
-    """`setup.py pool`: how to open the pool, and the claims so far. Reads only."""
-    import pool
-    plan = load_json_file(os.path.join(target, ".claude", "solo-lab", "pool-plan.json"))
-    policy = load_json_file(os.path.join(target, ".claude", "hooks", "policy.json")) or {}
-    if not policy.get("agents") or not plan:
-        print("这个项目还没有开池清单：先跑 init --apply。")
-        return 2
-    if plan.get("version") != PLAN_VERSION:
-        print("开池清单是旧版插件生成的：重跑 init --apply。")
-        return 2
-    pl, ok = pool.load(target)
-    claimed = set(pl["claims"]) if ok else set()
-    label, tops = plan["label"], plan["top"]
-
-    def tree(entry, depth=1):
-        lines = []
-        for child in entry["children"]:
-            lines.append("   %s└ %s（%s，%s）" % ("  " * (depth - 1), child["name"], child["model"],
-                                              "已认领" if child["name"] in claimed else "未认领"))
-            lines += tree(child, depth + 1)
-        return lines
-    print("开池清单：%s（共 %d 个会话，总上限 %d）。会话标题的前缀和侧栏分区的名字：%s" % (
-        plan["project"], plan["total"], plan["max_sessions"], label))
-    print("会话按委托的方向一层开一层：+2 开本序列的 +1，+1 开 +0。侧栏里谁开的就嵌在谁下面。")
-    for above in plan_entries(plan):
-        for child in above["children"]:
-            if model_tier(child["model"]) > model_tier(above["model"]) >= 0:
-                print("注意：%s 的模型 %s 高于开它的 %s（%s）。会话的模型不能高于开它的会话，高出的不生效，它会沿用 %s 的模型；"
-                      "要它用 %s，把任务文件 models 里 %s 的模型也调高。" % (
-                          child["name"], child["model"], above["name"], above["model"], above["name"], child["model"], above["role"]))
-    print("")
-    if manual:
-        print("手工开池（研究员的会话开不了会话时用）：")
-        print("研究员在桌面应用里新建 %d 个会话（New session，目录选本项目，不开 worktree），模型照括号里的选，每个粘贴一句：" % len(tops))
-        for i, top in enumerate(tops, 1):
-            print("%d. %s（%s，%s）：%s" % (i, top["name"], top["model"], "已认领" if top["name"] in claimed else "未认领", top["opening"]))
-            for line in tree(top):
-                print(line)
-            if ok and top["name"] not in claimed and any(e["name"] in claimed for e in plan_entries({"top": top["children"]})):
-                print("   它下面的会话还在，换会话时粘贴重建句：%s" % top["rebuild"])
-        print("每个 +2 认领以后，照认领输出把自己的标题改成“[%s] <会话名>”，归入侧栏分区“%s”；它下面的会话跟着它走。" % (label, label))
-        if bool(feishu_gaps(target, enabled_sequences(target))) or not registered_tasks(target):
-            print("书记员由路由开出，开局句里带着初始化的两件写入。它没做的话，把这段话发给它：%s" % plan["scribe_first"].lstrip("。"))
-    else:
-        batches, rounds = plan["batches"], plan["rounds"]
-        left = [e["name"] for e in plan_entries(plan) if e["name"] not in claimed]
-        if pool.mode_class(own_mode(target)) == "bypass" and left:
-            # measured 2026-11-13: in bypass mode the app asks the user before every start_session, in whichever session calls it
-            print("注意：本会话是 bypass 模式。这个模式下，应用对每一次开会话都要研究员点一次确认，卡片弹在发起的那个会话里：本会话开 +2、"
-                  "+2 开 +1、+1 开 +0 都一样。还没开的 %d 个会话要点 %d 次；没点之前那个会话停着，--wait 会等到超时。" % (len(left), len(left)))
-            if claimed:
-                print("已经开出的会话也是 bypass 模式，换模式会让新旧会话之间的消息被扣下，所以接着在本会话开。开之前告诉研究员：每开一个会话，"
-                      "到弹出卡片的那个会话里点一次 Allow once。")
-            else:
-                print("开池之前先停下，把下面两种做法原样告诉研究员，等他选：")
-                print("1. 换 auto 模式：研究员在项目目录新开一个 auto 模式的会话，说“用 solo-lab 初始化这个目录”，它从开池接着做，不用点。本会话到此为止。")
-                print("2. 留在本会话：接着开，每开一个会话，研究员到弹出卡片的那个会话里点一次 Allow once。")
-            print("")
-        print("研究员的会话（做初始化的这个会话）只开下面这 %d 个 +2，分 %d 批、%d 轮开：" % (len(tops), len(batches), len(rounds)))
-        print("- 为什么分批、分轮：会话自己开出的会话（+2 开的 +1、+1 开的 +0），应用有两条上限，所有序列合在一起算：同时最多 %d 个在跑；"
-              "研究员每发一条消息以后最多开出 %d 个。所以一批只开一两个序列，等这一批的会话都认领、首轮都结束再开下一批；"
-              "一轮开到 %d 个上下就停下，请研究员回一句话，再开下一轮。" % (AUTO_RUNNING, MESSAGE_STARTS, ROUND_BUDGET))
-        print("- 每一批做三件事，顺序不能换：1. 用会话管理工具 start_session 把这一批的 +2 都开出来；2. 马上对它们各调一次 detach_session，"
-              "把它们移到顶层，和本会话同级；3. 用返回的桌面会话 ID 逐个运行它们的 expect。+2 要等预登记才能认领，认领以后才往下开，"
-              "所以先移到顶层、后预登记。")
-        print("- start_session 的参数：initiation 写 user_asked，context 写 fresh，use_worktree 写 false，权限模式不填（继承本会话）；"
-              "name、title、model、prompt、background 照下表。它还没加载时，先用 ToolSearch 查 start_session 加载进来。")
-        print("- 这一批的 expect 跑完，运行 setup.py pool --target <项目目录> --wait 180 --batch <第几批>：它等到这一批的会话都认领、首轮都结束才返回，"
-              "并写明下一步。超时的时候照它说的办：有首轮还没结束的，重跑一次再等；只是没认领的，接着往下做，最后一并处理。")
-        if len(rounds) > 1:
-            print("- 一轮的最后一批等完、后面还有下一轮：不要接着开。结束本轮，请研究员回一句“%s”；他回话以后再开下一轮。"
-                  "研究员每发一条消息，应用才重新给 %d 个名额，下一轮的 +2 要等他回话以后才开。" % (RESUME_WORDS, MESSAGE_STARTS))
-        print("- 最后一批等完：侧栏里没有叫“%s”的分区就用 create_section 建一个；用 move_sessions 把这 %d 个 +2 连同本会话归进去，它们下面的会话跟着走。"
-              "再运行 setup.py pool --target <项目目录> --wait 240：它等到 %d 个会话都认领、书记员的首轮结束才返回，没等到就列出还差谁。"
-              "本会话的标题是应用自动起的，就用 set_session_title 改成“[%s] Initialization”：它是做初始化的会话，不是入口。" % (
-                  label, len(tops), plan["total"], label))
-        print("- 某个会话下面还有没认领的：它首轮没把下一级开出来。给它发消息没有用，被消息叫起来的那一轮开不了会话；"
-              "请研究员点开那个会话，说一句“照认领输出开出下一级”。")
-        print("- model 填不进去就不填，开好以后再改；模型高于本会话的不生效（会话的模型不能高于开它的会话），记进交接。")
-        for top in tops:
-            below = sum(1 for _ in plan_entries({"top": top["children"]}))
-            if below > OPEN_BUDGET:
-                print("注意：%s 下面要开 %d 个会话，一批最多容得下 %d 个：多出来的会被应用拒绝，pool --wait 会列出来，"
-                      "到时请研究员在上一级的会话里说一句“照认领输出开出下一级”。" % (top["name"], below, OPEN_BUDGET))
-        number = 0
-        for r, numbers in enumerate(rounds, 1):
-            print("")
-            print("第 %d 轮（%s）" % (r, "研究员说完初始化那句话以后" if r == 1 else "研究员回一句“%s”以后" % RESUME_WORDS))
-            for b in numbers:
-                print("第 %d 批" % b)
-                for top in (t for t in tops if t["name"] in batches[b - 1]):
-                    number += 1
-                    print("%d. %s（%s）" % (number, top["name"], "已认领，不用再开" if top["name"] in claimed else "未认领"))
-                    print("   name：%s　title：%s　model：%s" % (top["short"], top["title"], top["model"]))
-                    print("   prompt：%s" % top["brief"])
-                    print("   background：%s" % top["background"])
-                    print("   expect：%s" % top["expect"])
-                    for line in tree(top):
-                        print(line)
-        print("")
-        print("这个会话开不了会话时（比如这一轮不是研究员亲口开始的，是被别的会话的消息叫起来的）：setup.py pool --target <项目目录> --manual 打印手工开池的做法。")
-    print("")
-    if ok:
-        rows = pool.session_view(target, policy, pl)
-        entry = len(pool.claims_of(pl, policy["entry_role"]))
-        scribe = len(pool.claims_of(pl, policy["scribe_role"]))
-        print("当前：%d/%d 条认领；入口 %d 条，书记员 %d 条；待转正的许可 %d 条。" % (
-            len(pl["claims"]), plan["total"], entry, scribe, len(pl["permits"])))
-        no_desk = [r["name"] for r in rows if not r["desk"]]
-        if no_desk:
-            print("没有记下桌面会话 ID 的：%s（终端里开的会话没有，桌面会话应该有）" % "、".join(no_desk))
-        mixed = pool.mixed_modes(rows)
-        if mixed:
-            print("权限模式和多数会话不同类的：%s" % "、".join(mixed))
-        if len(pl["claims"]) >= plan["total"] and entry == 1 and scribe == 1 and not pl["permits"]:
-            print("会话池已开齐。接着运行 setup.py check --target <项目目录> --live。")
-    else:
-        print("读不出 .claude/state/pool.json。")
-    return 0
-
-
-def pool_wait(target, seconds, batch=None, every=5):
-    """Wait for what the researcher's session does not do itself: the levels below the +2s open
-    one another, and the scribe, two levels down, builds the nodes and registers the first
-    research task. With a batch: until every session of that batch has claimed and its first
-    turn is over (the scribe may still be writing), so that the next batch finds room. Without:
-    until every planned session has claimed and the scribe's first turn is over with the nodes
-    in place. 0 when that is so; 1 with what is still missing."""
-    import pool
-    policy = load_json_file(os.path.join(target, ".claude", "hooks", "policy.json")) or {}
-    plan = load_json_file(os.path.join(target, ".claude", "solo-lab", "pool-plan.json")) or {}
-    if not policy or plan.get("version") != PLAN_VERSION:
-        print("这个项目没有开池清单，或者清单是旧版插件生成的：重跑 init --apply。")
-        return 2
-    batches = plan["batches"]
-    if batch is not None and not 1 <= batch <= len(batches):
-        print("没有第 %d 批：开池清单一共 %d 批。" % (batch, len(batches)))
-        return 2
-    opened_by = {c["name"]: e["name"] for e in plan_entries(plan) for c in e["children"]}
-    tops = plan["top"] if batch is None else [t for t in plan["top"] if t["name"] in batches[batch - 1]]
-    entries = list(plan_entries({"top": tops}))
-    scribe_role = policy.get("scribe_role")
-    deadline = time.time() + max(0, seconds)
-    while True:
-        pl, ok = pool.load(target)
-        claims = pl["claims"] if ok else {}
-        missing = [e["name"] for e in entries if e["name"] not in claims]
-        rows = {r["name"]: r for r in (pool.session_view(target, policy, pl) if ok else [])}
-        scribe = next((r for r in rows.values() if r["role"] == scribe_role), None)
-        if batch is None:
-            running = [] if scribe and scribe["status"] not in TURN_RUNNING else [(scribe or {}).get("name") or "书记员"]
-        else:
-            running = [e["name"] for e in entries if e["name"] in rows and e["role"] != scribe_role
-                       and rows[e["name"]]["status"] in TURN_RUNNING + ("waiting_researcher",)]
-        if (ok and not missing and not running) or time.time() >= deadline:
-            break
-        time.sleep(every)
-    if not ok:
-        print("读不出 .claude/state/pool.json。")
-        return 1
-    if batch is not None:
-        mine = next(numbers for numbers in plan["rounds"] if batch in numbers)
-        if batch == len(batches):
-            then = "这是最后一批。接着把 +2 和本会话归入分区，再运行 setup.py pool --target <项目目录> --wait 240。"
-        elif batch == mine[-1]:                            # the round is over: the next one needs a message from the researcher
-            used = sum(1 for b in mine for t in plan["top"] if t["name"] in batches[b - 1]
-                       for _ in plan_entries({"top": t["children"]}))
-            then = ("这一轮到此为止：研究员每发一条消息，应用最多让会话自己开出 %d 个会话，这一轮用了 %d 个。现在结束本轮，"
-                    "请研究员回一句“%s”；他回话以后再开第 %d 批：%s。" % (
-                        MESSAGE_STARTS, used, RESUME_WORDS, batch + 1, "、".join(batches[batch])))
-        else:
-            then = "接着开第 %d 批：%s。" % (batch + 1, "、".join(batches[batch]))
-        if not missing and not running:
-            print("第 %d 批开齐：%d 个会话都已认领，首轮都结束了。%s" % (batch, len(entries), then))
-            return 0
-        print("等了 %d 秒，第 %d 批的 %d 个会话还没开齐。" % (seconds, batch, len(entries)))
-    elif missing:
-        print("等了 %d 秒，%d 个会话里还有 %d 个没认领：" % (seconds, len(entries), len(missing)))
-    for name in missing:
-        above = opened_by.get(name)
-        print("- %s：%s" % (name, "+2，由做初始化的会话开出" if not above else
-                             "由 %s 开出，%s %s" % (above, above, "已认领" if above in claims else "还没认领")))
-    if any(opened_by.get(n) in claims for n in missing):
-        print("上一级已认领、下一级没出来的：它首轮没把下一级开出来。请研究员点开上一级的会话，说一句“照认领输出开出下一级”；"
-              "给它发消息没有用，被消息叫起来的那一轮开不了会话。")
-    if batch is not None:
-        asking = [n for n in running if rows[n]["status"] == "waiting_researcher"]
-        if asking:
-            print("停在确认框上、等研究员批准的：%s。请研究员到侧栏点开处理。" % "、".join(asking))
-        if running:
-            print("首轮还没结束的：%s。它们在跑的时候占着应用同时运行的名额：重跑这条命令再等一次；还是这样，就往下做。%s" % (
-                "、".join(running), then))
-        else:
-            print("不用再等这一批。%s" % then)
-        return 1
-    if missing:
-        return 1
-    line = "会话池已开齐：%d/%d 条认领。" % (len(entries), len(entries))
-    read = "用会话管理工具 list_events 读书记员（桌面会话 %s）的最后几条" % ((scribe or {}).get("desk") or "ID 没记下")
-    if running:
-        print(line + "书记员的首轮还没结束（状态：%s），两件初始化写入还在做：重跑这条命令接着等。" % (scribe or {}).get("status", "unknown"))
-        return 1
-    if scribe["status"] == "waiting_researcher":
-        print(line + "书记员停在一个确认框上，等研究员批准：请研究员到侧栏点开它处理，再重跑这条命令。")
-        return 1
-    gaps = feishu_gaps(target, enabled_sequences(target))
-    if gaps:
-        print(line + "书记员的首轮已结束，但是%s。" % gaps[0])
-        print(read + "，照技能里“书记员回话里的情况”处理。")
-        return 1
-    tasks = registered_tasks(target)
-    if tasks:
-        print(line + "书记员的首轮已结束：知识库节点都在，首条研究任务已登记（#%s）。" % tasks[0][0].get("work_item_id", "?"))
-    else:
-        print(line + "书记员的首轮已结束：知识库节点都在；这个目录里没有首条研究任务的登记回执。空间里原来就有研究任务时书记员会跳过登记，"
-              "check --live 会核对；不是这种情况，%s。" % read)
-    return 0
-
-
 def feishu_gaps(target, seqs):
     """What the project still lacks on the Feishu side, read from feishu/ids.json: the project
     space binding, then the knowledge space, then the node skeleton."""
     ids = load_json_file(os.path.join(target, "feishu", "ids.json")) or {}
     meegle, wiki = ids.get("meegle") or {}, ids.get("wiki") or {}
     if not (meegle.get("bound_at") and meegle.get("types")):
-        return ["飞书项目空间还没绑定：运行 setup.py feishu --target <项目目录> --live，核对后加 --apply"]
+        return ["飞书项目空间还没绑定：运行 space.py feishu --target <项目目录> --live，核对后加 --apply"]
     if not wiki.get("space_id"):
-        return ["还没有知识空间：运行 setup.py feishu --target <项目目录> --live --apply，没有同名的知识空间时它会新建一个"]
+        return ["还没有知识空间：运行 space.py feishu --target <项目目录> --live --apply，没有同名的知识空间时它会新建一个"]
     nodes = wiki.get("nodes") or {}
     missing = [k for k in orgspec.OrgSpec().node_keys(seqs) if not (nodes.get(k) or {}).get("node_token")]
     if missing:
@@ -2439,107 +1722,6 @@ def enabled_sequences(target):
     return (m or {}).get("sequences") or None
 
 
-# -------------------------------------------------------------- feishu
-def normalise_ids(raw):
-    """ids.json as this version writes it. Any other shape starts empty: bind again with --live.
-    A binding time without a single bound type counts as not bound."""
-    if raw.get("schema") == space.IDS_SCHEMA:
-        m = raw.get("meegle") or {}
-        if m.get("bound_at") and not m.get("types"):
-            m.pop("bound_at")
-            return raw, ["feishu/ids.json 记着绑定时间，却一种类型都没绑上，按没绑定处理"]
-        return raw, []
-    notes = ["feishu/ids.json 不是这一版的格式：这一版只认用节点流程的空间，按空间重新绑定；--apply 时原文件备份成 ids.legacy.json"] if raw else []
-    return {"schema": space.IDS_SCHEMA, "lark": {}, "meegle": {}, "wiki": {}}, notes
-
-
-def binding_doc(spec, contract, ids, snap, problems=None, notes=(), changes=(), switch=None, seqs=None):
-    """feishu/binding.md: which object of the space fills each slot of the contract, what is
-    missing, and the knowledge-base nodes and read-back values the project still needs."""
-    m = ids.get("meegle") or {}
-    lines = ["# 绑定与核对清单", "",
-             "> 由 `setup.py feishu` 生成。插件按含义处理的类型、字段、角色和状态写在约定文件里（`.claude/solo-lab/orgspec/contract.json`）；"
-             "这里列每个槽位对到空间里的哪个对象。流程、节点和必填项不在这里：它们以空间为准，读出来的结构在 `feishu/space.md`。", ""]
-    if switch:
-        lines += switch_md(switch)
-    lines += ["## 绑定结果", "", space.binding_md(contract, snap or {}, space.binding_of(ids)), ""]
-    lines += ["## 要处理的问题", ""]
-    if problems is None:
-        lines += ["还没读过空间，没法核对：先跑 `setup.py feishu --live`。", ""]
-    else:
-        lines += [orgspec.md_table(["对象", "问题", "怎么办"], problems) if problems else "无。", ""]
-        if problems:
-            lines += ["空间由模板建出来，缺的东西要在模板里补：把上表报给模板维护者，模板更新后重建或补齐空间，再重跑 `setup.py feishu --live`。"
-                      "空间里已经有、只是名字不同的，用 `--map <类型槽位>=<空间里的类型名>` 或 `--map <类型槽位>.<字段槽位>=<空间里的字段名>` 指认。", ""]
-    if notes or changes:
-        lines += ["## 提醒", "", bullets(list(notes) + ["空间结构和上次读到的不一样：%s" % c for c in changes]), ""]
-    rows = []
-    nodes = (ids.get("wiki") or {}).get("nodes") or {}
-    renames = False
-    for key in spec.node_keys(seqs):
-        head, _, seq = key.partition("/")
-        title = spec.term("node", head) + ("/" + spec.term("seq", seq) if seq else "")
-        n = nodes.get(key)
-        if not n:
-            rows.append([title, "没有", "书记员建节点：`docs.py ensure-node %s`" % key])
-        elif seq and n.get("title", "").split("/")[-1] != spec.term("seq", seq):
-            renames = True
-            rows.append([title, "现名“%s”" % n.get("title"), "改名为“%s”" % spec.term("seq", seq)])
-        elif not seq and n.get("title", "").split("/")[0] != spec.term("node", head):
-            renames = True
-            rows.append([title, "现名“%s”" % n.get("title"), "改名为“%s”" % spec.term("node", head)])
-    lines += ["## 知识库节点", "", orgspec.md_table(["节点", "现状", "要做的"], rows) if rows else "无差异。", ""]
-    if any(r[1] == "没有" for r in rows):
-        lines += ["缺的节点可以一次建齐：`docs.py ensure-node all`，先预览，再加 `--apply`。它先建一级节点，再建各序列的节点；"
-                  "知识空间里已经有同名节点的直接用，不再建。要先有知识空间：`setup.py feishu --live --apply` 找不到同名的知识空间就新建一个。", ""]
-    if renames:
-        lines += ["命令行没有给知识库节点改名的子命令；节点标题跟着节点文档的一级标题走。先读一遍节点文档：是空的，书记员可以写入只有新标题的正文："
-                  "`lark-cli docs +update --doc <节点链接> --command overwrite --doc-format markdown --content '# <新标题>' --as user`；"
-                  "有内容的，请研究员在网页上改标题。", ""]
-    lark = ids.get("lark") or {}
-    wiki = ids.get("wiki") or {}
-    readback = [
-        ["project_key", "有" if m.get("project_key") else "缺", "跑 `setup.py feishu --live --apply`：按 `spec/task.json` 里的空间名精确查找"],
-        ["simple_name", "有" if m.get("simple_name") else "缺", "同上；工作项链接要用它"],
-        ["研究员的 open_id", "有" if lark.get("researcher_open_id") else "缺", "同上：从 `lark-cli whoami` 读；没有它，飞书私聊监听不启动"],
-        ["知识空间 space_id", "有" if wiki.get("space_id") else "缺", "先在已有的知识空间里找（名字可能不一样），确认没有再建，再重跑 `setup.py feishu --live --apply`"],
-    ]
-    lines += ["## 读回", "", orgspec.md_table(["项", "现状", "怎么补"], readback), ""]
-    return "\n".join(lines)
-
-
-def cli_json(cmd, timeout=60):
-    code, out, err = run(cmd, timeout)
-    if code != 0:
-        raise SetupError("%s 失败（退出码 %s）：%s" % (" ".join(cmd[:4]), code, (err or out or "")[-300:]))
-    try:
-        return json.loads(out)
-    except ValueError:
-        raise SetupError("%s 的输出不是 JSON" % " ".join(cmd[:4]))
-
-
-def search_hits(data, wanted):
-    """The projects in a `meegle project search` answer, and those whose name, simple_name or
-    project_key equals wanted."""
-    projects = data.get("projects") if isinstance(data, dict) else data
-    if not isinstance(projects, list):
-        projects = [d for d in ledger_core._walk(data) if isinstance(d, dict) and d.get("project_key")]
-    projects = [p for p in projects if isinstance(p, dict)]
-    return projects, [p for p in projects if wanted in (p.get("name"), p.get("simple_name"), p.get("project_key"))]
-
-
-def find_project(data, wanted, fix=None):
-    """The one project in `meegle project search` whose name, simple_name or project_key equals wanted."""
-    projects, hits = search_hits(data, wanted)
-    if len(hits) != 1:
-        cands = "；".join("%s（simple_name %s，project_key %s）" % (p.get("name"), p.get("simple_name"), p.get("project_key"))
-                          for p in projects or []) or "无"
-        raise SetupError("按“%s”找到 %d 个飞书项目空间，要正好一个。候选：%s。%s" % (wanted, len(hits), cands, fix or (
-            "把准确的 simple_name 或 project_key 写进 init --task 用的任务文件的 feishu.meegle_space，重跑 init --apply"
-            "（spec/task.json 跟着更新；手改过它的，init 会写成 spec/task.json.new，对照合并），再重跑这条命令")))
-    return hits[0]
-
-
 def read_space(contract, project, maps, old_binding=None):
     """Snapshot a space, fill the contract's slots and check the flows: (snapshot, binding,
     problems, notes). Reads only."""
@@ -2550,326 +1732,6 @@ def read_space(contract, project, maps, old_binding=None):
     binding, problems = space.bind(contract, snap, old_binding, maps)
     more, notes = space.check(contract, snap, binding)
     return snap, binding, problems + more, notes
-
-
-def optional_read(what, fn):
-    """Run one optional read-back step; a failure becomes a reminder, not an abort."""
-    try:
-        return fn()
-    except SetupError as e:
-        print("提醒：没能读回%s：%s" % (what, e))
-        return None
-
-
-def old_space_items(spec, project_key, old):
-    """What a space the project is leaving still holds, for the types its binding had: (types
-    with any work item, open work items as lines, types that could not be checked)."""
-    held, open_items, unchecked = [], [], []
-    stop = ledger_core.system_states(spec)
-    for wid, t in (old.get("types") or {}).items():
-        tkey = t.get("type_key")
-        if not tkey:
-            continue
-        name = spec.term("wi", wid) if wid in spec.terms["wi"] else t.get("name") or wid
-        done = [s["name"] for slot, s in ((old.get("states") or {}).get(wid) or {}).items() if slot == "archived" and s.get("name")]
-
-        def query(mql):
-            return ledger_core.query_rows(cli_json(["meegle", "workitem", "query", "--project-key", project_key,
-                                               "--mql", mql, "--format", "json"]))
-        try:
-            rows = query("SELECT `work_item_id`, `name`, `work_item_status` FROM `%s`.`%s` WHERE %s LIMIT 20" % (
-                project_key, tkey, ledger_core._not_in(done + stop)))
-            anything = rows or query("SELECT `work_item_id` FROM `%s`.`%s` LIMIT 1" % (project_key, tkey))
-        except (SetupError, ledger_core.LedgerError) as e:
-            print("提醒：没能查旧空间里的%s：%s" % (name, e))
-            unchecked.append(name)
-            continue
-        if anything:
-            held.append(name)
-        open_items += ["%s #%s %s（%s）" % (name, r.get("work_item_id"), r.get("name") or "", r.get("work_item_status") or "")
-                       for r in rows]
-    return held, open_items, unchecked
-
-
-def template_hint(contract, task_feishu, name):
-    """How to make the project space from the template; the link is the task file's, else the contract's."""
-    url = (task_feishu or {}).get("template_url") or contract.template.get("url")
-    if not url:
-        return "照 setup 技能用参考模板创建空间，空间名填“%s”" % name
-    return "打开模板 %s，点“使用模板”，空间名填“%s”，“实例数据”勾选“视图”，其余用默认值" % (url, name)
-
-
-def read_back(spec, contract, ids, task_feishu, maps, switch=None, old_snap=None, create=False):
-    """Find the project's space, read its structure, bind the contract to it, and read open_id,
-    space_id and node titles. Returns (snapshot, problems, notes, changes since the last
-    snapshot). The space the task file names is looked up every time: a name can come to mean
-    another space, a key cannot. When it is not the space bound last time, the old binding is
-    dropped and `switch` gets both spaces and what the old one still holds."""
-    m = ids["meegle"]
-    wanted = str(task_feishu.get("meegle_space") or "").strip() or m.get("project_key")
-    if not wanted:
-        raise SetupError("ids.json 里没有 project_key，研究任务里也没写飞书项目空间：把空间名写进 init --task 用的任务文件的 feishu.meegle_space，重跑 init --apply，再重跑这条命令")
-    data = cli_json(["meegle", "project", "search", "--project-key", wanted, "--format", "json"])
-    if not search_hits(data, wanted)[1] and not m.get("project_key"):
-        raise SetupError("没有叫“%s”的飞书项目空间，什么都没写。用模板建一个：%s；建好以后重跑这条命令。" % (
-            wanted, template_hint(contract, task_feishu, wanted)))
-    if not search_hits(data, wanted)[1] and m.get("project_key") and wanted == m.get("space_name"):
-        print("提醒：按“%s”找不到空间，可能在飞书里改了名；接着用上次绑定的空间（simple_name %s，project_key %s）。"
-              "把任务文件的 feishu.meegle_space 改成新名字或 simple_name" % (wanted, m.get("simple_name"), m["project_key"]))
-        hit = {"project_key": m["project_key"], "simple_name": m.get("simple_name"), "name": m.get("space_name")}
-    else:
-        hit = find_project(data, wanted)
-    same = not m.get("project_key") or hit.get("project_key") == m["project_key"]
-    if not same:
-        print("提醒：任务文件里的空间“%s”不是上次绑定的“%s”，这是换空间：按新空间重新绑定，原来的绑定作废" % (
-            wanted, m.get("space_name") or m["project_key"]))
-        held, open_items, unchecked = old_space_items(spec, m["project_key"], m)
-        if switch is not None:
-            switch.update({"old": {k: m[k] for k in ("project_key", "simple_name", "space_name", "bound_at") if m.get(k)},
-                           "new": {"project_key": hit.get("project_key"), "simple_name": hit.get("simple_name"),
-                                   "space_name": hit.get("name")},
-                           "bound_types": len(m.get("types") or {}), "held": held, "open": open_items, "unchecked": unchecked})
-        for k in ("types", "field_keys", "roles", "states", "bound_at", "contract_version"):
-            m.pop(k, None)
-    m.update({"project_key": hit.get("project_key"), "simple_name": hit.get("simple_name"),
-              "space_name": hit.get("name") or m.get("space_name")})
-    snap, binding, problems, notes = read_space(
-        contract, {"project_key": m["project_key"], "simple_name": m.get("simple_name"), "name": m.get("space_name")},
-        maps, space.binding_of(ids))
-    space.apply_binding(ids, contract, binding)
-    changes = space.diff(old_snap, snap) if same and old_snap and old_snap.get("project_key") == snap["project_key"] else []
-    lark = ids.setdefault("lark", {})
-    if not lark.get("researcher_open_id"):
-        who = optional_read("研究员的 open_id", lambda: cli_json(["lark-cli", "whoami"]))
-        who = who if isinstance(who, dict) else {}
-        on_behalf = who.get("onBehalfOf") if isinstance(who.get("onBehalfOf"), dict) else {}
-        oid = on_behalf.get("openId") if who.get("identity") == "user" else None
-        if oid:
-            lark["researcher_open_id"] = oid
-        else:
-            print("提醒：lark-cli whoami 里没有用户身份的 open_id；飞书私聊监听不会启动")
-    wiki = ids.setdefault("wiki", {})
-    want_wiki = task_feishu.get("wiki_space")
-    want_id = str(task_feishu.get("wiki_space_id") or "").strip()
-    if want_id:
-        # The knowledge space by its ID (1.0.10). By name alone a project could not move to a space named as its
-        # old one: the same name was not looked up again, and two spaces of one name are not chosen between.
-        if str(wiki.get("space_id") or "") != want_id or not wiki.get("space_name"):
-            data = optional_read("知识空间", lambda: cli_json(
-                ["lark-cli", "wiki", "+space-list", "--as", "user", "--page-all", "--page-limit", "0"], 120))
-            hit = next((d for d in ledger_core._walk(data or {}) if str(d.get("space_id") or "") == want_id), None)
-            if hit:
-                if wiki.get("space_id") and str(wiki["space_id"]) != want_id:
-                    print("提醒：知识空间换成了“%s”（space_id %s），原来记下的节点作废，书记员在新空间里重建" % (hit.get("name") or "", want_id))
-                    wiki.pop("nodes", None)
-                wiki.update({"space_id": hit["space_id"], "space_name": hit.get("name") or want_wiki or ""})
-            elif data is not None:
-                print("提醒：翻完全部分页，没有 space_id 是 %s 的知识空间；知识空间的绑定没有动。核对任务文件的 feishu.wiki_space_id" % want_id)
-    elif want_wiki and (not wiki.get("space_id") or wiki.get("space_name", want_wiki) != want_wiki):
-        data = optional_read("知识空间", lambda: cli_json(
-            ["lark-cli", "wiki", "+space-list", "--as", "user", "--page-all", "--page-limit", "0"], 120))
-        hits = list({d["space_id"]: d for d in ledger_core._walk(data or {})
-                     if d.get("name") == want_wiki and d.get("space_id")}.values())
-        if len(hits) == 1:
-            if wiki.get("space_id") and hits[0]["space_id"] != wiki["space_id"]:
-                print("提醒：知识空间换成了“%s”，原来记下的节点作废，书记员在新空间里重建" % want_wiki)
-                wiki.pop("nodes", None)
-            wiki.update({"space_id": hits[0]["space_id"], "space_name": hits[0]["name"]})
-        elif data is not None and not hits and create:
-            made = optional_read("新建知识空间", lambda: cli_json(
-                ["lark-cli", "wiki", "+space-create", "--name", want_wiki, "--as", "user"], 120))
-            new = [d for d in ledger_core._walk(made or {}) if d.get("space_id")]
-            if new:
-                wiki.pop("nodes", None)
-                wiki.update({"space_id": new[0]["space_id"], "space_name": want_wiki})
-                print("知识空间：没有叫“%s”的，已新建。" % want_wiki)
-            elif made is not None:
-                print("提醒：新建知识空间没有拿到 space_id。先在网页上看“%s”建出来没有，再重跑这条命令：已经建出来的会被找到并沿用。" % want_wiki)
-        elif data is not None and not hits:
-            print("知识空间：翻完全部分页，没有叫“%s”的；加 --apply 时新建一个。" % want_wiki)
-        elif len(hits) > 1:
-            print("提醒：有 %d 个知识空间叫“%s”（space_id：%s），没有自动选；把要用的那个的 space_id 写进任务文件的 feishu.wiki_space_id，再重跑" % (
-                len(hits), want_wiki, "、".join(str(h["space_id"]) for h in hits)))
-    for key, n in (wiki.get("nodes") or {}).items():
-        if n.get("node_token"):
-            got = optional_read("节点 %s 的标题" % key,
-                                lambda tok=n["node_token"]: cli_json(["lark-cli", "wiki", "+node-get", "--node-token", tok, "--as", "user"]))
-            title = ledger_core._find(got or {}, ("title",))
-            if title:
-                n["title"] = title
-    return snap, problems, notes, changes
-
-
-def switch_md(switch):
-    """The 换空间 section of binding.md: both spaces, what the old binding loses and what the
-    old space still holds."""
-    o, n = switch["old"], switch["new"]
-    rows = [["旧空间", o.get("space_name", ""), o.get("simple_name", ""), o.get("project_key", "")],
-            ["新空间", n.get("space_name") or "", n.get("simple_name") or "", n.get("project_key") or ""]]
-    lines = ["## 换空间", "",
-             "任务文件指的空间和上次绑定的不是同一个，这次按新空间重新绑定，原来的绑定作废。知识库不跟着换。", "",
-             orgspec.md_table(["", "空间名", "simple_name", "project_key"], rows), ""]
-    if switch["held"]:
-        lines += ["旧空间里还有工作项：%s。插件搬不了工作项，它们留在旧空间当档案，台账以后不再读写；没办完的要不要在新空间重建，"
-                  "由研究员逐条决定。研究员确认以后，写入时加 `--leave-old-items`。" % "、".join(switch["held"]), ""]
-        if switch["open"]:
-            lines += ["没办完的（每种类型最多列 20 条）：", "", bullets(switch["open"]), ""]
-    if switch["unchecked"]:
-        lines += ["没查成旧空间里的%s有没有工作项。确认旧空间已经删了，或者里面的工作项可以留在原处，写入时加 `--leave-old-items`。"
-                  % "、".join(switch["unchecked"]), ""]
-    if not switch["held"] and not switch["unchecked"]:
-        lines += ["旧空间里没有工作项，可以直接写入。" if switch["bound_types"] else
-                  "旧绑定一种类型都没绑上，台账没在旧空间里记过东西，可以直接写入。", ""]
-    lines += ["写入时 `feishu/ids.json` 的 `previous_spaces` 记下旧空间和换出的时间，本地记录里旧的工作项 ID 还能查到属于哪个空间；"
-              "会话池的认领表里旧空间的工作项同时移出，记在 `.claude/logs/dispatch.jsonl`。"
-              "旧空间留不留由研究员决定，删空间只能研究员本人做。", ""]
-    return lines
-
-
-def feishu(target, maps, live, apply, leave_old=False):
-    """Bind the project to its space: find the space, read its structure, fill the contract's
-    slots, check the flows. Writes feishu/ids.json, space.json, space.md and binding.md, and
-    org/phases.md from the flows it read."""
-    spec = orgspec.OrgSpec()
-    contract = orgspec.Contract(spec)
-    whole = load_json_file(os.path.join(target, "spec", "task.json")) or {}
-    task = dict(whole.get("feishu") or {})
-    task.setdefault("wiki_space", whole.get("name"))          # the knowledge space is named after the project
-    try:
-        maps = space.parse_maps(contract, maps)
-    except space.SpaceError as e:
-        raise SetupError(str(e))
-    fd_dir = os.path.join(target, "feishu")
-    ids_path = os.path.join(fd_dir, "ids.json")
-    raw = load_json_file(ids_path) or {}
-    ids, notes = normalise_ids(raw)
-    snap = load_json_file(os.path.join(fd_dir, "space.json"))
-    problems, space_notes, changes, switch = None, [], [], {}
-    if live:
-        try:
-            snap, problems, space_notes, changes = read_back(spec, contract, ids, task, maps, switch, snap, create=apply)
-        except SetupError:
-            raise
-        except Exception as e:                       # an output shape nobody expected
-            raise SetupError("读回时遇到没见过的输出（%s: %s）；什么都没写" % (type(e).__name__, e))
-        if switch and apply and not leave_old and (switch["held"] or switch["unchecked"]):
-            why = ("旧空间“%s”里还有工作项（%s）" % (switch["old"].get("space_name", ""), "、".join(switch["held"]))
-                   if switch["held"] else "没查成旧空间里的%s有没有工作项" % "、".join(switch["unchecked"]))
-            raise SetupError(why + "，什么都没写。插件搬不了工作项，换空间以后它们留在旧空间，台账不再读写。先去掉 --apply 预览，"
-                             "看 binding.md 的“换空间”一节；研究员确认这些工作项可以留在旧空间以后，再加 --leave-old-items 写入")
-    else:
-        moved = ledger_core.other_space({"feishu": task}, ids.get("meegle") or {})
-        if moved:
-            raise SetupError("任务文件里的飞书项目空间是“%s”，上次绑定的是“%s”：加 --live 从空间读一遍再绑定" % (
-                moved, ids["meegle"]["space_name"]))
-        if snap is not None:
-            binding, problems = space.bind(contract, snap, space.binding_of(ids), maps)
-            more, space_notes = space.check(contract, snap, binding)
-            problems += more
-            space.apply_binding(ids, contract, binding)
-        elif maps:
-            raise SetupError("还没读过空间，--map 没法核对：先跑 setup.py feishu --live")
-    blank = snap is not None and not (ids.get("meegle") or {}).get("types")
-    stamp = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
-    if apply and snap is not None:
-        if blank:                                    # nothing bound: the ledger keeps refusing
-            ids["meegle"].pop("bound_at", None)
-        else:
-            ids["meegle"]["bound_at"] = stamp
-    if switch and apply:
-        ids["meegle"].setdefault("previous_spaces", []).append(dict(switch["old"], left_at=stamp, items_left=switch["held"]))
-    for n in notes:
-        print("提醒：" + n)
-    if switch:
-        old, new = switch["old"], switch["new"]
-        print("换空间：旧空间“%s”（simple_name %s，project_key %s）→ 新空间“%s”（simple_name %s，project_key %s），"
-              "详见 feishu/binding.md 的“换空间”一节。" % (old.get("space_name", ""), old.get("simple_name", ""),
-                                                    old.get("project_key", ""), new.get("space_name"),
-                                                    new.get("simple_name"), new.get("project_key")))
-    binding_path = os.path.join(fd_dir, "binding.md")
-    files = {ids_path: dump_json(ids),
-             binding_path: binding_doc(spec, contract, ids, snap, problems, space_notes, changes, switch, enabled_sequences(target))}
-    if snap is not None:
-        files[os.path.join(fd_dir, "space.json")] = space.dump_json(snap)
-        files[os.path.join(fd_dir, "space.md")] = space.to_markdown(snap, contract, space.binding_of(ids)) + "\n"
-        if not blank:
-            files[os.path.join(target, "org", "phases.md")] = phases_md(spec, snap, space.binding_of(ids))
-    for p, content in files.items():
-        current = read_text(p) if os.path.isfile(p) else None
-        state = "相同" if current == content else ("新建" if current is None else "更新")
-        print("[%s] %s" % (state, os.path.relpath(p, target)))
-    if problems is None:
-        print("还没读过空间，绑定不了：加 --live 从空间读。")
-    else:
-        print("约定核对（contract_version %d）：%s" % (contract.version, "通过" if not problems else
-                                                "%d 个问题，见 feishu/binding.md 的“要处理的问题”" % len(problems)))
-    for c in changes:
-        print("变化：" + c)
-    if blank:
-        named = (ids.get("meegle") or {}).get("space_name") or task.get("meegle_space") or ""
-        print("空间“%s”里没有一种类型对得上插件的约定。项目空间要用模板建：%s，再把任务文件的 feishu.meegle_space 指向它、重跑这条命令；"
-              "空间里其实有这些类型、只是名字不同的，用 --map 指认。" % (named, template_hint(contract, task, "<新空间的名字>")))
-    if not apply:
-        print("这是预览。核对绑定结果后加 --apply 写入；台账脚本在绑定写入以后才能用。")
-        if not blank:                                # a blank space gets the hint, not the whole list
-            print()
-            print(files[binding_path])
-        return 1 if problems or blank else 0
-    os.makedirs(fd_dir, exist_ok=True)
-    if os.path.isfile(ids_path) and raw.get("schema") != space.IDS_SCHEMA:
-        backup = os.path.join(fd_dir, "ids.legacy.json")
-        if not os.path.exists(backup):
-            shutil.copyfile(ids_path, backup)
-    for p, content in files.items():
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        with open(p, "w", encoding="utf-8") as fh:
-            fh.write(content)
-    print("已写入 %s。" % "、".join(os.path.relpath(p, target) for p in files))
-    if switch:
-        left = old_owners_out(target)
-        if left:
-            print("会话池的认领表里移出了旧空间的 %d 条工作项（%s）：它们留在旧空间，台账不再读写。" % (
-                len(left), "、".join("#%s" % i for i in sorted(left))))
-    if blank:
-        print("一种类型都没绑上：这次只记下空间和 open_id，没写绑定时间，台账脚本仍然不读写飞书。")
-    return 1 if problems or blank else 0                 # a space that fails the contract check stops an initialisation
-
-
-def check_template(target, name):
-    """Check a space as a template: read its structure, fill the contract's slots, check the
-    flows. Reads Feishu, writes nothing."""
-    spec = orgspec.OrgSpec()
-    contract = orgspec.Contract(spec)
-    if not name:
-        task = (load_json_file(os.path.join(target, "spec", "task.json")) or {}).get("feishu") or {} if target else {}
-        name = str(task.get("template_space") or "").strip()
-    if not name:
-        raise SetupError("要核对哪个空间：用 --space 给出它的名字、simple_name 或 project_key")
-    hit = find_project(cli_json(["meegle", "project", "search", "--project-key", name, "--format", "json"]), name,
-                       "把空间的准确名字、simple_name 或 project_key 用 --space 传进来")
-    snap, binding, problems, notes = read_space(contract, hit, {})
-    held = []
-    for wid, slot in binding["types"].items():
-        mql = "SELECT `work_item_id` FROM `%s`.`%s` LIMIT 1" % (hit.get("project_key"), slot["type_key"])
-        try:
-            rows = ledger_core.query_rows(cli_json(["meegle", "workitem", "query", "--project-key", hit.get("project_key"),
-                                               "--mql", mql, "--format", "json"]))
-        except (SetupError, ledger_core.LedgerError) as e:
-            print("提醒：没能查%s里有没有工作项：%s" % (spec.term("wi", wid), e))
-            continue
-        if rows:
-            held.append(spec.term("wi", wid))
-    if held:
-        notes = list(notes) + ["空间里有工作项（%s）：流程图是从它们读出来的；发布成模板之前，样例要不要留由模板维护者决定" % "、".join(held)]
-    print("空间“%s”（simple_name %s，project_key %s）。只读了飞书，没写任何文件。" % (
-        hit.get("name"), hit.get("simple_name"), hit.get("project_key")))
-    print()
-    space.report(contract, snap, binding, problems, notes)
-    if problems:
-        print("还有 %d 个问题，在空间里补好以后再跑一次。" % len(problems))
-        return 1
-    print("这个空间符合约定：用它建出来的项目空间，绑定不用 --map。")
-    return 0
 
 
 # --------------------------------------------------------------- login
@@ -3051,19 +1913,6 @@ def read_env(target):
         return f.read()
 
 
-def env_gaps(target):
-    """Problems of the project's .env against feishu/ids.json; other lines are not looked at."""
-    values, missing = env_values(target)
-    if missing:
-        return ["还写不了 .env：%s" % "；".join(missing)]
-    current = read_env(target)
-    have = dict(line.strip().split("=", 1) for line in (current or "").split("\n")
-                if line.strip().startswith(tuple(values)) and "=" in line)
-    if have != values:
-        return ["项目目录的 .env 还没有飞书项目和知识空间的链接，或者和 feishu/ids.json 对不上：运行 setup.py env --target <项目目录> --apply"]
-    return []
-
-
 def env_cmd(target, apply):
     """Write the two links into the project's .env. Only these lines are shown or changed."""
     values, missing = env_values(target)
@@ -3099,11 +1948,9 @@ def load_json_file(path):
         raise SetupError("%s 不是合法 JSON" % path)
 
 
-# ---------------------------------------------------------------- main
 def main(argv=None):
     ap = argparse.ArgumentParser(description="初始化智能体组织的项目目录")
     sub = ap.add_subparsers(dest="cmd")
-    sub.add_parser("precheck")
     p = sub.add_parser("announce")
     p.add_argument("--target", required=True)
     p.add_argument("--name", help="项目名，也是两个空间和会话标题前缀的默认名")
@@ -3115,39 +1962,15 @@ def main(argv=None):
     p.add_argument("--sequences")
     p.add_argument("--runtime", choices=("claude", "codex"))
     p.add_argument("--apply", action="store_true")
-    p = sub.add_parser("feishu")
-    p.add_argument("--target", required=True)
-    p.add_argument("--map", action="append", default=[],
-                   help="指认空间里名字不同的类型或字段：<类型槽位>=<类型名> 或 <类型槽位>.<字段槽位>=<字段名或 field_key>，可重复")
-    p.add_argument("--live", action="store_true")
-    p.add_argument("--apply", action="store_true")
-    p.add_argument("--leave-old-items", action="store_true",
-                   help="换空间时旧空间里还有工作项：研究员确认它们留在旧空间、台账以后不再读写，才加这个参数写入")
-    p = sub.add_parser("template")
-    p.add_argument("--space", help="要核对的空间：名字、simple_name 或 project_key；不写就用任务文件的 feishu.template_space")
-    p.add_argument("--target", help="项目目录：从它的 spec/task.json 读 feishu.template_space")
-    p = sub.add_parser("check")
-    p.add_argument("--target", required=True)
-    p.add_argument("--live", action="store_true", help="只读回读飞书：结构和绑定、知识库节点、首条研究任务和它的主文档")
-    p.add_argument("--sessions", metavar="FILE", help="客户端 list_sessions 的结果存成的 JSON 文件：核对会话还在、没归档、都在项目分区里")
-    p.add_argument("--readback", metavar="FILE",
-                   help="本会话用 get_session、get_usage 读回的各会话模型、推理强度和窗口存成的 JSON 文件：模型对照开池清单，窗口和推理强度对照本会话")
     p = sub.add_parser("login")
     p.add_argument("--wait", action="store_true", help="研究员授权以后：等到登录完成，读回登录状态")
     p.add_argument("--timeout", type=int, default=LOGIN_WAIT, help="--wait 最多等多少秒")
     p = sub.add_parser("env")
     p.add_argument("--target", required=True)
     p.add_argument("--apply", action="store_true")
-    p = sub.add_parser("pool")
-    p.add_argument("--target", required=True)
-    p.add_argument("--manual", action="store_true", help="研究员的会话开不了会话时：打印手工开池的做法")
-    p.add_argument("--wait", type=int, metavar="SECONDS", help="等到清单里的会话都认领、书记员的首轮结束，最多等这么多秒")
-    p.add_argument("--batch", type=int, metavar="N", help="和 --wait 一起用：只等第 N 批的会话认领、首轮结束")
     args = ap.parse_args(argv)
     try:
         need_python()
-        if args.cmd == "precheck":
-            return precheck()
         if args.cmd == "announce":
             return announce(project_dir(args.target), args.name, args.task, args.sequences)
         if args.cmd == "init":
@@ -3161,29 +1984,10 @@ def main(argv=None):
             if args.apply:
                 apply_plan(target, plan, acts)
             return 0
-        if args.cmd == "feishu":
-            return feishu(os.path.abspath(args.target), args.map, args.live, args.apply, args.leave_old_items)
-        if args.cmd == "template":
-            return check_template(os.path.abspath(args.target) if args.target else None, args.space)
-        if args.cmd == "check":
-            if os.path.isfile(os.path.join(args.target, ".agent-org", "manifest.json")):
-                import codex_setup
-                return codex_setup.check(os.path.abspath(args.target), sys.modules[__name__])
-            return check(os.path.abspath(args.target), args.live, args.sessions, args.readback)
         if args.cmd == "login":
             return login(args.wait, args.timeout)
         if args.cmd == "env":
             return env_cmd(os.path.abspath(args.target), args.apply)
-        if args.cmd == "pool":
-            if os.path.isfile(os.path.join(args.target, ".agent-org", "manifest.json")):
-                import codex_runtime
-                print(dump_json(codex_runtime.Pool(args.target).plan()))
-                return 0
-            if args.batch is not None and args.wait is None:
-                raise SetupError("--batch 要和 --wait 一起用：setup.py pool --target <项目目录> --wait 180 --batch <第几批>")
-            if args.wait is not None:
-                return pool_wait(os.path.abspath(args.target), args.wait, args.batch)
-            return pool_checklist(os.path.abspath(args.target), args.manual)
     except (SetupError, ValueError, OSError) as e:
         print("出错：%s" % e)
         return 2
