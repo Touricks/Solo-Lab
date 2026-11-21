@@ -1433,7 +1433,7 @@ class PlaceholderTest(LedgerCase):
 class ArchiveTest(LedgerCase):
     def test_an_archived_item_leaves_the_pools_table_of_owners(self):
         """pool.json owners says which session answers for a work item; the inbox hook writes it when the item
-        is handed over, and until 1.0.8 nothing took an entry out: `route.py pool` listed archived items under
+        is handed over, and until 1.0.8 nothing took an entry out: `pool.py show` listed archived items under
         their sessions for good. The archive takes the item out, and touches nothing else in the file."""
         pool = ledger_core.pool
         decision, later = self.decision(), self.decision()
@@ -1460,7 +1460,7 @@ class ArchiveTest(LedgerCase):
         lg = self.lg()
         self.assertIn("还没走到最后一步“归档”：现在在“开工”", self.fails(workitem.archive, lg, request))
         # 1.0.11: an item made by mistake is not pushed through its steps; the message says how to ask the researcher
-        self.assertIn("route.py todo add --for", self.fails(workitem.archive, lg, request))
+        self.assertIn("todo.py add --for", self.fails(workitem.archive, lg, request))
         self.assertIn("记进研究员任务清单，由研究员在网页上终止", self.fails(workitem.archive, lg, request))
         self.assertEqual(lg.wrote("wiki", "+move"), [])
 

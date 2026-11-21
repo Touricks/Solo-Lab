@@ -189,9 +189,9 @@ def drop_pending(lg, item_id):
 
 def drop_owner(lg, item_id):
     """Take a finished work item out of the pool's table of who answers for it (pool.json owners), so that
-    `route.py pool` stops listing it under a session; True when it was there. The table is written by the inbox
+    `pool.py show` stops listing it under a session; True when it was there. The table is written by the inbox
     hook when a session is handed the item and by nothing else, so until 1.0.8 it only grew. A project without
-    a pool, or a pool.json that cannot be read, stops no archive: route.py pool --prune takes it out later."""
+    a pool, or a pool.json that cannot be read, stops no archive: pool.py show --prune takes it out later."""
     if lg.mode != "apply":
         return False
     try:
@@ -1273,7 +1273,7 @@ def archive(lg, item_id, moved=False):
             # not confirmed to get it there: the researcher terminates it on the web page (the researcher,
             # 2026-11-20). The message says how to ask, since this is where a session learns that it must.
             raise core.LedgerError("#%s 还没走到最后一步“%s”：现在在“%s”。前面的步骤确认完再归档。\n这条工作项要是建错了、或者不做了，不要为了归档去确认前面的步骤，"
-                              "也不用写决策包：运行 python3.12 -I .claude/solo-lab/bin/route.py todo add --for %s --terminate --text '<为什么不要它了>'，"
+                              "也不用写决策包：运行 python3.12 -I .claude/solo-lab/bin/todo.py add --for %s --terminate --text '<为什么不要它了>'，"
                               "记进研究员任务清单，由研究员在网页上终止" % (
                 item_id, (last or {}).get("name") or "归档", "、".join(n["name"] for n in nodes if n["status"] == "doing") or "流程之外", item_id))
     key = "archive/%s" % (seq or "<序列>")

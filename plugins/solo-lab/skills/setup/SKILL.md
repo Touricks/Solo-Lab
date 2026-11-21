@@ -315,10 +315,10 @@ python3.12 -I "$PLUGIN/scripts/setup.py" pool --target <项目目录>
 3. **预登记**（打点：`sessions`）。拿第 1 步返回的会话 ID，逐个运行清单里的 expect：
 
    ```bash
-   python3.12 -I .claude/solo-lab/bin/route.py expect <会话名> --role <角色> --desk <开会话时返回的会话 ID>
+   python3.12 -I .claude/solo-lab/bin/pool.py expect <会话名> --role <角色> --desk <开会话时返回的会话 ID>
    ```
 
-   输出“已预登记 <会话名>（<角色>），桌面会话 <ID>。对方运行 route.py claim 时转正。”就登记上了。
+   输出“已预登记 <会话名>（<角色>），桌面会话 <ID>。对方运行 pool.py claim 时转正。”就登记上了。
 4. **等这一批**（打点：`claims`）。Bash 的超时给 240000 毫秒：
 
    ```bash
@@ -370,7 +370,7 @@ python3.12 -I "$PLUGIN/scripts/setup.py" pool --target <项目目录>
 
 两件各用 `nodes`、`first_task` 打点。做完它回话，写明建了几个节点、沿用了几个，研究任务的工作项 ID 和主文档链接；哪条命令失败，原样贴出报错。
 
-本会话不替它写：台账的写命令只有唯一认领的书记员能运行。它的回话报给开它的路由，不报给本会话：本会话用“全部开完以后”第 2 步的 `pool --wait` 等它做完；要看它回了什么，用会话管理工具 `list_events` 读它的会话，桌面会话 ID 在 `pool --wait` 和 `route.py pool` 的输出里。`pool --wait` 说“没有首条研究任务的登记回执”时，空间里原来就有研究任务属正常，第 8 步的 `check --live` 会核对。
+本会话不替它写：台账的写命令只有唯一认领的书记员能运行。它的回话报给开它的路由，不报给本会话：本会话用“全部开完以后”第 2 步的 `pool --wait` 等它做完；要看它回了什么，用会话管理工具 `list_events` 读它的会话，桌面会话 ID 在 `pool --wait` 和 `pool.py show` 的输出里。`pool --wait` 说“没有首条研究任务的登记回执”时，空间里原来就有研究任务属正常，第 8 步的 `check --live` 会核对。
 
 | 书记员回话里的情况 | 怎么办 |
 | --- | --- |
@@ -402,7 +402,7 @@ python3.12 -I "$PLUGIN/scripts/setup.py" pool --target <项目目录>
 
 3. **改标题**。本会话的标题是应用自动起的，用 `set_session_title` 改成 `[<分区名>] Initialization`；用户自己起的不动。这个会话是做初始化的会话，以后只用来重新登录、检查和升级；研究员平时找入口 `PMO-p2-01`。
 
-想看每个会话现在忙不忙，运行 `python3.12 -I .claude/solo-lab/bin/route.py pool`；想再看一遍全貌，运行不带 `--wait` 的 `setup.py pool --target <项目目录>`，末尾是“当前：19/19 条认领；入口 1 条，书记员 1 条；待转正的许可 0 条。”。
+想看每个会话现在忙不忙，运行 `python3.12 -I .claude/solo-lab/bin/pool.py show`；想再看一遍全貌，运行不带 `--wait` 的 `setup.py pool --target <项目目录>`，末尾是“当前：19/19 条认领；入口 1 条，书记员 1 条；待转正的许可 0 条。”。
 
 真实初始化里走通过的：本会话开七个 +2，+2 在首轮里开出 +1，嵌着的会话在分区里显示成多层。没走通过的：分批以后 +1 开出 +0，书记员在第三层做两件写入。
 

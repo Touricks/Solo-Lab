@@ -47,12 +47,12 @@ def claude_version():
     return m.group(1) if m else None
 
 
-UNCLAIMED = ("只有开局第一句写着“认领 <角色>（会话名 …）”的会话才认领：照那句话运行 route.py claim，读输出里的角色说明。"
-             "第一句没有这句话的，是研究员自己的会话，不要自己认领，也不替池里的角色干活；找人用 route.py pool。")
+UNCLAIMED = ("只有开局第一句写着“认领 <角色>（会话名 …）”的会话才认领：照那句话运行 pool.py claim，读输出里的角色说明。"
+             "第一句没有这句话的，是研究员自己的会话，不要自己认领，也不替池里的角色干活；找人用 pool.py show。")
 UNREADABLE = ("会话池的认领表 .claude/state/pool.json 读不出来。照你原来的角色接着干，不要重新认领，也不要改这个文件；"
               "告诉研究员认领表坏了。在修好以前，写台账这类硬规则管的操作都会被拒。")
 AGENT_FLAG = ("这是研究员在终端里用 claude --agent %s 开的聚焦会话，不在会话池里：照这个角色的说明干活，但没有飞书和台账的写权；"
-              "要委托，就给池里的会话发消息（找人用 route.py pool），谈定的事写成决策包交给入口 PMO-p2-01 登记。")
+              "要委托，就给池里的会话发消息（找人用 pool.py show），谈定的事写成决策包交给入口 PMO-p2-01 登记。")
 DESK_CONFLICT = ("本会话和已认领的 %s 共用一个桌面会话 ID，多半是从那个会话里起的进程。它不代表任何角色，没有写权，"
                  "也不读那个会话的收件箱；需要的话请研究员另开会话。")
 
@@ -84,7 +84,7 @@ def pool_start(data, policy, root, sid, desk):
         if who.origin == "tombstone":
             emit("SessionStart", "本会话原来的认领已经释放，现在不代表任何角色。" + UNCLAIMED)
         elif who.origin in ("permit", "pending"):
-            emit("SessionStart", "本会话有 %s 的认领许可，还没转正：照开局的说明运行 route.py claim。" % who.role)
+            emit("SessionStart", "本会话有 %s 的认领许可，还没转正：照开局的说明运行 pool.py claim。" % who.role)
         elif who.origin == "pool_unreadable":
             emit("SessionStart", UNREADABLE)
         elif who.origin == "agent_flag":

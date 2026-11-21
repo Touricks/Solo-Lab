@@ -6,7 +6,7 @@ feishu/write-log.jsonl: time, session, agent, command (redacted), result,
 returned IDs and meegle trace IDs. Read-only commands are not logged.
 
 Also:
-- completes a claim in two steps. `route.py claim` (whose Bash sees the desktop
+- completes a claim in two steps. `pool.py claim` (whose Bash sees the desktop
   session ID) leaves a pending entry; when that command has run in the same
   session, outside any subagent, this hook turns it into the claim.
 The hook never blocks; problems are written to the log as audit_error records.
@@ -59,11 +59,11 @@ def harvest(text, keys):
     return found
 
 
-CLAIM_RUN = re.compile(r"route\.py['\"]?\s+claim(?![\w-])")
+CLAIM_RUN = re.compile(r"pool\.py['\"]?\s+claim(?![\w-])")
 
 
 def finish_claim(data, policy, root, command):
-    """The second step of a claim: the pending entry this session's route.py claim left."""
+    """The second step of a claim: the pending entry this session's pool.py claim left."""
     if (data.get("agent_id") or not CLAIM_RUN.search(command)
             or data.get("hook_event_name") != "PostToolUse"):
         return

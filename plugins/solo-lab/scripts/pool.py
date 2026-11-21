@@ -3,11 +3,11 @@
 
 Every org role runs as a desktop session the researcher can see and talk
 to. A session becomes a role by claiming it, and a claim needs a permit:
-- a pre-registration (route.py expect) by the session that opened it, keyed by the new
+- a pre-registration (pool.py expect) by the session that opened it, keyed by the new
   session's desktop ID (or, in a terminal, its session ID); or
 - the opening line the researcher pastes into a new top-level session,
   "认领 <角色>（会话名 <名字>）…", for +2 roles only.
-Hooks turn a permit into a claim; route.py only writes permits and pending entries.
+Hooks turn a permit into a claim; the commands (pool_cmd.py) only write permits and pending entries.
 
 A claim belongs to one session ID. Its desktop ID moves it to a new session ID only after
 /clear: the old session's SessionEnd(clear) and the new session's SessionStart(clear) with
@@ -26,7 +26,7 @@ started a turn) and ask_ok (the decision the entry may ask the researcher about 
 turn); the guard hook reads them.
 
 setup.py copies this file to .claude/hooks/ (for the hooks) and .claude/solo-lab/bin/
-(for route.py and ledger.py). Being the one module both sides load, it also holds what
+(for the scripts). Being the one module both sides load, it also holds what
 ledger.py and the inbox hook must agree on about decisions that wait for the researcher:
 the expiry time read from org/decisions.md, and which decisions 到期默认 may take.
 
@@ -485,9 +485,9 @@ CARD_DAYS = 7                         # a start card nobody clicked is gone from
 
 
 def card_permit(pool, name, role, at=None):
-    """The permit that waits under a session name for whichever session a start card opens: `route.py expect
+    """The permit that waits under a session name for whichever session a start card opens: `pool.py expect
     --card` writes it without a session, since a card has none until the researcher clicks it, and the
-    session's own `route.py claim --as <name>` binds it. One older than CARD_DAYS waits for nobody."""
+    session's own `pool.py claim --as <name>` binds it. One older than CARD_DAYS waits for nobody."""
     if not name:
         return None
     for p in pool["permits"]:
@@ -912,7 +912,7 @@ def receive_checks(policy, root, pool, msg, me):
     kind, item, sender = msg["kind"], msg.get("id"), msg.get("from")
     sender_claim = pool["claims"].get(sender) if sender else None
     if sender and not sender_claim:
-        out.append("发出方 %s 不在会话池的认领表里；先用 route.py pool 核对是谁发的" % sender)
+        out.append("发出方 %s 不在会话池的认领表里；先用 pool.py show 核对是谁发的" % sender)
     if not addressed_to(policy, pool, msg, me):
         out.append("抬头写的接收方是 %s，不是本会话 %s；确认是不是发错了" % (msg["to"], me["name"]))
     if sender_claim and not kind_allowed(policy, kind, sender_claim["role"], me["role"]):
@@ -1179,11 +1179,11 @@ def injection(root, policy, claim, reason="", limit=INJECT_LIMIT, owners=None, c
     sent, owed = open_items(root, name, owners)
     items = []
     if sent:
-        items.append("委托出去还没交付：" + items_text(sent, "%s→%s", "另有 %d 条，用 route.py pool --recover 看全"))
+        items.append("委托出去还没交付：" + items_text(sent, "%s→%s", "另有 %d 条，用 pool.py show --recover 看全"))
     if owed:
         items.append("还欠交付：" + items_text(owed, "%s（交付给 %s）", "另有 %d 条"))
     head = "%s本会话是 %s。下面的角色说明就是本会话的工作说明。" % (reason, describe(policy, claim))
-    tail = "未了事项：%s。台账和状态包是正本：开工前用 ledger.py get 读工作项，找人用 route.py pool。完整说明在 .claude/agents/%s.md。" % (
+    tail = "未了事项：%s。台账和状态包是正本：开工前用 ledger.py get 读工作项，找人用 pool.py show。完整说明在 .claude/agents/%s.md。" % (
         "；".join(items) or "无", role)
     if compacted:
         tail += "\n\n" + status_hint(root, held_items(sent, owed, current), entry=role == policy.get("entry_role"))
@@ -1198,7 +1198,7 @@ def injection(root, policy, claim, reason="", limit=INJECT_LIMIT, owners=None, c
 
 def reminder_line(policy, claim):
     pol = policy["agents"].get(claim.get("role")) or {}
-    return "你是 %s（%s +%s），标签 %s。委托、交付、登记都发消息，抬头照 CLAUDE.md 的格式；找人先跑 route.py pool。" % (
+    return "你是 %s（%s +%s），标签 %s。委托、交付、登记都发消息，抬头照 CLAUDE.md 的格式；找人先跑 pool.py show。" % (
         claim.get("name"), pol.get("sequence_cn") or pol.get("sequence", ""), pol.get("rank", "?"), pol.get("tag", ""))
 
 
@@ -1254,3 +1254,99 @@ def mixed_modes(rows):
         return []
     major = max(set(classes), key=classes.count)
     return [r["name"] for r in rows if r.get("permission_mode") and mode_class(r["permission_mode"]) != major]
+
+
+# ------------------------------------------------- shared by the session scripts
+# What pool_cmd.py, notify.py, todo.py and route.py all use: who is running the script, the hook policy,
+# the inbox files. Until 1.1.0 this was in route.py.
+def load_json(path, default):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+# ------------------------------------------------------- inbox & focus
+def append_inbox(root, role, msg):
+    path = os.path.join(root, "inbox", role + ".jsonl")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".lock", "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+ORIGIN_LABEL = {"researcher": "研究员的会话", "desk_conflict": "和已认领会话共用桌面会话 ID 的进程",
+                "tombstone": "已释放认领的会话", "permit": "还没转正的会话", "pending": "还没转正的会话",
+                "pool_unreadable": "认领表读不出时的会话"}
+
+
+def sender_label(me, origin):
+    """Who a message or request is from: the claim's name, or what kind of caller ran the script.
+    A process with neither a session ID nor a desktop ID is a plain terminal, not a session."""
+    if me:
+        return me["name"]
+    if origin == "researcher" and not os.environ.get(SESSION_ENV) and not os.environ.get(DESK_ENV):
+        return "终端里的进程（没有会话 ID）"
+    return ORIGIN_LABEL.get(origin, "未认领的会话")
+
+
+# ------------------------------------------------------------------ pool
+def load_policy(root):
+    if os.path.isfile(os.path.join(root, ".agent-org", "manifest.json")):
+        return load_json(os.path.join(root, ".agent-org", "policy.json"), None)
+    return load_json(os.path.join(root, ".claude", "hooks", "policy.json"), None)
+
+
+def caller(root, policy):
+    """(claim, origin) of the session running this script, from its Bash environment. A desktop ID
+    whose claim belongs to another running session counts as a desk conflict, not as that claim."""
+    sid = os.environ.get(SESSION_ENV) or ""
+    desk = os.environ.get(DESK_ENV) or ""
+    pl, ok = load(root)
+    if not ok:
+        return None, "pool_unreadable"
+    claim = claim_by_session(pl, sid)
+    if claim:
+        return claim, "claim"
+    other = claim_by_desk(pl, desk)
+    if other:
+        return (other, "claim") if cleared(root, other) else (None, "desk_conflict")
+    if permit_for(pl, sid, desk):
+        return None, "permit"
+    if pending_for(pl, sid):
+        return None, "pending"
+    if tombstoned(pl, sid, desk):
+        return None, "tombstone"
+    return None, "researcher"
+
+
+def need_pool(root):
+    policy = load_policy(root)
+    if not policy:
+        raise SystemExit("读不到 .claude/hooks/policy.json：这个目录还没初始化")
+    return policy
+
+
+def open_todos(pl):
+    return [t for t in pl.get("todos", []) if isinstance(t.get("n"), int)]
+
+
+ITEM_KINDS = {"terminate": "终止", "delete": "删除"}          # what the researcher is asked to do with a work item
+
+def main(argv=None):
+    """`pool.py <command>`: the commands are in pool_cmd.py. The hooks load this file on every tool call and
+    must not pay for what the commands import."""
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))      # python -I leaves the script's directory out
+    import pool_cmd
+    return pool_cmd.main(argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

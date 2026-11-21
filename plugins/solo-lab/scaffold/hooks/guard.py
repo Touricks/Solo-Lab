@@ -189,9 +189,9 @@ def check_lark(inv, c, who, policy, data, soft, rewritable):
         return Verdict("allow", "查看帮助"), None
     mine = key in pol.get("lark_high_risk", ())      # the scribe's wiki +node-delete: a document goes to the recycle bin
     if c["yes"] and not mine:
-        return Verdict("deny", "带 --yes 的命令只能由研究员本人执行。不要自己加 --yes；把完整命令记进研究员任务清单：python3.12 -I .claude/solo-lab/bin/route.py todo add --text '<完整命令，和为什么要跑>'。"), None
+        return Verdict("deny", "带 --yes 的命令只能由研究员本人执行。不要自己加 --yes；把完整命令记进研究员任务清单：python3.12 -I .claude/solo-lab/bin/todo.py add --text '<完整命令，和为什么要跑>'。"), None
     if c["tier"] == "high-risk-write" and not mine:
-        return Verdict("deny", "%s 是 high-risk-write，只能由研究员本人执行。把完整命令记进研究员任务清单：python3.12 -I .claude/solo-lab/bin/route.py todo add --text '<完整命令，和为什么要跑>'。" % key), None
+        return Verdict("deny", "%s 是 high-risk-write，只能由研究员本人执行。把完整命令记进研究员任务清单：python3.12 -I .claude/solo-lab/bin/todo.py add --text '<完整命令，和为什么要跑>'。" % key), None
     if c["dry_run"]:
         return Verdict("allow", "--dry-run 只预览"), None
     new_args = None
@@ -223,7 +223,7 @@ def check_meegle(inv, c, who, data, soft, rewritable):
     if c["help"]:
         return Verdict("allow", "查看帮助"), None
     if c["tier"] == "admin":
-        return Verdict("deny", "%s 属于登录、诊断上报或配置类命令，只能由研究员本人执行。确实要跑的，把完整命令记进研究员任务清单：python3.12 -I .claude/solo-lab/bin/route.py todo add --text '<完整命令，和为什么要跑>'。" % key), None
+        return Verdict("deny", "%s 属于登录、诊断上报或配置类命令，只能由研究员本人执行。确实要跑的，把完整命令记进研究员任务清单：python3.12 -I .claude/solo-lab/bin/todo.py add --text '<完整命令，和为什么要跑>'。" % key), None
     if c["dry_run"]:
         return Verdict("allow", "--dry-run 只预览"), None
     if c["tier"] == "read":
@@ -715,7 +715,7 @@ def out_file(raw, where):
 
 
 def find_pick(argv):
-    """What {} stands for in a find's -exec: git or route.py when the find selects that file."""
+    """What {} stands for in a find's -exec: git or pool.py when the find selects that file."""
     for i, a in enumerate(argv[1:], 1):
         if a in fc.FIND_NAMES and i + 1 < len(argv):
             names = [argv[i + 1]]
@@ -725,7 +725,7 @@ def find_pick(argv):
             continue
         for v in names:
             base = os.path.basename(v)
-            for pick in ("git", "route.py"):
+            for pick in ("git", "pool.py"):
                 try:
                     if base == pick or fnmatch.fnmatchcase(pick, base):
                         return pick
@@ -894,29 +894,29 @@ def command_runs(command, cwd, root, depth=0, bodies=None, assign=None, written=
     return out
 
 
-def route_sub(argv):
-    """The route.py subcommand this argv runs (interpreter options, global options such as
+def pool_sub(argv):
+    """The pool.py subcommand this argv runs (interpreter options, global options such as
     --offline and runner modules such as cProfile skipped), or None."""
     if not argv:
         return None
     if PYTHON.search(os.path.basename(argv[0])):
         kind, target, rest = fc.python_target(argv[1:])
-        if kind == "module" and (target == "route" or str(target).endswith(".route")):
-            script = "route.py"
-        elif kind == "module" and target in SCRIPT_MODULES:     # python3 -m cProfile -o x route.py <sub>
-            j = next((k for k, a in enumerate(rest) if os.path.basename(a) == "route.py"
-                      or ((target == "runpy" or (k and rest[k - 1] == "-m")) and (a == "route" or a.endswith(".route")))),
+        if kind == "module" and (target == "pool" or str(target).endswith(".pool")):
+            script = "pool.py"
+        elif kind == "module" and target in SCRIPT_MODULES:     # python3 -m cProfile -o x pool.py <sub>
+            j = next((k for k, a in enumerate(rest) if os.path.basename(a) == "pool.py"
+                      or ((target == "runpy" or (k and rest[k - 1] == "-m")) and (a == "pool" or a.endswith(".pool")))),
                      None)
             if j is None:
                 return None
-            script, rest = "route.py", rest[j + 1:]
+            script, rest = "pool.py", rest[j + 1:]
         elif kind == "script":
             script = target
         else:
             return None
     else:
         script, rest = argv[0], argv[1:]
-    if os.path.basename(script or "").lstrip("\\") != "route.py":
+    if os.path.basename(script or "").lstrip("\\") != "pool.py":
         return None
     return next((x for x in rest if not x.startswith("-")), "")
 
@@ -945,35 +945,35 @@ def past_cd_home(command, root):
 
 
 def check_pool_command(data, who, policy, root, command):
-    """route.py claim / expect / release: one plain command, run by a session allowed to."""
+    """pool.py claim / expect / release: one plain command, run by a session allowed to."""
     runs = command_runs(command, data.get("cwd") or root, root)
     # --help prints the usage and does nothing: a read, wherever in a command it stands
-    subs = [route_sub(argv) for argv, _ in runs if argv and not ("-h" in argv or "--help" in argv)]
+    subs = [pool_sub(argv) for argv, _ in runs if argv and not ("-h" in argv or "--help" in argv)]
     sub = next((x for x in subs if x in POOL_SUBS), None)
     if sub is None:
         unread = [t for argv, t in runs if argv is None]
-        if any("route.py" in t and re.search(r"\b(?:%s)\b" % "|".join(POOL_SUBS), t) for t in unread):
-            return refuse(who, data, "看不清的 route.py 命令；认领、预登记、释放要写成单条简单命令。")
+        if any("pool.py" in t and re.search(r"\b(?:%s)\b" % "|".join(POOL_SUBS), t) for t in unread):
+            return refuse(who, data, "看不清的 pool.py 命令；认领、预登记、释放要写成单条简单命令。")
         return None
     if data.get("agent_id"):
-        return Verdict("deny", "子智能体不能运行 route.py %s：认领属于会话本身，不属于会话里开出的子智能体。" % sub)
+        return Verdict("deny", "子智能体不能运行 pool.py %s：认领属于会话本身，不属于会话里开出的子智能体。" % sub)
     text = past_cd_home(command, root)
     try:
         argv = shlex.split(text)
     except ValueError:
         argv = []
     plain = (len(argv) >= 4 and PYTHON.search(os.path.basename(argv[0])) and argv[1] == "-I"
-             and argv[2].endswith(".claude/solo-lab/bin/route.py") and argv[3] == sub
+             and argv[2].endswith(".claude/solo-lab/bin/pool.py") and argv[3] == sub
              and not re.search(r"[;&|`$<>\n]", text))
     if not plain:
-        return Verdict("deny", "route.py %s 要写成单条简单命令：python3.12 -I .claude/solo-lab/bin/route.py %s …；"
+        return Verdict("deny", "pool.py %s 要写成单条简单命令：python3.12 -I .claude/solo-lab/bin/pool.py %s …；"
                                "前面最多带一句 cd 到本项目目录（cd <项目目录> &&），不带环境变量赋值、包装命令或 --offline 这类全局选项，"
                                "后面不接管道。" % (sub, sub))
     args = argv[4:]
     names = [a.split("=", 1)[0] for a in args if a.startswith("--")]
     twice = sorted({n for n in names if names.count(n) > 1})
     if twice:
-        return Verdict("deny", "route.py %s 的选项不能重复写（%s）：hook 和脚本会各读到不同的值。" % (sub, "、".join(twice)))
+        return Verdict("deny", "pool.py %s 的选项不能重复写（%s）：hook 和脚本会各读到不同的值。" % (sub, "、".join(twice)))
     desk = os.environ.get(pool.DESK_ENV) or ""
     given = flag_value(args, "--desk")
     if sub == "claim":
@@ -983,7 +983,7 @@ def check_pool_command(data, who, policy, root, command):
             return refuse(who, data, "hook 看不到本会话的桌面会话 ID，没法核对 --desk %s；会话自己的 Bash 里有桌面会话 ID 时，"
                                      "去掉 --desk 重试。" % (given or "''"))
         if who.origin in ("claim", "permit", "pending", "researcher"):
-            return None                       # route.py checks the permit against this session's own IDs
+            return None                       # pool.py checks the permit against this session's own IDs
         if who.origin == "tombstone":
             return Verdict("deny", "本会话的认领已经释放；要重新认领，请研究员或开它的会话重新预登记。")
         if who.origin == "desk_conflict":
@@ -1008,7 +1008,7 @@ def check_pool_command(data, who, policy, root, command):
             who.label, role or "这个角色"))
     if who.researcher:
         return refuse(who, data, "释放认领会让这个会话不再是 %s；请研究员确认。" % (args[0] if args else "该角色"))
-    return Verdict("deny", "只有研究员能释放认领（route.py release）。")
+    return Verdict("deny", "只有研究员能释放认领（pool.py release）。")
 
 
 def setup_sub(argv):
@@ -1041,8 +1041,8 @@ def check_setup(data, who, root, command):
 
 def check_identity_vars(data, who, command):
     """A command that unsets, clears or sets the session's identity variables would speak
-    for another session to route.py and ledger.py."""
-    if IDENTITY_VARS.search(command) or (CLEAR_ENV.search(command) and re.search(r"route|ledger|workitem|docs\.py", command)):
+    for another session to the plugin's scripts."""
+    if IDENTITY_VARS.search(command) or (CLEAR_ENV.search(command) and re.search(r"route|ledger|workitem|docs\.py|pool\.py|notify\.py|todo\.py", command)):
         return Verdict("deny", "不要改或清掉 CLAUDE_CODE_SESSION_ID、CLAUDE_CODE_HOST_SESSION_ID（unset、env -u、env -i、export -n 都算）："
                                "认领和台账写权按它们认会话。")
     return None
@@ -1120,7 +1120,7 @@ def check_git(data, who, command, root):
     if not sub:
         return None
     reason = ("（%s）不能在共享工作区里运行 git %s：会话池的会话共用这个目录，切分支、stash、reset、pull 这类命令会丢掉"
-              "或混进别的会话还没提交的改动。要研究员来做的，把完整命令记进研究员任务清单：python3.12 -I .claude/solo-lab/bin/route.py todo add --text '<完整命令，和为什么要跑>'。" % (who.label, sub))
+              "或混进别的会话还没提交的改动。要研究员来做的，把完整命令记进研究员任务清单：python3.12 -I .claude/solo-lab/bin/todo.py add --text '<完整命令，和为什么要跑>'。" % (who.label, sub))
     return refuse(who, data, reason)
 
 
@@ -1130,11 +1130,11 @@ def check_ledger(data, who, policy, root, sub):
     pl, ok = pool.load(root)
     if not ok or len(pool.claims_of(pl, scribe)) > 1:
         return Verdict("deny", "认领表读不出来，或者书记员的认领不止一条：为免两处同时写台账，所有会话都先停写。"
-                               "请研究员用 route.py pool 核对，release 多余的认领。")
+                               "请研究员用 pool.py show 核对，release 多余的认领。")
     if who.origin == "claim" and who.role == scribe:
         if pool.scribe_ok(pl, policy, who.claim):
             return Verdict("allow", "唯一认领的书记员 %s 写台账" % who.name)
-        return Verdict("deny", "这条书记员认领已经失效；请研究员用 route.py pool 核对。")
+        return Verdict("deny", "这条书记员认领已经失效；请研究员用 pool.py show 核对。")
     script = "docs.py " if sub in LEDGER_DOC_WORDS else "workitem.py " if sub in LEDGER_WRITE_WORDS else "台账脚本"
     return refuse(who, data, "（%s）不能运行 %s%s：工作项、字段、状态和文档只由书记员 %s 写。写成草稿，给它发【%s】。" % (
         who.label, script, sub, fixed, (policy.get("msg") or {}).get("register_request", "登记请求")))
@@ -1327,7 +1327,7 @@ def check_agent(data, who, policy, soft):
         fixed = (policy["agents"].get(target) or {}).get("fixed_session") or target
         return Verdict("deny", "不用 Agent 工具派书记员：登记请求发消息给 %s。" % fixed)
     if target in policy["agents"]:
-        soft.append("要委托 %s，就给它的会话发消息（先跑 route.py pool --role %s），不要用 Agent 工具另派一个池外的实例。" % (target, target))
+        soft.append("要委托 %s，就给它的会话发消息（先跑 pool.py show --role %s），不要用 Agent 工具另派一个池外的实例。" % (target, target))
     return Verdict()
 
 

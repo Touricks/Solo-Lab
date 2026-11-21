@@ -33,7 +33,7 @@ WOKEN = "本轮由其他 agent 会话叫醒"
 QUEUED = "本轮登记了待定决策"
 LIST_DUE = ("先回答研究员，再跑 python3.12 -I .claude/solo-lab/bin/ledger.py query queue，把待决定的决策和等研究员执行的决策附在末尾，"
             "每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接，改过版的在事项后面写版本号；"
-            "route.py pool 里的研究员任务清单和补位请求一起列，它们不算决策；清单里飞书项目的工作项合成一件事说，补位请求写明启动卡在哪个会话里。都没有就不附。")
+            "pool.py show 里的研究员任务清单和补位请求一起列，它们不算决策；清单里飞书项目的工作项合成一件事说，补位请求写明启动卡在哪个会话里。都没有就不附。")
 QUEUED_TEXT = ("本轮登记了待定决策 #%s：在这一行状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和主文档链接，"
                "不超过 3 行。")
 DENIED = ("这一轮是其他 agent 会话叫醒的，研究员多半不在：不用 AskUserQuestion。要研究员拍板的事写决策包或发【需拍板】给入口；"
@@ -49,7 +49,7 @@ SIDE = ('<system-reminder>\nThe session "Alg-p1-01" you started (local_alg-p1-01
 TYPED = ('<system-reminder>\nThe session "Alg-p0-01" you started (local_alg-p0-01) was stopped or archived by the user '
          'before it began.\n</system-reminder>\n\n\n这个会话出bug了，重试')
 STARTED = ("Background (from the session that started this one):\n本目录是「示例项目」的智能体组织，按会话池运行。\n\n"
-           "Task:\n认领 alg-p1（会话名 Alg-p1-01）。先运行 route.py claim alg-p1 --as Alg-p1-01")
+           "Task:\n认领 alg-p1（会话名 Alg-p1-01）。先运行 pool.py claim alg-p1 --as Alg-p1-01")
 NOTIFIED = "<task-notification>\n<task-id>bg-1</task-id>\n<status>completed</status>\n</task-notification>"
 REMINDERS = SIDE.split("<side-sessions-event>")[0]       # two reminder blocks: six lines before what follows them
 ONLY_REMINDERS = TYPED.split("这个会话出bug了")[0]          # the app's reminder and nothing after it
@@ -314,10 +314,10 @@ class InboxDeliveryTest(DeliveryCase):
         text = self.context("s-entry", "早")
         self.assertIn(FIRST_TALK + LIST_DUE, text)
         # what the researcher does by hand is not read out of the items' 阻塞原因, as 1.0.2 did; from 1.0.10 what
-        # takes no decision is a 研究员待办 in route.py pool, listed after the decisions
+        # takes no decision is a 研究员待办 in pool.py show, listed after the decisions
         for old in ("query blocked", "等研究员：", "阻塞"):
             self.assertNotIn(old, text)
-        self.assertIn("route.py pool 里的研究员任务清单和补位请求一起列，它们不算决策", text)
+        self.assertIn("pool.py show 里的研究员任务清单和补位请求一起列，它们不算决策", text)
         self.assertNotIn(WOKEN, text)
         self.assertEqual(self.session("s-entry")["turn_origin"], "researcher")
         self.set_state("s-entry", researcher_at=self.ago(10))

@@ -3,7 +3,7 @@
 messages waiting in its inbox.
 
 Messages live in inbox/<role>.jsonl, one JSON object per line, written with
-`route.py notify`. The entry session also sees inbox/feishu.jsonl, where the
+`notify.py send`. The entry session also sees inbox/feishu.jsonl, where the
 Feishu DM listener appends the researcher's messages. Each message is shown once
 and marked read only after the text is built; what does not fit in the context
 budget stays unread for the next prompt.
@@ -192,7 +192,7 @@ FIRST_TALK = "研究员来谈了。"           # no earlier message of theirs on
 BACK_AFTER = "研究员隔了 %d 分钟回来。"
 LIST_DUE = ("先回答研究员，再跑 python3.12 -I .claude/solo-lab/bin/ledger.py query queue，"
             "把待决定的决策和等研究员执行的决策附在末尾，每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接，"
-            "改过版的在事项后面写版本号；route.py pool 里的研究员任务清单和补位请求一起列，它们不算决策；清单里飞书项目的工作项合成一件事说，补位请求写明启动卡在哪个会话里。都没有就不附。")
+            "改过版的在事项后面写版本号；pool.py show 里的研究员任务清单和补位请求一起列，它们不算决策；清单里飞书项目的工作项合成一件事说，补位请求写明启动卡在哪个会话里。都没有就不附。")
 SOURCE_SHOWN = 80                     # characters of the sender's title shown
 # The local decision state ledger.py keeps (1.0.4): the decisions still waiting, with what each of them freezes.
 GATES_FILE = "gates.json"
@@ -397,7 +397,7 @@ def pool_prompt(data, policy, root):
             st["work_item"] = msg["id"]
     pool.update_session(root, sid, change)
     if who.origin in ("permit", "pending"):
-        return finish(parts + ["本会话有 %s 的认领许可，还没转正：照开局的说明运行 route.py claim。" % who.role]), {}
+        return finish(parts + ["本会话有 %s 的认领许可，还没转正：照开局的说明运行 pool.py claim。" % who.role]), {}
     if who.origin != "claim":
         return finish(parts), {}
     me = who.claim
@@ -423,7 +423,7 @@ def pool_prompt(data, policy, root):
         if not back:                                # say so when the researcher comes back
             pool.update_session(root, sid, lambda st: st.update({"focus_lapsed": True}))
     elif prev.get("focus_lapsed") and back and me["name"] not in (pl.get("focus") or {}):
-        parts.append("“研究员在用”的标记已因空闲 30 分钟失效。研究员接着和你谈的话，先重新运行 route.py focus open --topic '…'。")
+        parts.append("“研究员在用”的标记已因空闲 30 分钟失效。研究员接着和你谈的话，先重新运行 notify.py focus open --topic '…'。")
         pool.update_session(root, sid, lambda st: st.pop("focus_lapsed", None))
     if msg and ok:
         msg["from"] = pool.resolve(policy, pl, msg["from"]) if msg.get("from") else None

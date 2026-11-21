@@ -28,6 +28,9 @@ import ledger  # noqa: E402
 import ledger_core  # noqa: E402
 import workitem  # noqa: E402
 import route  # noqa: E402
+import notify  # noqa: E402
+import pool_cmd  # noqa: E402
+import todo  # noqa: E402
 import pool as pool_lib  # noqa: E402
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 import fake_space  # noqa: E402
@@ -658,12 +661,12 @@ class ListenTest(ProjectCase):
             def wait(self):
                 return 0
 
-        real = route.subprocess.Popen
-        route.subprocess.Popen = FakeProc
+        real = notify.subprocess.Popen
+        notify.subprocess.Popen = FakeProc
         try:
-            code, _ = self.run_quiet(route.listen, self.tmp)
+            code, _ = self.run_quiet(notify.listen, self.tmp)
         finally:
-            route.subprocess.Popen = real
+            notify.subprocess.Popen = real
         inbox = os.path.join(self.tmp, "inbox", "feishu.jsonl")
         lines = []
         if os.path.isfile(inbox):
@@ -1557,6 +1560,12 @@ class PoolProjectCase(unittest.TestCase):
     POOL = {"p1": 1, "p0": 1, "later": [], "max_sessions": 30}
     L = ".claude/solo-lab/bin/ledger.py"
     R = ".claude/solo-lab/bin/route.py"
+    P = ".claude/solo-lab/bin/pool.py"
+    N = ".claude/solo-lab/bin/notify.py"
+    # which script a session command is in since the split, and what it is called there
+    ENTRY = {"claim": ("pool.py", "claim"), "expect": ("pool.py", "expect"), "release": ("pool.py", "release"),
+             "refill": ("pool.py", "refill"), "pool": ("pool.py", "show"), "notify": ("notify.py", "send"),
+             "focus": ("notify.py", "focus"), "listen": ("notify.py", "listen"), "todo": ("todo.py", None)}
     PREFIX = "solo-lab-pool-"
 
     def setUp(self):
@@ -1598,7 +1607,14 @@ class PoolProjectCase(unittest.TestCase):
         return p.returncode, out.get("hookSpecificOutput", {})
 
     def route(self, *argv, sid=None, desk=None):
-        p = subprocess.run([sys.executable, "-I", "-B", os.path.join(self.tmp, self.R)] + list(argv), capture_output=True,
+        """Run a session command in the project, named as route.py named it until 1.1.0: `pool` is pool.py show now,
+        `notify` notify.py send, `todo add` todo.py add; classify, audit and cross are still route.py's."""
+        argv, script = list(argv), "route.py"
+        k = next((i for i, a in enumerate(argv) if not a.startswith("-")), None)
+        if k is not None and argv[k] in self.ENTRY:
+            script, word = self.ENTRY[argv[k]]
+            argv[k:k + 1] = [word] if word else []
+        p = subprocess.run([sys.executable, "-I", "-B", os.path.join(self.tmp, ".claude", "solo-lab", "bin", script)] + argv, capture_output=True,
                            text=True, env=self.env(sid, desk), cwd=self.tmp)
         return p.returncode, p.stdout + p.stderr
 
@@ -1617,8 +1633,8 @@ class PoolProjectCase(unittest.TestCase):
         return self.prompt(sid, "认领 %s（会话名 %s），然后照认领输出开出本序列的 +1 和 +0。" % (role, name), desk=desk)
 
     def claim(self, role, name, sid, desk=None, hook_desk=None):
-        """A child session's claim: guard, route.py claim (its Bash sees the desktop ID), then audit."""
-        cmd = "python3.12 -I %s claim %s --as %s" % (self.R, role, name)
+        """A child session's claim: guard, pool.py claim (its Bash sees the desktop ID), then audit."""
+        cmd = "python3.12 -I %s claim %s --as %s" % (self.P, role, name)
         self.bash(sid, cmd, desk=hook_desk)
         code, out = self.route("claim", role, "--as", name, "--wait", "0", sid=sid, desk=desk)
         self.hook("audit.py", {"hook_event_name": "PostToolUse", "tool_name": "Bash", "session_id": sid,
@@ -1666,9 +1682,9 @@ class PoolSetupTest(PoolProjectCase):
         self.assertEqual(settings["hooks"]["PostToolUse"][0]["matcher"], "Bash|Monitor|Agent|Task")
         self.assertIn("Monitor", settings["hooks"]["PreToolUse"][0]["matcher"])
         allow = settings["permissions"]["allow"]
-        self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/route.py claim *)", allow)
+        self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/pool.py claim *)", allow)
         self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/workitem.py register *)", allow)
-        self.assertNotIn("Bash(python3.12 -I .claude/solo-lab/bin/route.py release *)", allow)
+        self.assertNotIn("Bash(python3.12 -I .claude/solo-lab/bin/pool.py release *)", allow)
         self.assertIn("Edit(/.claude/state/**)", settings["permissions"]["ask"])
         policy = json.loads(self.read(".claude/hooks/policy.json"))
         self.assertNotIn("mode", policy)
@@ -1683,7 +1699,7 @@ class PoolSetupTest(PoolProjectCase):
 
     def test_texts_are_written_for_the_pool(self):
         claude = self.read("CLAUDE.md")
-        for part in ("按会话池运行", "route.py claim", "## 本目录怎样落实全局约定", "## Compact Instructions", "不回 ACK"):
+        for part in ("按会话池运行", "pool.py claim", "## 本目录怎样落实全局约定", "## Compact Instructions", "不回 ACK"):
             self.assertIn(part, claude)
         self.assertNotIn("主会话以 `pmo-p2`", claude)
         entry = self.read(".claude/agents/pmo-p2.md")
@@ -1771,11 +1787,11 @@ class PoolSetupTest(PoolProjectCase):
         self.assertEqual((pmo["children"][0]["name"], pmo["children"][0]["children"][0]["name"]), ("PMO-p1-01", "PMO-p0-01"))
         for e in entries:
             self.assertTrue(re.fullmatch(r"[a-z0-9-]{1,24}", e["short"]))
-            self.assertIn("route.py claim %s --as %s" % (e["role"], e["name"]), e["brief"])
+            self.assertIn("pool.py claim %s --as %s" % (e["role"], e["name"]), e["brief"])
             self.assertGreater(len(e["background"]), 80)                    # start_session refuses a shorter one
             self.assertEqual(e["title"], "[%s] %s" % (plan["label"], e["name"]))
             self.assertLess(len(e["title"]), 60)
-            self.assertIn("route.py expect %s --role %s" % (e["name"], e["role"]), e["expect"])
+            self.assertIn("pool.py expect %s --role %s" % (e["name"], e["role"]), e["expect"])
         self.assertIn("ensure-node all --apply", plan["scribe_first"])
         self.assertIn("register %s --apply" % setup.FIRST_TASK, plan["scribe_first"])
 
@@ -2448,7 +2464,7 @@ class CheckLayersTest(PoolProjectCase):
 
 class PoolClaimTest(PoolProjectCase):
     def test_claim_needs_a_permit(self):
-        cmd = "python3.12 -I %s claim alg-p1 --as Alg-p1-01" % self.R
+        cmd = "python3.12 -I %s claim alg-p1 --as Alg-p1-01" % self.P
         _, out = self.bash("s-nobody", cmd)
         self.assertNotIn("permissionDecision", out)      # route.py checks the permit against the session's own IDs
         code, text = self.route("claim", "alg-p1", "--as", "Alg-p1-01", "--wait", "0", sid="s-nobody")
@@ -2463,7 +2479,7 @@ class PoolClaimTest(PoolProjectCase):
         self.assertEqual(self.pool()["claims"]["Alg-p2-01"]["session_id"], "s1")
         self.prompt("s2", "你好")
         self.opening("product-p2", "Product-p2-01", "s2")                  # not the first prompt
-        self.prompt("s3", "认领 alg-p1（会话名 Alg-p1-01）。先运行 route.py claim")   # not a +2
+        self.prompt("s3", "认领 alg-p1（会话名 Alg-p1-01）。先运行 pool.py claim")   # not a +2
         self.assertEqual(sorted(self.pool()["claims"]), ["Alg-p2-01"])
         _, out = self.opening("alg-p2", "Alg-p2-01", "s4")                 # a second alg-p2
         self.assertIn("上限", out.get("additionalContext", ""))
@@ -2475,7 +2491,7 @@ class PoolClaimTest(PoolProjectCase):
         self.assertEqual(self.route("expect", "Alg-p1-01", "--role", "alg-p1", "--desk", "d1", sid="s1")[0], 0)
         self.assertEqual(self.route("expect", "Quality-p1-01", "--role", "quality-p1", "--desk", "d2", sid="s1")[0], 1)
         self.assertEqual(self.route("expect", "PMO-p0-01", "--role", "pmo-scribe", "--desk", "d3", sid="s1")[0], 1)
-        cmd = "python3.12 -I %s expect Quality-p1-01 --role quality-p1 --desk d2" % self.R
+        cmd = "python3.12 -I %s expect Quality-p1-01 --role quality-p1 --desk d2" % self.P
         self.assertEqual(self.bash("s1", cmd)[1].get("permissionDecision"), "deny")
         self.assertEqual(self.route("expect", "PMO-p0-01", "--role", "pmo-scribe", "--desk", "d3", sid="s-entry")[0], 0)
         self.assertEqual(self.route("expect", "Rnd-p0-01", "--role", "rnd-p0", "--desk", "d4", sid="s-researcher")[0], 0)
@@ -2488,7 +2504,7 @@ class PoolClaimTest(PoolProjectCase):
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s5", "source": "startup"}, desk="d1")
         self.assertIn("本会话是 Alg-p1-01", out.get("additionalContext", ""))
         self.assertEqual(self.pool()["claims"]["Alg-p1-01"]["session_id"], "s5")
-        _, out = self.bash("s5", "python3.12 -I %s claim alg-p1 --as Alg-p1-01 --desk d9" % self.R, desk="d1")
+        _, out = self.bash("s5", "python3.12 -I %s claim alg-p1 --as Alg-p1-01 --desk d9" % self.P, desk="d1")
         self.assertEqual(out.get("permissionDecision"), "deny")
         code, text = self.route("claim", "alg-p1", "--as", "Alg-p1-01", "--wait", "0", sid="s5", desk="d1")
         self.assertEqual(code, 0)
@@ -2497,7 +2513,7 @@ class PoolClaimTest(PoolProjectCase):
     def test_two_step_claim_without_a_desktop_id_in_the_hook(self):
         self.opening("alg-p2", "Alg-p2-01", "s1")
         self.route("expect", "Alg-p1-01", "--role", "alg-p1", "--desk", "d1", sid="s1")
-        cmd = "python3.12 -I %s claim alg-p1 --as Alg-p1-01" % self.R
+        cmd = "python3.12 -I %s claim alg-p1 --as Alg-p1-01" % self.P
         _, out = self.bash("s6", cmd)
         self.assertNotEqual(out.get("permissionDecision"), "deny")        # a permit waits for this role
         code, text = self.route("claim", "alg-p1", "--as", "Alg-p1-01", "--wait", "0", sid="s6", desk="d1")
@@ -2524,10 +2540,10 @@ class PoolClaimTest(PoolProjectCase):
 
     def test_release_leaves_a_tombstone(self):
         self.started_pool()
-        _, out = self.bash("s-alg1", "python3.12 -I %s release Alg-p0-01" % self.R)
+        _, out = self.bash("s-alg1", "python3.12 -I %s release Alg-p0-01" % self.P)
         self.assertEqual(out.get("permissionDecision"), "deny")           # a claimed session cannot release
         self.assertEqual(self.route("release", "Alg-p0-01", sid="s-alg1")[0], 1)
-        _, out = self.bash("s-researcher", "python3.12 -I %s release Alg-p0-01" % self.R)
+        _, out = self.bash("s-researcher", "python3.12 -I %s release Alg-p0-01" % self.P)
         self.assertEqual(out.get("permissionDecision"), "ask")
         self.assertEqual(self.route("release", "Alg-p0-01", sid="s-researcher")[0], 0)
         pl = self.pool()
@@ -2535,7 +2551,7 @@ class PoolClaimTest(PoolProjectCase):
         self.assertEqual(pl["tombstones"][-1]["name"], "Alg-p0-01")
         _, out = self.bash("s-alg0", "python3.12 -I %s register packages/drafts/alg/x.md --apply" % self.L)
         self.assertEqual(out.get("permissionDecision"), "deny")
-        _, out = self.bash("s-alg0", "python3.12 -I %s claim alg-p0 --as Alg-p0-01" % self.R)
+        _, out = self.bash("s-alg0", "python3.12 -I %s claim alg-p0 --as Alg-p0-01" % self.P)
         self.assertEqual(out.get("permissionDecision"), "deny")
         self.route("expect", "Alg-p0-01", "--role", "alg-p0", "--desk", "d-s-alg0", sid="s-alg2")
         self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-alg0", "source": "resume"}, desk="d-s-alg0")
@@ -2615,13 +2631,13 @@ class PoolOpenedByTheResearcherTest(PoolProjectCase):
         self.assertEqual(self.route("expect", "Alg-p1-01", "--role", "alg-p1", "--desk", "d-alg1", sid="s-alg2")[0], 0)
         _, out = self.claim("alg-p1", "Alg-p1-01", "s-alg1", desk="d-alg1")   # its very first claim already says what to open
         self.assertIn("- Alg-p0-01：name=alg-p0-01", out)
-        _, verdict = self.bash("s-alg1", "python3.12 -I %s expect Alg-p0-01 --role alg-p0 --desk d-alg0" % self.R, desk="d-alg1")
+        _, verdict = self.bash("s-alg1", "python3.12 -I %s expect Alg-p0-01 --role alg-p0 --desk d-alg0" % self.P, desk="d-alg1")
         self.assertNotEqual(verdict.get("permissionDecision"), "deny")
         code, out = self.route("expect", "Alg-p0-01", "--role", "alg-p0", "--desk", "d-alg0", sid="s-alg1")
         self.assertEqual(code, 0, out)
         self.assertEqual(self.claim("alg-p0", "Alg-p0-01", "s-alg0", desk="d-alg0")[0], 0)
         for role, name in (("rnd-p0", "RnD-p0-01"), ("alg-p1", "Alg-p1-02")):   # another sequence, its own rank
-            _, verdict = self.bash("s-alg1", "python3.12 -I %s expect %s --role %s --desk d-x" % (self.R, name, role), desk="d-alg1")
+            _, verdict = self.bash("s-alg1", "python3.12 -I %s expect %s --role %s --desk d-x" % (self.P, name, role), desk="d-alg1")
             self.assertEqual(verdict.get("permissionDecision"), "deny", name)
             self.assertEqual(self.route("expect", name, "--role", role, "--desk", "d-x", sid="s-alg1")[0], 1, name)
         self.assertEqual(sorted(self.pool()["claims"]), ["Alg-p0-01", "Alg-p1-01", "Alg-p2-01"])
@@ -2893,7 +2909,7 @@ class PoolGuardTest(PoolProjectCase):
         self.assertNotIn("permissionDecision", out)
 
     def test_claim_commands_must_be_plain(self):
-        R = self.R
+        R = self.P
         for cmd in ("FOO=1 python3.12 -I %s claim alg-p1 --as Alg-p1-01" % R,
                     "python3.12 -I %s claim alg-p1 --as Alg-p1-01 | cat" % R,
                     "env python3.12 -I %s expect Alg-p0-02 --role alg-p0 --desk d" % R,
@@ -3090,7 +3106,7 @@ class PoolInboxTest(PoolProjectCase):
         self.assertIn("来自 PMO-p2-01", out.get("additionalContext", ""))
         _, out = self.prompt("s-alg1", "继续")
         self.assertNotIn("规格 v3 已签字", out.get("additionalContext", ""))
-        route.append_inbox(self.tmp, "feishu", {"id": "m1", "ts": "2026-11-03T08:00:00+08:00", "from": "研究员（飞书私聊）",
+        pool_lib.append_inbox(self.tmp, "feishu", {"id": "m1", "ts": "2026-11-03T08:00:00+08:00", "from": "研究员（飞书私聊）",
                                                 "text": "今天先看评测", "read": False})
         _, out = self.prompt("s-mine", "随便聊聊")
         self.assertEqual(out, {})                                          # the researcher's own session reads nothing
@@ -3173,7 +3189,7 @@ class PoolRouteTest(PoolProjectCase):
     def test_pruning_takes_finished_items_out_of_the_owners_table(self):
         """1.0.9: pool.json owners follows the ledger on request. A work item is terminated on the web page, where
         no script sees it (what a researcher does with the requests under a task whose direction changed), and
-        items archived before 1.0.9 stayed in the table: `route.py pool --prune` reads each item's state and takes
+        items archived before 1.0.9 stayed in the table: `pool.py show --prune` reads each item's state and takes
         the archived and the terminated out. A preview unless --apply; nothing written when the ledger cannot be
         read; nothing else in the file touched."""
         with pool_lib.locked(self.tmp) as pl:
@@ -3189,7 +3205,7 @@ class PoolRouteTest(PoolProjectCase):
                 lg.item.side_effect = item or (lambda i: {"state": states.get(i, "执行中"), "type": "same_seq", "name": "需求包 %s" % i})
                 out = io.StringIO()
                 with contextlib.redirect_stdout(out):
-                    code = route.prune_cmd(self.tmp, *args)
+                    code = pool_cmd.prune_cmd(self.tmp, *args)
             return code, out.getvalue()
 
         code, text = run()
@@ -3281,14 +3297,14 @@ class PoolRouteTest(PoolProjectCase):
             return code, out.getvalue()
         bound()
         spec = orgspec.OrgSpec()
-        code, text = run(route.todo_cmd, spec, self.tmp, "add", None, "建错了，关系写反", "#2101", None, None, "terminate", sid="s-alg2")
+        code, text = run(todo.todo_cmd, spec, self.tmp, "add", None, "建错了，关系写反", "#2101", None, None, "terminate", sid="s-alg2")
         self.assertEqual(code, 0, text)
         self.assertIn("已记进研究员任务清单（第 1 条）：#2101 等研究员在网页上终止", text)
         self.assertIn("不用为它写决策包，也不要去推它的节点", text)
-        run(route.todo_cmd, spec, self.tmp, "add", None, "刚建出来就发现重复", "2102", None, None, "delete", sid="s-alg1")
-        code, text = run(route.todo_cmd, spec, self.tmp, "add", None, "再报一次", "2101", None, None, "terminate", sid="s-alg1")
+        run(todo.todo_cmd, spec, self.tmp, "add", None, "刚建出来就发现重复", "2102", None, None, "delete", sid="s-alg1")
+        code, text = run(todo.todo_cmd, spec, self.tmp, "add", None, "再报一次", "2101", None, None, "terminate", sid="s-alg1")
         self.assertIn("#2101 已经在研究员任务清单里了（第 1 条，Alg-p2-01 提），没有再记", text)
-        self.assertEqual(run(route.todo_cmd, spec, self.tmp, "add", None, "x", None, None, None, "terminate")[0], 1)   # no work item named
+        self.assertEqual(run(todo.todo_cmd, spec, self.tmp, "add", None, "x", None, None, None, "terminate")[0], 1)   # no work item named
         todos = self.pool()["todos"]
         self.assertEqual([(t["n"], t["item"], t["kind"], t["title"]) for t in todos],
                          [(1, "2101", "terminate", "需求包 2101"), (2, "2102", "delete", "需求包 2102")])
@@ -3300,24 +3316,24 @@ class PoolRouteTest(PoolProjectCase):
         self.assertIn("  - #2101 终止：需求包 2101；原因：建错了，关系写反（Alg-p2-01 提）；https://project.example/x/same_seq/detail/2101", listed)
         self.assertIn("  - #2102 删除：需求包 2102；原因：刚建出来就发现重复（Alg-p1-01 提）", listed)
         self.assertEqual(listed.count("研究员任务·飞书项目"), 1)                    # one line for all of them
-        code, text = run(route.prune_cmd, self.tmp, True)                          # said too early: nothing is done yet
+        code, text = run(pool_cmd.prune_cmd, self.tmp, True)                          # said too early: nothing is done yet
         self.assertEqual(code, 0)
         self.assertIn("研究员任务清单里等研究员处理的 2 条工作项都还没处理：#2101、#2102。", text)
         self.assertEqual(len(self.pool()["todos"]), 2)
         state.update({"2101": "已终止", "2102": "删了"})                           # the researcher did both on the web page
-        code, text = run(route.prune_cmd, self.tmp)
+        code, text = run(pool_cmd.prune_cmd, self.tmp)
         self.assertIn("- #2102（已删除），认领表里记在 Alg-p0-01 名下", text)
         self.assertIn("有 2 条已经办了：#2101（已终止）、#2102（已删除）。", text)
         self.assertEqual(len(self.pool()["todos"]), 2)                             # a preview
-        code, text = run(route.prune_cmd, self.tmp, True)
+        code, text = run(pool_cmd.prune_cmd, self.tmp, True)
         self.assertEqual(code, 0)
         self.assertIn("已从认领表移出 1 条，研究员任务清单划掉 2 条。", text)
         self.assertEqual(self.pool()["todos"], [])
         self.assertNotIn("2102", self.pool()["owners"])
         self.assertIn("2103", self.pool()["owners"])                               # still worked on
-        run(route.todo_cmd, spec, self.tmp, "add", None, "不做了", "2103", None, None, "terminate", sid="s-alg2")
+        run(todo.todo_cmd, spec, self.tmp, "add", None, "不做了", "2103", None, None, "terminate", sid="s-alg2")
         state["2101"] = "已终止"
-        code, text = run(route.prune_cmd, self.tmp, True)                          # one left: it stays, and the researcher is told
+        code, text = run(pool_cmd.prune_cmd, self.tmp, True)                          # one left: it stays, and the researcher is told
         self.assertIn("都还没处理：#2103。", text)
         self.assertEqual([t["item"] for t in self.pool()["todos"]], ["2103"])
 
@@ -3604,19 +3620,19 @@ class PoolReviewIdentityTest(PoolProjectCase):
         self.assertNotEqual(out.get("permissionDecision"), "deny")
 
     def test_claim_commands_are_found_by_parsing(self):
-        R = self.R
+        R = self.P
         for cmd in ("python3.12 -I %s --offline release PMO-p0-01" % R, "bash -c 'python3.12 -I %s release PMO-p0-01'" % R):
             self.assertEqual(self.decision("s-researcher", cmd), "deny", cmd)
         self.assertEqual(self.decision("s-researcher", "python3.12 -I %s 'release' PMO-p0-01" % R), "ask")   # same as the plain form
         self.assertEqual(self.decision("s-alg1", "python3.12 -I %s 'release' PMO-p0-01" % R), "deny")
         self.assertEqual(self.decision("s-alg2", "python3.12 -I %s --offline expect PMO-p0-02 --role pmo-scribe --session s-alg1" % R), "deny")
-        for cmd in ('grep -n "route.py claim" CLAUDE.md', "echo '研究员请运行 route.py release Alg-p0-01'",
+        for cmd in ('grep -n "pool.py claim" CLAUDE.md', "echo '研究员请运行 pool.py release Alg-p0-01'",
                     "cat > packages/drafts/alg/n.md <<'EOF'\npython3.12 -I %s expect Alg-p0-02 --role alg-p0 --desk d\nEOF" % R):
             self.assertIsNone(self.decision("s-alg2", cmd), cmd)
 
     def test_a_cd_to_this_project_in_front_of_a_claim_is_the_same_command(self):
         self.route("expect", "RnD-p2-01", "--role", "rnd-p2", "--desk", "d-rnd", sid="s-researcher")
-        plain = "python3.12 -I %s claim rnd-p2 --as RnD-p2-01" % self.R
+        plain = "python3.12 -I %s claim rnd-p2 --as RnD-p2-01" % self.P
         for front in ('cd "%s" && ' % self.tmp, "cd '%s' && " % self.tmp, "cd %s && " % self.tmp, 'cd "%s/" &&  ' % self.tmp):
             self.assertIsNone(self.decision("s-term", front + plain), front)
         for cmd in ('cd "%s" ; %s' % (self.tmp, plain), "cd /tmp && " + plain, 'cd "%s" && %s | tail -3' % (self.tmp, plain),
@@ -3625,14 +3641,14 @@ class PoolReviewIdentityTest(PoolProjectCase):
             verdict = self.bash("s-term", cmd)[1]
             self.assertEqual(verdict.get("permissionDecision"), "deny", cmd)
             self.assertIn("前面最多带一句 cd 到本项目目录", verdict.get("permissionDecisionReason", ""), cmd)
-        plain = "python3.12 -I %s expect Alg-p0-02 --role alg-p0 --desk d-x" % self.R
+        plain = "python3.12 -I %s expect Alg-p0-02 --role alg-p0 --desk d-x" % self.P
         self.assertIsNone(self.decision("s-alg2", 'cd "%s" && %s' % (self.tmp, plain)))       # expect is read the same way
 
     def test_claim_with_an_asserted_desk_or_an_old_session_asks(self):
         self.route("expect", "RnD-p2-01", "--role", "rnd-p2", "--desk", "d-rnd", sid="s-researcher")
-        cmd = "python3.12 -I %s claim rnd-p2 --as RnD-p2-01 --desk d-rnd" % self.R
+        cmd = "python3.12 -I %s claim rnd-p2 --as RnD-p2-01 --desk d-rnd" % self.P
         self.assertEqual(self.decision("s-term", cmd), "ask")              # no desktop ID in the hook to compare with
-        cmd = "python3.12 -I %s claim rnd-p2 --as RnD-p2-01" % self.R
+        cmd = "python3.12 -I %s claim rnd-p2 --as RnD-p2-01" % self.P
         self.assertIsNone(self.decision("s-term", cmd))                    # without --desk route.py uses the session's own IDs
         code, text = self.route("claim", "rnd-p2", "--as", "RnD-p2-01", "--wait", "0", sid="s-term")
         self.assertEqual(code, 1)                                          # and finds no permit for them
@@ -3847,7 +3863,7 @@ class PoolReviewStateTest(PoolProjectCase):
         self.assertIn("另有", text)
         self.assertIn("## 怎么干活", text)
         for i in range(20):
-            route.append_inbox(self.tmp, "feishu", {"id": "m%d" % i, "ts": "2026-11-03T08:00:00+08:00", "from": "研究员（飞书私聊）",
+            pool_lib.append_inbox(self.tmp, "feishu", {"id": "m%d" % i, "ts": "2026-11-03T08:00:00+08:00", "from": "研究员（飞书私聊）",
                                                     "text": "长消息" * 100, "read": False})
         self.route("release", "PMO-p2-01", sid="s-researcher")
         _, out = self.opening("pmo-p2", "PMO-p2-01", "s-entry-new")
@@ -3862,7 +3878,7 @@ class PoolReviewStateTest(PoolProjectCase):
         for i in range(400):
             self.prompt("s-alg2", "【委托 #%d】PMO-p2-01 → Alg-p2-01：需求包 x.md" % (3000 + i))
         for i in range(20):
-            route.append_inbox(self.tmp, "feishu", {"id": "m%d" % i, "ts": "2026-11-03T08:00:00+08:00", "from": "研究员（飞书私聊）",
+            pool_lib.append_inbox(self.tmp, "feishu", {"id": "m%d" % i, "ts": "2026-11-03T08:00:00+08:00", "from": "研究员（飞书私聊）",
                                                     "text": "长消息" * 100, "read": False})
         since = pool_lib.now() - datetime.timedelta(hours=30)
         pending = {str(2800 + k): {"id": str(2800 + k), "title": "很长的一件待定决策 %d" % k, "registered_at": pool_lib.stamp(since),
@@ -3943,9 +3959,9 @@ class PoolReviewStateTest(PoolProjectCase):
         with mock.patch.object(ledger_core, "Ledger") as bound, \
                 mock.patch.object(ledger, "query", side_effect=lambda lg, name, seq=None, as_json=False: rows[name]):
             bound.return_value.state.side_effect = lambda wid, slot: names[slot]
-            mine = route.queue_rows(self.tmp, json.loads(self.read(".claude/hooks/policy.json")),
+            mine = pool_cmd.queue_rows(self.tmp, json.loads(self.read(".claude/hooks/policy.json")),
                                     self.pool()["claims"]["Alg-p2-01"], "alg")
-            entry = route.queue_rows(self.tmp, json.loads(self.read(".claude/hooks/policy.json")),
+            entry = pool_cmd.queue_rows(self.tmp, json.loads(self.read(".claude/hooks/policy.json")),
                                      self.pool()["claims"]["PMO-p2-01"], "pmo")
         self.assertEqual([r["work_item_id"] for r in mine], ["2202"])
         self.assertEqual([r["work_item_id"] for r in entry], ["2301"])
@@ -3984,7 +4000,7 @@ class FirstReviewTest(ProjectCase):
 
     def test_notify_refuses_a_name_that_is_no_role_or_session(self):
         with self.assertRaises(SystemExit):
-            route.notify(self.spec, self.tmp, "Nope-p2-01", "x")
+            notify.notify(self.spec, self.tmp, "Nope-p2-01", "x")
 
     def test_an_ask_keeps_the_identity_rewrite(self):
         _, out = self.guard("", "Bash", {"command": "lark-cli docs +create --title t --markdown x"}, agent_id=None)
@@ -4027,7 +4043,7 @@ class PoolSecondReviewTest(PoolProjectCase):
                     'echo "git stash" | bash', 'bash <<< "git stash"', "find . -maxdepth 0 -exec git stash \\;",
                     "env -S 'git stash'", "tcsh -c 'git stash'", "xcrun git stash", "gh pr checkout 123"):
             self.assertEqual(self.decision("s-alg1", cmd), "deny", cmd)
-        R = self.R
+        R = self.P
         for cmd in ('out="$(python3.12 -I %s release PMO-p0-01)"' % R, "python3 -X utf8 %s release PMO-p0-01" % R,
                     "python3 -W ignore -I %s release PMO-p0-01" % R):
             self.assertEqual(self.decision("s-researcher", cmd), "deny", cmd)
@@ -4038,7 +4054,7 @@ class PoolSecondReviewTest(PoolProjectCase):
             self.assertIsNone(self.decision("s-alg1", cmd), cmd)
 
     def test_identity_variables_stay_put(self):
-        cmd = "env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_HOST_SESSION_ID python3.12 -I %s notify PMO-p0-01 --text x" % self.R
+        cmd = "env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_HOST_SESSION_ID python3.12 -I %s send PMO-p0-01 --text x" % self.N
         self.assertEqual(self.decision("s-alg1", cmd), "deny")
         self.assertEqual(self.decision("s-alg1", "CLAUDE_CODE_SESSION_ID=s-scribe %s" % self.W), "deny")
         self.assertIsNone(self.decision("s-alg1", "echo $CLAUDE_CODE_SESSION_ID"))
@@ -4123,7 +4139,7 @@ class PoolSecondReviewTest(PoolProjectCase):
         with mock.patch.object(ledger_core, "Ledger") as bound, \
                 mock.patch.object(ledger, "query", side_effect=lambda lg, name, seq=None, as_json=False: rows[name]):
             bound.return_value.state.side_effect = lambda wid, slot: names[slot]
-            entry = route.queue_rows(self.tmp, json.loads(self.read(".claude/hooks/policy.json")),
+            entry = pool_cmd.queue_rows(self.tmp, json.loads(self.read(".claude/hooks/policy.json")),
                                      self.pool()["claims"]["PMO-p2-01"], "pmo")
         self.assertEqual([r["work_item_id"] for r in entry], ["2302"])
 
@@ -4191,9 +4207,9 @@ class SecondReviewSetupTest(ProjectCase):
 
     def test_notify_by_role_only_when_the_role_has_one_session(self):
         with self.assertRaises(SystemExit):
-            route.notify(self.spec, self.tmp, "alg-p1", "x")
+            notify.notify(self.spec, self.tmp, "alg-p1", "x")
         with contextlib.redirect_stdout(io.StringIO()):
-            route.notify(self.spec, self.tmp, "alg-p2", "y")
+            notify.notify(self.spec, self.tmp, "alg-p2", "y")
 
 
 class PoolThirdReviewTest(PoolProjectCase):
@@ -4223,8 +4239,8 @@ class PoolThirdReviewTest(PoolProjectCase):
                     "# check before `git checkout`\ngit status",
                     'echo "later: \\$(git stash)" >> NOTES.md',
                     "gh pr create --body 'Do not run `git pull` here'",
-                    "rg -n -F '`route.py release`' docs/ CLAUDE.md",
-                    "# then ask the researcher to run `route.py release Alg-p0-01`\npython3.12 -I %s pool" % self.R):
+                    "rg -n -F '`pool.py release`' docs/ CLAUDE.md",
+                    "# then ask the researcher to run `pool.py release Alg-p0-01`\npython3.12 -I %s show" % self.P):
             for sid in ("s-alg1", "s-researcher"):
                 self.assertIsNone(self.decision(sid, cmd), (sid, cmd))
         self.assertEqual(self.decision("s-alg1", 'git commit -m "$(git stash)"'), "deny")
@@ -4242,9 +4258,9 @@ class PoolThirdReviewTest(PoolProjectCase):
                     "C='git stash'; bash -c \"$C\"",
                     "git --git-dir=/tmp/other/.git checkout -f main"):
             self.assertEqual(self.decision("s-alg1", cmd), "deny", cmd)
-        for cmd in ("find . -maxdepth 0 -exec sh -c 'python3.12 -I %s release PMO-p0-01' \\;" % self.R,
-                    "python3 -m cProfile -o /dev/null %s release PMO-p0-01" % self.R,
-                    "X=%s; python3.12 -I $X pool; python3.12 -I $X release Alg-p0-01" % self.R):
+        for cmd in ("find . -maxdepth 0 -exec sh -c 'python3.12 -I %s release PMO-p0-01' \\;" % self.P,
+                    "python3 -m cProfile -o /dev/null %s release PMO-p0-01" % self.P,
+                    "X=%s; python3.12 -I $X show; python3.12 -I $X release Alg-p0-01" % self.P):
             self.assertEqual(self.decision("s-researcher", cmd), "deny", cmd)
 
     def test_git_in_other_trees_is_fine(self):
@@ -4261,13 +4277,13 @@ class PoolThirdReviewTest(PoolProjectCase):
         self.assertEqual(self.decision("s-alg1", "git -C repo checkout other"), "deny")
 
     def test_a_repeated_option_is_refused(self):
-        cmd = "python3.12 -I %s claim pmo-scribe --desk= --desk d-scribe --wait 0" % self.R
+        cmd = "python3.12 -I %s claim pmo-scribe --desk= --desk d-scribe --wait 0" % self.P
         self.assertEqual(self.decision("s-term", cmd), "deny")
-        cmd = "python3.12 -I %s expect Alg-p0-02 --role alg-p0 --role pmo-scribe --desk d-x" % self.R
+        cmd = "python3.12 -I %s expect Alg-p0-02 --role alg-p0 --role pmo-scribe --desk d-x" % self.P
         self.assertEqual(self.decision("s-alg2", cmd), "deny")
 
     def test_identity_variables_in_other_forms(self):
-        tail = "python3.12 -I %s notify PMO-p2-01 --text x" % self.R
+        tail = "python3.12 -I %s send PMO-p2-01 --text x" % self.N
         for prefix in ("unset -v CLAUDE_CODE_SESSION_ID CLAUDE_CODE_HOST_SESSION_ID; ", 'env -i PATH="$PATH" ',
                        'env -u "CLAUDE_CODE_SESSION_ID" -u "CLAUDE_CODE_HOST_SESSION_ID" ',
                        "unset CLAUDE_CODE_{,HOST_}SESSION_ID; ", "export -n CLAUDE_CODE_SESSION_ID CLAUDE_CODE_HOST_SESSION_ID; "):
@@ -4414,7 +4430,7 @@ class BracketPathTest(PoolProjectCase):
 
     def test_a_cd_to_a_path_with_brackets_is_still_this_project(self):
         self.route("expect", "RnD-p2-01", "--role", "rnd-p2", "--desk", "d-rnd", sid="s-researcher")
-        cmd = 'cd "%s" && python3.12 -I %s claim rnd-p2 --as RnD-p2-01' % (self.tmp, self.R)
+        cmd = 'cd "%s" && python3.12 -I %s claim rnd-p2 --as RnD-p2-01' % (self.tmp, self.P)
         self.assertIsNone(self.bash("s-term", cmd)[1].get("permissionDecision"), cmd)
 
     def test_pool_views_read_sessions_and_receipts(self):
@@ -4479,7 +4495,7 @@ class DeliveryTextTest(PoolProjectCase):
                      "里程碑（研究任务走完一步、出了结论）",
                      "收到【需拍板】，请发来的 +2 写成决策包，不直接转问研究员",
                      "面向研究员最多写一行状态，不提问，不标“等研究员回答”，不复述已经登记过的决策",
-                     "`route.py pool` 里的研究员任务清单和补位请求跟在决策清单后面列出，它们不算决策"):
+                     "`pool.py show` 里的研究员任务清单和补位请求跟在决策清单后面列出，它们不算决策"):
             self.assertIn(part, entry)
         self.assertIn("研究员在本会话里拍板后，请书记员确认决策的“决定”这一步", entry)     # what follows the decision stays
         self.assertIn("入口要时汇总决策队列", texts["pmo-router.md"])
@@ -4528,7 +4544,7 @@ class DeliveryTextTest(PoolProjectCase):
         with open(os.path.join(REPO, "CHANGELOG.md"), encoding="utf-8") as f:
             sources["CHANGELOG.md 1.0.3"] = f.read().split("\n## 1.0.3\n", 1)[1].split("\n## ", 1)[0]
         # 研究员待办 is not in the list any more: the researcher brought it back on 2026-11-20 (1.0.10) for what
-        # takes no decision, as a line the entry lists (route.py todo). What stays out is how 1.0.2 did it:
+        # takes no decision, as a line the entry lists (todo.py). What stays out is how 1.0.2 did it:
         # written into 阻塞原因 with a deadline.
         for name, text in sources.items():
             for old in ("动手：", "等研究员：<事项>", "（截止 <时间>）", "带期限", "记成阻塞", "“等研究员：”开头", "已做：",
@@ -5020,11 +5036,11 @@ class HookScopeTest(PoolProjectCase):
                         "pushd %s && git checkout main && popd", "pushd %s && git pull; popd; git status",
                         "pushd . && cd %s && git stash && popd && git log -1"):
                 self.assertEqual(self.bash("s-alg1", cmd % other), (0, {}), cmd)               # git in another tree is not the rule's
-            for cmd in ("function r { python3.12 -I .claude/solo-lab/bin/route.py release Alg-p1-01; }; r",
-                        "command -p python3.12 -I .claude/solo-lab/bin/route.py release Alg-p1-01"):
+            for cmd in ("function r { python3.12 -I .claude/solo-lab/bin/pool.py release Alg-p1-01; }; r",
+                        "command -p python3.12 -I .claude/solo-lab/bin/pool.py release Alg-p1-01"):
                 out = self.bash("s-alg1", cmd)[1]                                     # a claim command is seen behind the wrapper
                 self.assertEqual(out.get("permissionDecision"), "deny", cmd)
-                self.assertIn("route.py release 要写成单条简单命令", out["permissionDecisionReason"], cmd)
+                self.assertIn("pool.py release 要写成单条简单命令", out["permissionDecisionReason"], cmd)
         finally:
             shutil.rmtree(other, ignore_errors=True)
 
@@ -5090,10 +5106,10 @@ class HookScopeTest(PoolProjectCase):
         guard = importlib.import_module("guard")
         self.assertIsNone(guard.ledger_write(L + " revise 2140 v2.md --note x", self.tmp))
         self.assertEqual(guard.ledger_write(L + " archive 2140 --ap", self.tmp), "archive")
-        R = "python3.12 -I .claude/solo-lab/bin/route.py"
-        for helped in (R + " expect --help", "%s expect --help; %s pool" % (R, R), "%s claim -h | head -5" % R):
+        R = "python3.12 -I .claude/solo-lab/bin/pool.py"
+        for helped in (R + " expect --help", "%s expect --help; %s show" % (R, R), "%s claim -h | head -5" % R):
             self.assertNotEqual(self.bash("s-alg1", helped)[1].get("permissionDecision"), "deny", helped)
-        out = self.bash("s-alg1", "%s expect Alg-p0-02 --role alg-p0 --card; %s pool" % (R, R))[1]
+        out = self.bash("s-alg1", "%s expect Alg-p0-02 --role alg-p0 --card; %s show" % (R, R))[1]
         self.assertEqual(out.get("permissionDecision"), "deny")                    # a pool command proper is one plain command
         self.assertIn("要写成单条简单命令", out["permissionDecisionReason"])
 
@@ -5340,7 +5356,7 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
         self.assertLessEqual(len(text), pool_lib.INJECT_LIMIT)
         self.assertIn("## 怎么干活", text)
         self.assertNotIn("下文略", text)
-        self.assertIn("#%d→Alg-p2-01；另有 40 条，用 route.py pool --recover 看全。" % (3000 + pool_lib.ITEMS_SHOWN - 1), text)
+        self.assertIn("#%d→Alg-p2-01；另有 40 条，用 pool.py show --recover 看全。" % (3000 + pool_lib.ITEMS_SHOWN - 1), text)
         self.assertTrue(text.endswith("：未了事项属于研究任务 #2000；连同其余没归档的（ledger.py query tasks 列出），逐条运行 %s <研究任务 ID>。" % self.CMD), text[-200:])
         text = self.compacted("s-alg2")                                              # the session that owes them: the first few named
         self.assertTrue(text.endswith("等 60 条 属于研究任务 #2000，运行 %s 2000。" % self.CMD), text[-200:])
