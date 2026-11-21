@@ -271,7 +271,7 @@ class OrgSpec:
             if rel:
                 name = "%s关系的%s" % (self.term("rel", rel), name)
             lines.append("- %s放在%s。" % (name, p["parent"]))
-        lines += ["- 上传和归位统一由%s做。" % self.term("role", "scribe"),
+        lines += ["- 文档由写它的会话自己上传；归档时的移动由%s做。" % self.term("role", "scribe"),
                   "- " + t["archive"] + "。", "- " + self.render(t["granularity"]) + "。"]
         return "\n".join(lines)
 
@@ -645,8 +645,8 @@ DATE_TEXT = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})")
 CRITERIA_TEXT = re.compile(r"判据\s*([0-9](?:\s*[、,，/和及与]\s*[0-9])*)")
 SAYS_WAIT = re.compile(r"等研究员(?:$|[\s（(，,。.；;：:、])")
 SAYS_REVERSIBLE = re.compile(r"可逆(?:$|[\s（(，,。.；;：:])")
-VERSION_HOW = "写“第 1 版（YYYY-MM-DD）”；已经登记的包要改，写上一版加 1，请书记员用 revise 换主文档"
-VERSION_HOW_DELIVERY = "写“第 1 版（YYYY-MM-DD）”；交付包改了就用 reply 重新交，版本号加 1"
+VERSION_HOW = "写“第 1 版（YYYY-MM-DD）”；已经登记的包要改，写上一版加 1，自己用 docs.py revise 换主文档"
+VERSION_HOW_DELIVERY = "写“第 1 版（YYYY-MM-DD）”；交付包改了，版本号加 1，用 docs.py upload 重新交"
 DEFAULT_HOW = ("可逆的写到期按哪个选项办（选项表第一列的名字）；不可逆的、执行方是研究员或者研究员要亲手做事的写“%s”；"
                "研究员主动发起的写“无”" % WAIT)
 

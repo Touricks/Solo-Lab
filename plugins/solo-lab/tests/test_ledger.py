@@ -422,8 +422,8 @@ class RegisterTest(LedgerCase):
                       self.fails(workitem.register, self.lg(), self.draft(EXECUTE, "e4.md", edit=bare), source=source))
         self.assertIn("#%s 没有工作项" % ref, self.fails(workitem.confirm, self.lg(), ref, "Quality-p0-01"))
         # the +0 delivers under the package
-        back = self.write(example(EXECUTE_DELIVERY).replace("- 关联工作项：#2106", "- 关联工作项：#%s" % ref).replace(
-            "Quality-p0-2106", "Quality-p0-%s" % ref), "back.md")
+        back = self.write(example(EXECUTE_DELIVERY).replace("- 关联工作项：#2100-1", "- 关联工作项：#%s" % ref).replace(
+            "Quality-p0-2100-1", "Quality-p0-%s" % ref), "back.md")
         self.assertIn("还没有交付包", self.fails(docs.accept, self.lg(), ref, "通过"))
         lg = self.lg()
         link, out = self.out(docs.upload, lg, back)
@@ -440,8 +440,8 @@ class RegisterTest(LedgerCase):
         self.assertEqual(self.local(ref)["state"], "执行中")
         self.assertRegex(doc["body"], r"\[PMO\+0\] 验收（[\d-]+）：不通过，交付包第 1 版。第 2 条没有证据")
         self.assertIn("这一份写的是第 1 版", self.fails(docs.upload, self.lg(), self.write(example(EXECUTE_DELIVERY).replace(
-            "- 关联工作项：#2106", "- 关联工作项：#%s" % ref), "back-b.md")))
-        self.write(example(EXECUTE_DELIVERY).replace("- 关联工作项：#2106", "- 关联工作项：#%s" % ref).replace(
+            "- 关联工作项：#2100-1", "- 关联工作项：#%s" % ref), "back-b.md")))
+        self.write(example(EXECUTE_DELIVERY).replace("- 关联工作项：#2100-1", "- 关联工作项：#%s" % ref).replace(
             "第 1 版（2026-11-26）", "第 2 版（2026-11-27）"), "back.md")
         v2 = self.quiet(docs.upload, self.lg(), back)
         self.assertNotEqual(v2, link)
@@ -450,7 +450,7 @@ class RegisterTest(LedgerCase):
         self.assertIn("验收：#%s 通过，结论记在需求包末尾。这件活了结了。" % ref, out)
         self.assertEqual(self.local(ref)["state"], "已验收")
         self.assertIn("已经验收过了", self.out(docs.accept, self.lg(), ref, "通过")[1])
-        third = self.write(example(EXECUTE_DELIVERY).replace("- 关联工作项：#2106", "- 关联工作项：#%s" % ref).replace(
+        third = self.write(example(EXECUTE_DELIVERY).replace("- 关联工作项：#2100-1", "- 关联工作项：#%s" % ref).replace(
             "第 1 版（2026-11-26）", "第 3 版（2026-11-28）"), "back-3.md")
         self.assertIn("#%s 已经验收：验收以后不再重新交交付包" % ref, self.fails(docs.upload, self.lg(), third))
         self.assertIn("docs.py accept 只管没建工作项的任务", self.fails(docs.accept, self.lg(), source, "通过"))
@@ -3165,8 +3165,8 @@ class PackageCheckTest(LedgerCase):
             text = example(block)
             line = re.search(r"^- 版本：(.*)$", text, re.M).group(1)
             self.assertEqual(orgspec.version_of(line), 1, block)
-            how = ("交付包改了就用 reply 重新交，版本号加 1" if block in (DELIVERY, EXECUTE_DELIVERY)       # a delivery is no main document
-                   else "已经登记的包要改，写上一版加 1，请书记员用 revise 换主文档")
+            how = ("交付包改了，版本号加 1，用 docs.py upload 重新交" if block in (DELIVERY, EXECUTE_DELIVERY)       # a delivery is no main document
+                   else "已经登记的包要改，写上一版加 1，自己用 docs.py revise 换主文档")
             self.assertEqual(self.lint(text.replace("- 版本：%s\n" % line, "")), ["包头缺“版本”：写“第 1 版（YYYY-MM-DD）”；" + how], block)
             for bad, why in (("v1", "写成“第 N 版（YYYY-MM-DD）”"), ("第 1 版（2026-02-30）", "日期 2026-02-30 不存在"), ("第 0 版（2026-11-02）", "从第 1 版算起")):
                 errors = self.lint(text.replace("- 版本：%s\n" % line, "- 版本：%s\n" % bad))

@@ -547,7 +547,7 @@ def revise(lg, item_id, path, note):
         raise core.LedgerError("反馈的主文档没有状态包，不用 revise：要补充的写成新的反馈，或者在工作项下加评论")
     d = core.Sheet(spec, path, sheet) if sheet else core.Draft(spec, path)
     if d.pid == "delivery":
-        raise core.LedgerError("交付包不是主文档，不用 revise：改好后用 reply 重新交，版本号加 1")
+        raise core.LedgerError("交付包不是主文档，不用 revise：改好后包头的版本号加 1，重新运行 docs.py upload <草稿> --apply，再请书记员填“交付包”字段")
     wid = "research_task" if sheet else core.work_item_type(d)
     head = d.text.split("\n## ", 1)[0]
     m = core.LINK_LINE.search(head)

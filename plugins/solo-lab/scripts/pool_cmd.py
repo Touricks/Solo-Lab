@@ -520,8 +520,10 @@ def recover_cmd(root, policy):
         return 1
     rows = pool.session_view(root, policy, pl)
     entry = policy["agents"][policy["entry_role"]].get("fixed_session") or "PMO-p2-01"
+    # 1.1.0: the entry runs this and hands the list to the router, which sends what it says
+    hub = (policy["agents"].get(policy.get("router_role")) or {}).get("fixed_session") or entry
     word = (policy.get("msg") or {}).get("resume", "继续")
-    print("恢复清单：")
+    print("恢复清单（入口把它交给路由 %s，下面的消息由路由发）：" % hub if hub != entry else "恢复清单：")
     unfinished, replies = [], []
     uploads, sent = [], pool.files_in(os.path.join(root, "packages", "sent"), "*.json")
     known = {(pool.load_json(p, {}) or {}).get("draft") for p in sent if not os.path.basename(p).startswith(("reply-", "upload-", "attach-"))}
@@ -563,12 +565,12 @@ def recover_cmd(root, policy):
         sent, _ = items.get(name, ({}, {}))
         for item, to in sorted(sent.items()):
             found = True
-            if name == entry:
-                print("- #%s：你委托给 %s，还没交付。发：【%s #%s】%s → %s：重启后接着做；做完了的，重发交付。" % (
-                    item, to, word, item, entry, to))
+            if name == hub:
+                print("- #%s：%s 委托给 %s，还没交付。发：【%s #%s】%s → %s：重启后接着做；做完了的，重发交付。" % (
+                    item, name, to, word, item, hub, to))
             else:
                 print("- #%s：%s 委托给 %s，还没交付。给 %s 发消息【%s #%s】%s → %s：重启后请给 %s 发【%s #%s】。" % (
-                    item, name, to, name, (policy.get("msg") or {}).get("notice", "通知"), item, entry, name, to, word, item))
+                    item, name, to, name, (policy.get("msg") or {}).get("notice", "通知"), item, hub, name, to, word, item))
     if not found:
         print("- 没有委托出去还没交付的工作项。")
     print("- 长期任务（比如 notify.py listen）随应用退出就停了，要研究员在终端里重新启动。")

@@ -5320,8 +5320,8 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
         self.assertIn("压缩以后、接着干活之前，照角色说明先读所属研究任务的状态包（`%s <研究任务 ID>`）。" % self.CMD, compact)
         with open(os.path.join(ROOT, "skills", "entry", "SKILL.md"), encoding="utf-8") as f:
             skill = f.read()
-        self.assertIn("研究任务的状态包由你维护", skill)
-        self.assertIn("`docs.py status-block <研究任务 ID> --file <文件>` 整段替换", skill)
+        self.assertIn("研究任务的状态包由路由维护", skill)
+        self.assertIn("`docs.py status-block <研究任务 ID> --file <文件> --apply` 整段替换", skill)
         self.assertIn("压缩上下文以后、接着干活之前，先读研究任务的状态包", skill)
 
     def test_the_role_text_still_fits_with_the_line_after_a_compaction(self):
@@ -5684,8 +5684,8 @@ class TextsAfterTheGatesTest(PoolProjectCase):
                 ("docs/开发说明.md", "Agent 调用的规则（派发不带 `name`，不用 Agent 工具派书记员）"),
                 ("docs/开发说明.md", "硬规则的全表在 `skills/setup/references/mechanisms.md`。"),
                 ("skills/setup/references/mechanisms.md", "hook 不拦、不弹窗，也不答允许，命令照 Claude Code 自己的权限检查；同一行里带着飞书读命令或书记员的写命令也一样。"),
-                ("skills/setup/references/mechanisms.md", "| 任何会话 | 允许 | 整条命令只有飞书读命令、会话自己白名单里的飞书写命令（带标签的评论、入口发的消息）或书记员的台账和飞书写命令，"
-                                                          "中间可以有 `cd`、`pushd`、`popd`。"),
+                ("skills/setup/references/mechanisms.md", "| 任何会话 | 允许 | 整条命令只有飞书读命令、会话自己白名单里的飞书写命令（入口发的消息）、已认领的会话运行项目自己的 `docs.py`，"
+                                                          "或书记员的 `workitem.py` 和 meegle 写命令，中间可以有 `cd`、`pushd`、`popd`。"),
                 ("skills/setup/references/mechanisms.md", "所以命令里还有别的就不答允许，交给 Claude Code："),
                 ("docs/使用说明.md", "和飞书读命令写在同一行也一样，hook 只对整条都是飞书、台账调用的命令答允许。")):
             self.assertIn(part, texts[rel], rel)

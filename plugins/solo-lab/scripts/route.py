@@ -114,10 +114,11 @@ def classify_draft(spec, root, path):
         carry = ("执行方是研究员，他说做完了，路由请书记员归档" if who == orgspec.RESEARCHER
                  else "书记员把决定内容发给执行方 %s，它照决定执行完，马上请书记员归档" % who)
         if d.header.get("渠道") == spec.term("channel", "researcher"):
-            tell = "路由给“受影响的工作项”的负责会话发消息【%s #ID】；显示“研究员在用”的改用 notify.py send 留言" % notice
+            tell = "路由给“受影响的工作项”的负责会话发消息【%s #ID】，改状态包；显示“研究员在用”的改用 notify.py send 留言" % notice
             return result(spec, "R6", "研究员主动发起的决策包", next_hop="pmo-router",
-                          steps=["和研究员谈的那个会话自己上传决策包（%s），把草稿路径交给路由" % upload,
-                                 "路由请书记员 register 后确认“决定”这一步，填决定内容和决定人；作者用 docs.py relink 把工作项 ID 写回文档",
+                          steps=["和研究员谈的那个会话自己上传决策包（%s）" % upload,
+                                 "它请书记员 register 后确认“决定”这一步，填决定内容和决定人（登记请求写“由 研究员 提出”，带原话）；"
+                                 "拿到工作项 ID 后用 docs.py relink 写回文档，再用【%s #ID】告诉路由" % notice,
                                  carry, tell])
         return result(spec, "R5", "决策队列来的决策包", next_hop="pmo-router",
                       steps=["作者自己上传（%s），请书记员 register，停在“待决定”；拿到工作项 ID 后用 docs.py relink 写回文档" % upload,
