@@ -215,7 +215,7 @@ class SetupTest(ProjectCase):
         path = os.path.join(self.tmp, "org", "phases.md")
         with open(path, encoding="utf-8") as f:
             unbound = f.read()
-        self.assertNotIn("### 研究任务：验证", unbound)                     # setUp ran init before the space was there
+        self.assertNotIn("### 研究任务：正式实验", unbound)                     # setUp ran init before the space was there
         plan = setup.build_plan(self.tmp, TASK, None)
         acts = setup.actions_for(self.tmp, plan)
         self.assertEqual(dict((rel, k) for k, rel, _ in acts)["org/phases.md"], "regen")
@@ -224,7 +224,7 @@ class SetupTest(ProjectCase):
         self.run_quiet(setup.apply_plan, self.tmp, plan, acts)
         with open(path, encoding="utf-8") as f:
             fresh = f.read()
-        self.assertIn("### 研究任务：验证", fresh)
+        self.assertIn("### 研究任务：正式实验", fresh)
         self.assertIn("实验方只碰开发集", fresh)
         with open(path, "w", encoding="utf-8") as f:                        # the rule as 1.0.5 worded it
             f.write(fresh.replace("实验方只碰开发集", "执行方只碰开发集"))
@@ -2877,7 +2877,7 @@ class PoolGuardTest(PoolProjectCase):
     def test_the_scribe_uploads_a_local_file_for_a_link_field(self):
         L = "python3.12 -I .claude/solo-lab/bin/workitem.py"
         update = L + " update 2101 --set 需求文档=@packages/drafts/product/prd.md --apply"
-        confirm = L + " confirm 2101 --by Alg-p2-01 --set 上下文文档=@packages/drafts/alg/context.md --apply"
+        confirm = L + " confirm 2101 --by Alg-p2-01 --set 调研文档=@packages/drafts/alg/context.md --apply"
         for command in (update, confirm):
             self.assertEqual(self.decision("s-scribe", command), "allow", command)
             self.assertEqual(self.decision("s-scribe", command, permission_mode="bypassPermissions"), "allow", command)

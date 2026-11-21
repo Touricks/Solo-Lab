@@ -52,9 +52,9 @@ FEEDBACK = """# 反馈：基线要和人工调参比
 基线只和默认配置比不够，要加上人工调了一周的版本。
 """
 LINK = "https://example.feishu.cn/wiki/wikDoc"
-STEPS = [   # the 验证 flow: who asks for each step, and what its form requires
+STEPS = [   # the 正式实验 flow: who asks for each step, and what its form requires
     ("Product-p2-01", ["成功标准=复现分数和公开数字相差 0.5 个点以内"]),
-    ("Alg-p2-01", ["上下文文档=" + LINK]),
+    ("Alg-p2-01", ["调研文档=" + LINK]),
     ("Product-p2-01", ["需求文档=" + LINK, "评测集版本=evalset-v1"]),
     ("Alg-p2-01", ["规格=" + LINK, "规格版本=spec-v1", "总预算=200", "波动估计=基线重复 3 次，标准差 0.2"]),
     ("Alg-p2-01", ["实验方案=" + LINK, "实验轮次=1"]),
@@ -115,7 +115,7 @@ class LedgerCase(unittest.TestCase):
             fn(*args, **kw)
         return str(e.exception)
 
-    def task(self, flow="验证", sender="产品 +2（Product-p2-01）", name="task.md"):
+    def task(self, flow="正式实验", sender="产品 +2（Product-p2-01）", name="task.md"):
         return self.quiet(workitem.register, self.lg(), self.write(SHEET % (flow, sender), name))
 
     def state(self, item_id):
@@ -153,7 +153,7 @@ class LedgerCase(unittest.TestCase):
         return did
 
     def walk(self, task_id, upto, signer=None):
-        """Confirm the steps of a 验证 task up to (not including) step number `upto`."""
+        """Confirm the steps of a 正式实验 task up to (not including) step number `upto`."""
         signs = {}
         for i, (by, sets) in enumerate(STEPS[:upto - 1], 1):
             if self.fake.item(task_id)["nodes"][i - 1]["status"] != "doing":
@@ -167,12 +167,12 @@ class LedgerCase(unittest.TestCase):
 
 class RegisterTest(LedgerCase):
     def test_research_task_sheet(self):
-        path = self.write(SHEET % ("验证", "产品 +2（Product-p2-01）"))
+        path = self.write(SHEET % ("正式实验", "产品 +2（Product-p2-01）"))
         lg = self.lg()
         item_id, text = self.out(workitem.register, lg, path)
         item = self.fake.item(item_id)
         t = self.fake.snap["types"][item["type_key"]]
-        self.assertEqual((t["api_name"], t["flows"][item["flow_id"]]["name"], item["name"]), ("research_task", "验证", "复现并测量基线"))
+        self.assertEqual((t["api_name"], t["flows"][item["flow_id"]]["name"], item["name"]), ("research_task", "正式实验", "复现并测量基线"))
         self.assertEqual(self.state(item_id), "确定目标")
         self.assertEqual((self.value(item_id, "research_task", "sender"), self.fake.shown(item["type_key"], lg.field("research_task", "sequence")["field_key"],
                                                                                            self.value(item_id, "research_task", "sequence"))["label"]),
@@ -194,7 +194,7 @@ class RegisterTest(LedgerCase):
 
     def test_the_item_is_created_with_everything_its_page_requires(self):
         lg = self.lg()
-        self.quiet(workitem.register, lg, self.write(SHEET % ("试探", "算法 +2（Alg-p2-01）")))
+        self.quiet(workitem.register, lg, self.write(SHEET % ("探索", "算法 +2（Alg-p2-01）")))
         created = json.loads(lg.wrote("workitem", "create")[0][lg.wrote("workitem", "create")[0].index("--fields") + 1])
         keys = {f["field_key"] for f in created}
         need = {c["field_key"] for c in lg.space_type("research_task")["create_fields"] if c["required"]}
@@ -207,11 +207,11 @@ class RegisterTest(LedgerCase):
         text = self.fails(workitem.register, self.lg(), self.write("# 研究任务单：x\n\n- 发出方：产品 +2（Product-p2-01）\n- 关联工作项：待建\n"))
         self.assertIn("“- 流程：…”", text)
         text = self.fails(workitem.register, self.lg(), self.write(SHEET % ("冲刺", "产品 +2（Product-p2-01）")))
-        self.assertIn("验证、试探", text)
+        self.assertIn("正式实验、探索", text)
         self.assertIn("没有“冲刺”", text)
-        text = self.fails(workitem.register, self.lg(), self.write((SHEET % ("验证", "产品 +2（Product-p2-01）")).replace("待建", "#2001")))
+        text = self.fails(workitem.register, self.lg(), self.write((SHEET % ("正式实验", "产品 +2（Product-p2-01）")).replace("待建", "#2001")))
         self.assertIn("这一行写“待建”", text)
-        text = self.fails(workitem.register, self.lg(), self.write(SHEET % ("验证", "<序列> +2（<会话名>）")))
+        text = self.fails(workitem.register, self.lg(), self.write(SHEET % ("正式实验", "<序列> +2（<会话名>）")))
         self.assertIn("还是模板里的占位", text)                         # the template as it comes is not a task
         self.assertEqual(self.fake.items, {})
 
@@ -236,7 +236,7 @@ class RegisterTest(LedgerCase):
         task = self.task()
         old = self.value(task, "research_task", "main_doc")
         count = len(self.fake.docs)
-        revised = self.write((SHEET % ("验证", "算法 +2（Alg-p2-01）")).replace("测出分数和波动", "测出分数、波动和耗时"), "v2.md")
+        revised = self.write((SHEET % ("正式实验", "算法 +2（Alg-p2-01）")).replace("测出分数和波动", "测出分数、波动和耗时"), "v2.md")
         lg = self.lg()
         _, text = self.out(docs.revise, lg, task, revised, "补耗时")
         self.assertEqual(lg.wrote("workitem", "create"), [])                             # the work item stays,
@@ -253,7 +253,7 @@ class RegisterTest(LedgerCase):
         self.assertEqual(self.receipt(task)["version"], 2)
         with open(revised, encoding="utf-8") as f:
             self.assertIn("- 关联工作项：#%s" % task, f.read())
-        third = self.write(SHEET % ("验证", "算法 +2（Alg-p2-01）"), "v3.md")              # no 版本 line: counted here
+        third = self.write(SHEET % ("正式实验", "算法 +2（Alg-p2-01）"), "v3.md")              # no 版本 line: counted here
         self.quiet(docs.revise, self.lg(), task, third, "改回原来的目标")
         self.assertEqual(self.receipt(task)["version"], 3)
         self.assertEqual(self.value(task, "research_task", "main_doc"), old)
@@ -261,7 +261,7 @@ class RegisterTest(LedgerCase):
         with open(revised, encoding="utf-8") as f:
             named = self.write(f.read(), "v2c.md")                                       # it names the first task
         self.assertIn("关联工作项", self.fails(docs.revise, self.lg(), other, named, "x"))
-        probe = self.write(SHEET % ("试探", "产品 +2（Product-p2-01）"), "v4.md")
+        probe = self.write(SHEET % ("探索", "产品 +2（Product-p2-01）"), "v4.md")
         self.assertIn("流程在新建时选定", self.fails(docs.revise, self.lg(), task, probe, "x"))
         self.assertIn("反馈的主文档没有状态包", self.fails(docs.revise, self.lg(), task, self.write(FEEDBACK, "f.md"), "x"))
 
@@ -270,7 +270,7 @@ class RegisterTest(LedgerCase):
         answers for it. The command says where the task is and goes on."""
         task = self.task()
         self.quiet(workitem.confirm, self.lg(), task, *STEPS[0])
-        late = self.write((SHEET % ("验证", "产品 +2（Product-p2-01）")).replace("0.5 个点", "1 个点"), "late.md")
+        late = self.write((SHEET % ("正式实验", "产品 +2（Product-p2-01）")).replace("0.5 个点", "1 个点"), "late.md")
         _, text = self.out(docs.revise, self.lg(), task, late, "放宽标准")
         self.assertIn("已经过了第一步", text)
         self.assertIn("不会跟着研究任务单变", text)
@@ -283,12 +283,12 @@ class RegisterTest(LedgerCase):
         task = self.task()
         doc = self.fake.doc_of_link(self.value(task, "research_task", "main_doc"))
         self.assertIn("复现并测量基线", doc["title"])
-        renamed = self.write((SHEET % ("验证", "产品 +2（Product-p2-01）")).replace("# 研究任务单：复现并测量基线", "# 研究任务单：复现基线 & 测波动"), "r.md")
+        renamed = self.write((SHEET % ("正式实验", "产品 +2（Product-p2-01）")).replace("# 研究任务单：复现并测量基线", "# 研究任务单：复现基线 & 测波动"), "r.md")
         _, text = self.out(docs.revise, self.lg(), task, renamed, "改名")
         self.assertEqual(self.fake.item(task)["name"], "复现基线 & 测波动")
         self.assertEqual(doc["title"], "工作项 %s｜研究任务单：复现基线 & 测波动" % task)
         self.assertIn("改名：主文档和它的知识库节点的标题", text)
-        same = self.write(SHEET % ("验证", "产品 +2（Product-p2-01）"), "s.md")
+        same = self.write(SHEET % ("正式实验", "产品 +2（Product-p2-01）"), "s.md")
         self.fake.title_fails = True                                   # the rename is refused: the revision still lands
         _, text = self.out(docs.revise, self.lg(), task, same, "改回")
         self.assertIn("主文档的标题没有改成", text)
@@ -660,14 +660,14 @@ class RegisterTest(LedgerCase):
         self.assertEqual(len(lg.wrote("workitem", "create")), 1)
 
     def test_preview_writes_nothing(self):
-        _, text = self.out(workitem.register, self.lg("preview"), self.write(SHEET % ("验证", "产品 +2（Product-p2-01）")))
+        _, text = self.out(workitem.register, self.lg("preview"), self.write(SHEET % ("正式实验", "产品 +2（Product-p2-01）")))
         self.assertIn("将执行：meegle workitem create", text)
         self.assertIn("预览：会登记一条研究任务", text)
         self.assertNotIn("\n登记：", "\n" + text)
         self.assertEqual((self.fake.items, self.fake.docs), ({}, {}))
 
     def test_a_failed_document_is_resumed_without_a_second_item(self):
-        path = self.write(SHEET % ("验证", "产品 +2（Product-p2-01）"))
+        path = self.write(SHEET % ("正式实验", "产品 +2（Product-p2-01）"))
         down = [(("docs", "+create"), ledger_core.LedgerError("命令失败（退出码 1）：lark-cli docs +create\n503"))]
         text = self.fails(workitem.register, self.lg(replies=down), path)
         self.assertIn("--resume --apply", text)
@@ -1017,10 +1017,10 @@ class StepTest(LedgerCase):
     def test_next_says_who_and_what(self):
         task = self.task()
         text = self.quiet(ledger.next_step, self.lg("preview"), task)
-        self.assertIn("#%s  研究任务·验证  确定目标  复现并测量基线" % task, text)
+        self.assertIn("#%s  研究任务·正式实验  确定目标  复现并测量基线" % task, text)
         self.assertIn("这一步：确定目标（started），负责方：产品 +2", text)
         self.assertIn("待填 成功标准", text)
-        self.assertIn("下一步：准备上下文", text)
+        self.assertIn("下一步：前期调研", text)
         self.assertIn("workitem.py confirm %s --by <会话名>" % task, text)
         self.walk(task, 4)
         text = self.quiet(ledger.next_step, self.lg("preview"), task)
@@ -1036,7 +1036,7 @@ class StepTest(LedgerCase):
         self.assertEqual(self.state(task), "确定目标")
         self.quiet(workitem.confirm, self.lg(), task, "product-p2-01", sets)             # the sequence's +2, any case
         self.quiet(workitem.confirm, self.lg(), task, "研究员", STEPS[1][1])               # the researcher may always
-        self.assertEqual(self.state(task), "准备 PRD 和 Eval Set")
+        self.assertEqual(self.state(task), "定需求和评测集")
 
     def test_the_issuers_and_the_assignees_steps(self):
         self.task()
@@ -1065,13 +1065,13 @@ class StepTest(LedgerCase):
         task = self.task()
         self.walk(task, 7)
         _, text = self.out(workitem.confirm, self.lg("preview"), task, "RnD-p2-01", STEPS[6][1])
-        self.assertIn("预览：会确认 #%s 的“跑 Eval Set”" % task, text)
+        self.assertIn("预览：会确认 #%s 的“执行离线评测”" % task, text)
         _, text = self.out(workitem.rollback, self.lg("preview"), task, "设计实验方案", "第 1 轮不够", decision=self.decision(task))
         self.assertIn("预览：会把 #%s 退回到“设计实验方案”" % task, text)
         self.assertIn("会清空 实验轮次，原值：1", text)
         decision = self.decision()
         self.assertIn("预览：会确认 #%s 的最后一步" % decision, self.out(workitem.archive, self.lg("preview"), decision, moved=True)[1])
-        self.assertEqual((self.state(task), self.state(decision)), ("跑 Eval Set", "已决定"))
+        self.assertEqual((self.state(task), self.state(decision)), ("执行离线评测", "已决定"))
 
     def test_everything_missing_is_named_at_once(self):
         task = self.task()
@@ -1089,14 +1089,14 @@ class StepTest(LedgerCase):
         task = self.task()
         lg = self.lg()
         _, text = self.out(workitem.confirm, lg, task, "Product-p2-01", STEPS[0][1])
-        self.assertIn("确认：#%s “确定目标”完成，现在到“准备上下文”，状态“准备上下文”。" % task, text)
-        self.assertIn("“准备上下文”这一步的负责方：算法 +2。", text)           # whom the scribe tells that the task is theirs now
+        self.assertIn("确认：#%s “确定目标”完成，现在到“前期调研”，状态“前期调研”。" % task, text)
+        self.assertIn("“前期调研”这一步的负责方：算法 +2。", text)           # whom the scribe tells that the task is theirs now
         writes = [argv[1:3] for argv, write, _ in lg.calls if write]
         self.assertEqual(writes, [["workitem", "update"], ["workflow", "transition"]])
         self.assertTrue(self.value(task, "research_task", "成功标准"))
         _, text = self.out(workitem.confirm, self.lg("preview"), task, "Alg-p2-01", STEPS[1][1])
         self.assertIn("将执行：meegle workflow transition", text)
-        self.assertEqual(self.state(task), "准备上下文")
+        self.assertEqual(self.state(task), "前期调研")
 
     def test_a_step_out_of_turn(self):
         task = self.task()
@@ -1131,7 +1131,7 @@ class SignTest(LedgerCase):
         self.assertIn("所属研究任务是 #%s，不是 #%s" % (other, task), refused(self.decision(other)))
         self.assertIn("所属研究任务是空的", refused(self.decision()))
         self.assertIn("工作项 ID 要写成数字", refused("研究员口头同意"))
-        self.assertEqual(self.state(task), "确定假设条件")
+        self.assertEqual(self.state(task), "假设评审")
         good = self.decision(task)
         self.quiet(workitem.archive, self.lg(), good, moved=True)                          # an archived decision still signs
         self.quiet(workitem.confirm, self.lg(), task, "Alg-p2-01", sets + ["hypothesis_signoff=%s" % good])
@@ -1152,8 +1152,8 @@ class SignTest(LedgerCase):
         self.assertIn("流程已经走完", self.quiet(ledger.next_step, self.lg("preview"), task))
 
     def test_the_probe_flow_has_no_signature(self):
-        task = self.task("试探", "算法 +2（Alg-p2-01）")
-        for sets in (["试探问题=错误集中在哪一类样本", "总预算=20"], ["试探记录=" + LINK], ["候选假设=重采样能提高长尾类别的准确率", "去向=转验证"]):
+        task = self.task("探索", "算法 +2（Alg-p2-01）")
+        for sets in (["探索问题=错误集中在哪一类样本", "总预算=20"], ["探索记录=" + LINK], ["候选假设=重采样能提高长尾类别的准确率", "去向=转正式实验"]):
             self.quiet(workitem.confirm, self.lg(), task, "Alg-p2-01", sets)
         self.assertEqual(self.state(task), "已结束")
         self.quiet(workitem.archive, self.lg(), task)
@@ -1169,25 +1169,25 @@ class SpentDecisionTest(LedgerCase):
         self.walk(task, 4)
         text = self.fails(workitem.confirm, self.lg(), task, "Alg-p2-01", STEPS[3][1] + ["假设签字=%s" % early])
         self.assertIn("一条决定只用在它决定时所在的那一步", text)
-        self.assertEqual(self.state(task), "确定假设条件")
+        self.assertEqual(self.state(task), "假设评审")
 
     def test_the_signature_of_step_four_does_not_sign_step_nine(self):
         task = self.task()
         signs = self.walk(task, 9)
         self.assertIn("重新决定", self.fails(workitem.confirm, self.lg(), task, "PMO-p2-01", ["下一步签字=%s" % signs[4]]))
-        self.assertEqual(self.state(task), "下一步讨论")
+        self.assertEqual(self.state(task), "决定下一步")
 
     def test_after_a_rollback_the_old_signature_and_the_rollback_decision_are_spent(self):
         task = self.task()
         signs = self.walk(task, 6)
         back = self.decision(task)
-        self.quiet(workitem.rollback, self.lg(), task, "确定假设条件", "阈值定错了", decision=back)
+        self.quiet(workitem.rollback, self.lg(), task, "假设评审", "阈值定错了", decision=back)
         sets = STEPS[3][1]
         for spent in (signs[4], back):
             self.assertIn("重新决定", self.fails(workitem.confirm, self.lg(), task, "Alg-p2-01", sets + ["假设签字=%s" % spent]))
         self.quiet(workitem.confirm, self.lg(), task, "Alg-p2-01", sets + ["假设签字=%s" % self.decision(task)])
         self.assertEqual(self.state(task), "设计实验方案")
-        self.assertIn("重新决定", self.fails(workitem.rollback, self.lg(), task, "确定假设条件", "再退一次", decision=back))
+        self.assertIn("重新决定", self.fails(workitem.rollback, self.lg(), task, "假设评审", "再退一次", decision=back))
 
 
 class FreezeTest(LedgerCase):
@@ -1200,7 +1200,7 @@ class FreezeTest(LedgerCase):
         task = self.frozen_task()
         self.quiet(workitem.update, self.lg(), task, ["已用预算=30"])                      # not a frozen field
         self.quiet(workitem.confirm, self.lg(), task, *STEPS[7])
-        self.assertEqual(self.state(task), "下一步讨论")
+        self.assertEqual(self.state(task), "决定下一步")
 
     def test_a_change_after_signing_stops_the_conclusion(self):
         task = self.frozen_task()
@@ -1227,12 +1227,12 @@ class FreezeTest(LedgerCase):
         self.assertIn("不合格", self.fails(workitem.confirm, self.lg(), task, *STEPS[7], decision=self.decision(task, result="退回")))
         _, text = self.out(workitem.confirm, self.lg(), task, *STEPS[7], decision=self.decision(task))
         self.assertIn("冻结的字段在签字后改过（1 处），研究员已用决策", text)
-        self.assertEqual(self.state(task), "下一步讨论")
+        self.assertEqual(self.state(task), "决定下一步")
 
     def test_signing_again_starts_a_new_freeze(self):
         task = self.frozen_task()
         self.fake.tick(120000)
-        self.quiet(workitem.rollback, self.lg(), task, "确定假设条件", "阈值定高了", decision=self.decision(task))
+        self.quiet(workitem.rollback, self.lg(), task, "假设评审", "阈值定高了", decision=self.decision(task))
         self.assertEqual(self.value(task, "research_task", "总预算"), "")               # the undone steps start empty
         self.fake.tick(120000)
         signer = self.decision(task)
@@ -1241,7 +1241,7 @@ class FreezeTest(LedgerCase):
             self.quiet(workitem.confirm, self.lg(), task, by, sets)
         self.fake.tick(120000)
         self.quiet(workitem.confirm, self.lg(), task, *STEPS[7])                          # 150 was signed: nothing changed since
-        self.assertEqual(self.state(task), "下一步讨论")
+        self.assertEqual(self.state(task), "决定下一步")
 
 
 class RollbackTest(LedgerCase):
@@ -1553,7 +1553,7 @@ class FieldsAndQueriesTest(LedgerCase):
     def test_get_shows_fields_by_name(self):
         task = self.task()
         text = self.quiet(ledger.digest, self.lg("preview"), task)
-        self.assertIn("#%s  研究任务·验证  确定目标  复现并测量基线" % task, text)
+        self.assertIn("#%s  研究任务·正式实验  确定目标  复现并测量基线" % task, text)
         self.assertIn("  序列（sequence）：产品", text)
         self.assertIn("  发出方（sender）：Product-p2-01", text)
 
@@ -1564,7 +1564,7 @@ class FieldsAndQueriesTest(LedgerCase):
         task = self.task()
 
         def page(line):
-            return {"data": {"document": {"content": '<docx><ul><li id="b1">流程：验证</li><li id="b2">%s</li></ul><h2 id="h1">目标</h2></docx>' % line}}}
+            return {"data": {"document": {"content": '<docx><ul><li id="b1">流程：正式实验</li><li id="b2">%s</li></ul><h2 id="h1">目标</h2></docx>' % line}}}
         lg = self.lg(replies=[(("docs", "+fetch"), page("关联工作项：待建；来源工作项 #2100")), (("docs", "+update"), {})])
         self.quiet(docs.relink, lg, task)
         argv, _, stdin = next(c for c in lg.calls if "+update" in c[0])
@@ -1648,7 +1648,7 @@ class DocumentsTest(LedgerCase):
     """Documents, receipts and knowledge-base nodes: what a registration leaves behind when a step fails."""
 
     def sheet(self, name="t.md"):
-        return self.write(SHEET % ("验证", "产品 +2（Product-p2-01）"), name)
+        return self.write(SHEET % ("正式实验", "产品 +2（Product-p2-01）"), name)
 
     def ids(self):
         with open(os.path.join(self.tmp, "feishu", "ids.json"), encoding="utf-8") as f:
@@ -1856,14 +1856,14 @@ class AttachTest(LedgerCase):
         self.quiet(workitem.confirm, self.lg(), task, "Product-p2-01", STEPS[0][1])
         before = len(self.fake.docs)
         lg = self.lg()
-        _, text = self.out(workitem.confirm, lg, task, "Alg-p2-01", ["上下文文档=" + self.local()])
-        self.assertIn("已上传“上下文文档：上下文整理”：", text)
-        self.assertIn("“准备上下文”完成", text)
+        _, text = self.out(workitem.confirm, lg, task, "Alg-p2-01", ["调研文档=" + self.local()])
+        self.assertIn("已上传“调研文档：上下文整理”：", text)
+        self.assertIn("“前期调研”完成", text)
         self.assertEqual(len(self.fake.docs), before + 1)
         argv, _, stdin = next(c for c in lg.calls if c[1] and "+create" in c[0])
-        self.assertIn("上下文文档：上下文整理", argv)
+        self.assertIn("调研文档：上下文整理", argv)
         self.assertEqual(stdin, "基线的公开数字和三篇相关工作。\n")                # the heading became the title
-        link = self.value(task, "research_task", "上下文文档")
+        link = self.value(task, "research_task", "调研文档")
         self.assertRegex(str(link), r"^https://[^/]+/wiki/\w+")
         writes = [a[1:3] for a, w, _ in lg.calls if w]
         self.assertEqual(writes, [["docs", "+create"], ["workitem", "update"], ["workflow", "transition"]])
@@ -1918,7 +1918,7 @@ class AttachTest(LedgerCase):
         self.assertIn("是空的", self.fails(workitem.update, self.lg(), task, ["规格=@spec/empty.md"]))
         self.quiet(workitem.update, self.lg(), task, ["成功标准=" + self.local("十个节点都确认到归档\n", "goal.txt")])
         self.assertEqual(self.value(task, "research_task", "成功标准"), "十个节点都确认到归档")   # a text field still takes the text
-        path = self.write(SHEET % ("验证", "产品 +2（Product-p2-01）"), "second.md")
+        path = self.write(SHEET % ("正式实验", "产品 +2（Product-p2-01）"), "second.md")
         self.assertIn("登记时还没有主文档", self.fails(workitem.register, self.lg(), path, pairs=["规格=" + self.local(name="spec.md")]))
 
 
@@ -2328,7 +2328,7 @@ class DecisionStateTest(LedgerCase):
             PERMISSION, "bad.md", edit=version(4, "2026-11-24", lambda t: t.replace("## 约束的出处", "## 限制"))), "x"))
         request = self.quiet(workitem.register, self.lg(), self.draft(ASSIGN, "a.md"))
         self.assertIn("包类型不变才能修订", self.fails(docs.revise, self.lg(), request, self.draft(PERMISSION, "v4.md", edit=version(2, "2026-11-24")), "x"))
-        self.assertIn("修订稿是研究任务单", self.fails(docs.revise, self.lg(), request, self.write(SHEET % ("验证", "产品 +2（Product-p2-01）"), "s.md"), "x"))
+        self.assertIn("修订稿是研究任务单", self.fails(docs.revise, self.lg(), request, self.write(SHEET % ("正式实验", "产品 +2（Product-p2-01）"), "s.md"), "x"))
         self.assertIn("交付包不是主文档", self.fails(docs.revise, self.lg(), request, self.draft(DELIVERY, "dl.md", edit=lambda t: t.replace(
             "第 1 版（2026-11-02）", "第 2 版（2026-11-03）")), "x"))
         self.quiet(workitem.confirm, self.lg(), item, "研究员", ["决定内容=本机 Docker", "决定人=研究员"], option="本机 Docker")
@@ -2633,7 +2633,7 @@ class RunConditionsTest(LedgerCase):
     registering one that names a concrete choice without a decision ID prints a hint."""
 
     def test_a_concrete_choice_without_a_decision_gets_a_hint(self):
-        sheet = SHEET % ("试探", "算法 +2（Alg-p2-01）") + "\n## 资源上限\n- 总预算初值：50 美元\n- 执行环境：%s\n- 计算资源：%s\n"
+        sheet = SHEET % ("探索", "算法 +2（Alg-p2-01）") + "\n## 资源上限\n- 总预算初值：50 美元\n- 执行环境：%s\n- 计算资源：%s\n"
         _, out = self.out(workitem.register, self.lg(), self.write(sheet % ("本机 Docker", "待研究员确认"), "t1.md"))
         self.assertIn("提示：研究任务单“资源上限”里的执行环境写了“本机 Docker”，没有定下它的决策 ID：执行环境要进决策队列", out)
         self.assertNotIn("计算资源写了", out)

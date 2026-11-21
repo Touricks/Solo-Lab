@@ -3075,11 +3075,11 @@
      "option": [
       {
        "option_id": "11235188",
-       "option_name": "验证"
+       "option_name": "正式实验"
       },
       {
        "option_id": "11236325",
-       "option_name": "试探"
+       "option_name": "探索"
       }
      ]
     },
@@ -3275,7 +3275,7 @@
       },
       {
        "option_id": "56CdFkp8b",
-       "option_name": "试探"
+       "option_name": "探索"
       },
       {
        "option_id": "V5jV9qfKE",
@@ -3295,15 +3295,15 @@
       },
       {
        "option_id": "GtQz3_bdd",
-       "option_name": "准备上下文"
+       "option_name": "前期调研"
       },
       {
        "option_id": "pVn-xu0DM",
-       "option_name": "准备 PRD 和 Eval Set"
+       "option_name": "定需求和评测集"
       },
       {
        "option_id": "0fI30NjvV",
-       "option_name": "确定假设条件"
+       "option_name": "假设评审"
       },
       {
        "option_id": "X1VMyagOQ",
@@ -3315,7 +3315,7 @@
       },
       {
        "option_id": "h6mU-1_4z",
-       "option_name": "跑 Eval Set"
+       "option_name": "执行离线评测"
       },
       {
        "option_id": "ySCnAl7N-",
@@ -3323,7 +3323,7 @@
       },
       {
        "option_id": "kupdRuD6j",
-       "option_name": "下一步讨论"
+       "option_name": "决定下一步"
       }
      ]
     },
@@ -3419,7 +3419,7 @@
     },
     {
      "field_key": "field_e0ec9b",
-     "field_name": "上下文文档",
+     "field_name": "调研文档",
      "field_type": "link"
     },
     {
@@ -3434,7 +3434,7 @@
     },
     {
      "field_key": "field_3b8c70",
-     "field_name": "试探记录",
+     "field_name": "探索记录",
      "field_type": "link"
     },
     {
@@ -3464,7 +3464,7 @@
     },
     {
      "field_key": "field_a91c48",
-     "field_name": "试探问题",
+     "field_name": "探索问题",
      "field_type": "text"
     },
     {
@@ -3513,7 +3513,7 @@
      "option": [
       {
        "option_id": "l0b5wpvj1",
-       "option_name": "转验证"
+       "option_name": "转正式实验"
       },
       {
        "option_id": "gilb_h58a",
@@ -3634,7 +3634,7 @@
    "--project-key",
    "6af529535111c30e59b3bc9b",
    "--mql",
-   "SELECT `work_item_id` FROM `6af529535111c30e59b3bc9b`.`6af52adffa8782e34e4a97e7` WHERE `template` = '验证' LIMIT 1"
+   "SELECT `work_item_id` FROM `6af529535111c30e59b3bc9b`.`6af52adffa8782e34e4a97e7` WHERE `template` = '正式实验' LIMIT 1"
   ],
   "out": {
    "data": {
@@ -3790,7 +3790,7 @@
       }
      },
      "basic": {
-      "name": "准备上下文",
+      "name": "前期调研",
       "next_node_keys": [
        "prep_prd_eval"
       ],
@@ -3804,7 +3804,7 @@
      "form_items": [
       {
        "field_key": "field_e0ec9b",
-       "field_name": "上下文文档",
+       "field_name": "调研文档",
        "field_type": "link",
        "form_item_type": "field",
        "is_required": true,
@@ -3861,7 +3861,7 @@
       }
      },
      "basic": {
-      "name": "下一步讨论",
+      "name": "决定下一步",
       "next_node_keys": [
        "archive"
       ],
@@ -4001,7 +4001,7 @@
       }
      },
      "basic": {
-      "name": "跑 Eval Set",
+      "name": "执行离线评测",
       "next_node_keys": [
        "conclude"
       ],
@@ -4291,7 +4291,7 @@
       }
      },
      "basic": {
-      "name": "准备 PRD 和 Eval Set",
+      "name": "定需求和评测集",
       "next_node_keys": [
        "set_hypothesis"
       ],
@@ -4371,7 +4371,7 @@
       }
      },
      "basic": {
-      "name": "确定假设条件",
+      "name": "假设评审",
       "next_node_keys": [
        "design_experiment"
       ],
@@ -4461,7 +4461,7 @@
    "--project-key",
    "6af529535111c30e59b3bc9b",
    "--mql",
-   "SELECT `work_item_id` FROM `6af529535111c30e59b3bc9b`.`6af52adffa8782e34e4a97e7` WHERE `template` = '试探' LIMIT 1"
+   "SELECT `work_item_id` FROM `6af529535111c30e59b3bc9b`.`6af52adffa8782e34e4a97e7` WHERE `template` = '探索' LIMIT 1"
   ],
   "out": {
    "data": {
@@ -4567,7 +4567,7 @@
       },
       {
        "field_key": "field_a91c48",
-       "field_name": "试探问题",
+       "field_name": "探索问题",
        "field_type": "text",
        "form_item_type": "field",
        "is_required": true,
@@ -4624,7 +4624,7 @@
       }
      },
      "basic": {
-      "name": "试探",
+      "name": "探索",
       "next_node_keys": [
        "propose_hypothesis"
       ],
@@ -4638,7 +4638,7 @@
      "form_items": [
       {
        "field_key": "field_3b8c70",
-       "field_name": "试探记录",
+       "field_name": "探索记录",
        "field_type": "link",
        "form_item_type": "field",
        "is_required": true,

@@ -104,13 +104,13 @@ class FeishuTest(BindingCase):
         self.assertEqual(sorted(m["types"]), sorted(orgspec.Contract(orgspec.OrgSpec()).types()))
         self.assertEqual(ids["lark"]["researcher_open_id"], "ou_researcher")
         self.assertEqual(json.loads(self.read("feishu/space.json"))["types"], SNAP["types"])
-        self.assertIn("| 4 | 确定假设条件 | 算法 | ", self.read("feishu/space.md"))
+        self.assertIn("| 4 | 假设评审 | 算法 | ", self.read("feishu/space.md"))
         doc = self.read("feishu/binding.md")
         self.assertIn("## 要处理的问题\n\n无。", doc)
         self.assertIn("docs.py ensure-node all", doc)                # the knowledge base is still to be built
         phases = self.read("org/phases.md")
-        self.assertIn("### 研究任务：验证", phases)
-        self.assertIn("### 研究任务：试探", phases)
+        self.assertIn("### 研究任务：正式实验", phases)
+        self.assertIn("### 研究任务：探索", phases)
         self.assertNotIn("### 决策", phases)                           # the main line only
         self.assertIn("回退由研究员决定", phases)
         self.assertFalse(self.has("feishu/migration.md") or self.has("feishu/field-dictionary.json"))

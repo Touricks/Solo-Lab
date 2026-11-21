@@ -391,7 +391,7 @@ def run_conditions_hints(d):
         if not value or orgspec.placeholder(value) or NOT_YET.match(value) or DECISION_REF.search(value):
             continue
         hints.append("提示：研究任务单“资源上限”里的%s写了“%s”，没有定下它的决策 ID：%s要进决策队列。请发出方写决策包交研究员定，"
-                     "试探任务也一样；定了以后把决策 ID 写进这一行，比如“%s（决策 #<ID>）”，没定之前写“待研究员确认”。" % (row, value, row, value))
+                     "探索任务也一样；定了以后把决策 ID 写进这一行，比如“%s（决策 #<ID>）”，没定之前写“待研究员确认”。" % (row, value, row, value))
     return hints
 
 

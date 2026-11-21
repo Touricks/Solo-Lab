@@ -65,7 +65,7 @@ python3.12 -I <插件目录>/scripts/space.py feishu --target <项目目录> --l
 | 槽位 | 约定里叫什么 | 空间里的候选 | 依据 | 参数 |
 | --- | --- | --- | --- | --- |
 | decision.sign_result | 签字结果，单选，选项批准、退回 | “批不批”，单选，选项批准、退回 | 类型和选项相同，只在决策上有 | --map decision.sign_result=批不批 |
-| research_task | 研究任务，主线 | “研究课题”，系统标识 topic | 有验证、试探两个流程 | --map research_task=研究课题 |
+| research_task | 研究任务，主线 | “研究课题”，系统标识 topic | 有正式实验、探索两个流程 | --map research_task=研究课题 |
 ```
 
 **预览，再写入。** 研究员确认后带着 `--map` 再预览一遍，问题少了、绑定数满了，再加 `--apply`：

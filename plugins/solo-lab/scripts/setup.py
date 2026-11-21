@@ -620,7 +620,7 @@ def common_role_lines(spec, seq, rank, name, pol, task, policy):
         writable, code_list(task["protected_paths"]), "改动要研究员确认" if name in policy["h_writers"] else "不能改"))
     for doc in docs:
         how = "" if doc == "spec/requirements.md" else "用技能 `solo-lab:spec` 访谈研究员后写，每条标来源；"
-        lines.append("- 你负责起草%s `%s`：%s验证流程第 4 步研究员签字时，它和别的前四步产出一起冻结。" % (SPEC_DOC_NAMES[doc], doc, how))
+        lines.append("- 你负责起草%s `%s`：%s正式实验流程第 4 步研究员签字时，它和别的前四步产出一起冻结。" % (SPEC_DOC_NAMES[doc], doc, how))
     return lines
 
 
@@ -705,7 +705,7 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
         lines.append("- 研究任务走到你们序列负责的那一步时，这一步归你推进；书记员确认上一步以后会用【%s】告诉你。先用 `python3.12 -I .claude/solo-lab/bin/ledger.py next <研究任务 ID>` 看这一步必填什么，"
                      "序列内的事委托 +1，要别的序列配合就发跨序列的需求包。要填链接的产出有两条路。你自己写的（和研究员谈出来的规格、需求文档这一类）：写在本地，"
                      "登记请求里把字段写成 `<字段>=@<本地文件>`，书记员上传到研究任务单下面并填上链接；研究员签字前要看的，先请书记员用 "
-                     "`workitem.py update <任务 ID> --set <字段>=@<本地文件>` 传上去，把链接写进决策包。委托下去做的（要查、要跑、要整理的上下文文档、实验方案、试探记录这一类）："
+                     "`workitem.py update <任务 ID> --set <字段>=@<本地文件>` 传上去，把链接写进决策包。委托下去做的（要查、要跑、要整理的调研文档、实验方案、探索记录这一类）："
                      "走本序列的一条同序列需求，验收通过以后用承接方那份交付包文档的链接，它在那条需求的“交付包”字段里。产出齐了，给 `%s` 发【%s】请它确认节点，写明各必填字段的值。"
                      "正式分数只认质量序列在冻结的 Eval Set 上跑出的。" % (spec.term("msg", "notice"), scribe, reg))
     else:
@@ -1203,7 +1203,7 @@ def first_task_sheet(task):
     registers it while the pool opens; the entry's interview replaces it afterwards."""
     return "\n".join([
         "# 研究任务单：%s" % task["name"], "",
-        "- 流程：验证", "- 发出方：研究员", "- 关联工作项：待建", "",
+        "- 流程：正式实验", "- 发出方：研究员", "- 关联工作项：待建", "",
         "## 目标", task["description"], "",
         "## 成功标准", "待定：立项访谈以后写。", "",
         "## 范围", "- 包含：待定", "- 不做：待定", "- 停止条件：待定", "",

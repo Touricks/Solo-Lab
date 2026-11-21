@@ -1906,11 +1906,11 @@
           "options": [
             {
               "id": "11235188",
-              "name": "验证"
+              "name": "正式实验"
             },
             {
               "id": "11236325",
-              "name": "试探"
+              "name": "探索"
             }
           ]
         },
@@ -2102,7 +2102,7 @@
             },
             {
               "id": "56CdFkp8b",
-              "name": "试探"
+              "name": "探索"
             },
             {
               "id": "V5jV9qfKE",
@@ -2122,15 +2122,15 @@
             },
             {
               "id": "GtQz3_bdd",
-              "name": "准备上下文"
+              "name": "前期调研"
             },
             {
               "id": "pVn-xu0DM",
-              "name": "准备 PRD 和 Eval Set"
+              "name": "定需求和评测集"
             },
             {
               "id": "0fI30NjvV",
-              "name": "确定假设条件"
+              "name": "假设评审"
             },
             {
               "id": "X1VMyagOQ",
@@ -2142,7 +2142,7 @@
             },
             {
               "id": "h6mU-1_4z",
-              "name": "跑 Eval Set"
+              "name": "执行离线评测"
             },
             {
               "id": "ySCnAl7N-",
@@ -2150,7 +2150,7 @@
             },
             {
               "id": "kupdRuD6j",
-              "name": "下一步讨论"
+              "name": "决定下一步"
             }
           ]
         },
@@ -2249,7 +2249,7 @@
         },
         {
           "field_key": "field_e0ec9b",
-          "name": "上下文文档",
+          "name": "调研文档",
           "field_type": "link"
         },
         {
@@ -2264,7 +2264,7 @@
         },
         {
           "field_key": "field_3b8c70",
-          "name": "试探记录",
+          "name": "探索记录",
           "field_type": "link"
         },
         {
@@ -2294,7 +2294,7 @@
         },
         {
           "field_key": "field_a91c48",
-          "name": "试探问题",
+          "name": "探索问题",
           "field_type": "text"
         },
         {
@@ -2343,7 +2343,7 @@
           "options": [
             {
               "id": "l0b5wpvj1",
-              "name": "转验证"
+              "name": "转正式实验"
             },
             {
               "id": "gilb_h58a",
@@ -2414,7 +2414,7 @@
         },
         {
           "id": "56CdFkp8b",
-          "name": "试探"
+          "name": "探索"
         },
         {
           "id": "V5jV9qfKE",
@@ -2434,15 +2434,15 @@
         },
         {
           "id": "GtQz3_bdd",
-          "name": "准备上下文"
+          "name": "前期调研"
         },
         {
           "id": "pVn-xu0DM",
-          "name": "准备 PRD 和 Eval Set"
+          "name": "定需求和评测集"
         },
         {
           "id": "0fI30NjvV",
-          "name": "确定假设条件"
+          "name": "假设评审"
         },
         {
           "id": "X1VMyagOQ",
@@ -2454,7 +2454,7 @@
         },
         {
           "id": "h6mU-1_4z",
-          "name": "跑 Eval Set"
+          "name": "执行离线评测"
         },
         {
           "id": "ySCnAl7N-",
@@ -2462,12 +2462,12 @@
         },
         {
           "id": "kupdRuD6j",
-          "name": "下一步讨论"
+          "name": "决定下一步"
         }
       ],
       "flows": {
         "11235188": {
-          "name": "验证",
+          "name": "正式实验",
           "read_from": "7166920436",
           "version": 11,
           "nodes": [
@@ -2492,7 +2492,7 @@
             },
             {
               "key": "prep_context",
-              "name": "准备上下文",
+              "name": "前期调研",
               "prev": [
                 "started"
               ],
@@ -2505,7 +2505,7 @@
               "required": [
                 {
                   "field_key": "field_e0ec9b",
-                  "name": "上下文文档",
+                  "name": "调研文档",
                   "field_type": "link"
                 }
               ],
@@ -2513,7 +2513,7 @@
             },
             {
               "key": "prep_prd_eval",
-              "name": "准备 PRD 和 Eval Set",
+              "name": "定需求和评测集",
               "prev": [
                 "prep_context"
               ],
@@ -2539,7 +2539,7 @@
             },
             {
               "key": "set_hypothesis",
-              "name": "确定假设条件",
+              "name": "假设评审",
               "prev": [
                 "prep_prd_eval"
               ],
@@ -2627,7 +2627,7 @@
             },
             {
               "key": "run_eval",
-              "name": "跑 Eval Set",
+              "name": "执行离线评测",
               "prev": [
                 "build_platform"
               ],
@@ -2674,7 +2674,7 @@
             },
             {
               "key": "next_step",
-              "name": "下一步讨论",
+              "name": "决定下一步",
               "prev": [
                 "conclude"
               ],
@@ -2709,7 +2709,7 @@
           ]
         },
         "11236325": {
-          "name": "试探",
+          "name": "探索",
           "read_from": "7166791061",
           "version": 3,
           "nodes": [
@@ -2731,7 +2731,7 @@
                 },
                 {
                   "field_key": "field_a91c48",
-                  "name": "试探问题",
+                  "name": "探索问题",
                   "field_type": "text"
                 }
               ],
@@ -2739,7 +2739,7 @@
             },
             {
               "key": "probe",
-              "name": "试探",
+              "name": "探索",
               "prev": [
                 "started"
               ],
@@ -2752,7 +2752,7 @@
               "required": [
                 {
                   "field_key": "field_3b8c70",
-                  "name": "试探记录",
+                  "name": "探索记录",
                   "field_type": "link"
                 }
               ],

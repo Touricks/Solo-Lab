@@ -95,7 +95,7 @@ class SnapshotTest(SpaceCase):
     def test_the_fields_and_states_of_the_main_line_are_read(self):
         task = self.type("research_task")
         self.assertEqual(len(task["fields"]), 50)
-        self.assertEqual([s["name"] for s in task["states"]][-2:], ["得出结论", "下一步讨论"])
+        self.assertEqual([s["name"] for s in task["states"]][-2:], ["得出结论", "决定下一步"])
 
     def test_a_paged_read_goes_on_while_the_space_reports_more(self):
         pages = {"1": {"list": ["a", "b"], "pagination": {"has_more": True}},
@@ -111,7 +111,7 @@ class SnapshotTest(SpaceCase):
         self.assertIs(last, pages["2"])
 
     def test_flows_are_in_order_with_roles_and_required_items(self):
-        verify = self.flow("research_task", "验证")
+        verify = self.flow("research_task", "正式实验")
         self.assertEqual([n["key"] for n in verify["nodes"]],
                          ["started", "prep_context", "prep_prd_eval", "set_hypothesis", "design_experiment",
                           "build_platform", "run_eval", "conclude", "next_step", "archive"])
@@ -120,8 +120,8 @@ class SnapshotTest(SpaceCase):
         sign = verify["nodes"][3]
         self.assertEqual(sorted(r["name"] for r in sign["required"]), ["假设签字", "总预算", "波动估计", "规格", "规格版本"])
         self.assertEqual(sum(len(n["required"]) for n in verify["nodes"]), 16)
-        probe = self.flow("research_task", "试探")
-        self.assertEqual([n["name"] for n in probe["nodes"]], ["定方向", "试探", "提出假设", "归档"])
+        probe = self.flow("research_task", "探索")
+        self.assertEqual([n["name"] for n in probe["nodes"]], ["定方向", "探索", "提出假设", "归档"])
         self.assertEqual([len(f["nodes"]) for t in self.snap["types"].values() for f in t["flows"].values()], [2, 2, 4, 5, 10, 4])
 
     def test_aliases_come_from_the_new_item_page(self):
@@ -131,17 +131,17 @@ class SnapshotTest(SpaceCase):
 
     def test_a_flow_nobody_used_is_listed_without_nodes(self):
         def no_probe(argv, out):
-            if argv[:2] == ["workitem", "query"] and "'试探'" in argv[-1]:
+            if argv[:2] == ["workitem", "query"] and "'探索'" in argv[-1]:
                 return {"data": {}, "list": None}
             return out
         snap, _ = self.read(no_probe)
         flows = {f["name"]: f for f in self.type("research_task", snap)["flows"].values()}
-        self.assertIsNone(flows["试探"]["nodes"])
-        self.assertEqual(len(flows["验证"]["nodes"]), 10)
+        self.assertIsNone(flows["探索"]["nodes"])
+        self.assertEqual(len(flows["正式实验"]["nodes"]), 10)
         binding, problems = space.bind(self.contract, snap)
         more, notes = space.check(self.contract, snap, binding)
         self.assertEqual(problems + more, [])
-        self.assertTrue(any("试探" in n and "读不到" in n for n in notes))
+        self.assertTrue(any("探索" in n and "读不到" in n for n in notes))
         self.assertIn("还没有工作项", space.flows_md(snap))
 
     def test_snapshot_keeps_structure_only(self):
@@ -281,7 +281,7 @@ class CheckTest(SpaceCase):
 
     def test_a_node_role_outside_the_contract(self):
         self.type("research_task")["roles"].append({"role_id": "quality", "role_name": "质量"})
-        self.flow("research_task", "验证")["nodes"][6]["roles"] = ["quality"]
+        self.flow("research_task", "正式实验")["nodes"][6]["roles"] = ["quality"]
         problems, _ = self.check()
         self.assertEqual([p[1] for p in problems], ["负责角色 quality 不在约定里"])
 
@@ -297,18 +297,18 @@ class CheckTest(SpaceCase):
         self.assertTrue(any("来源渠道" in n and "--set" in n for n in notes))
 
     def test_the_freeze_needs_its_two_fields_in_a_form(self):
-        for node in self.flow("research_task", "验证")["nodes"]:
+        for node in self.flow("research_task", "正式实验")["nodes"]:
             node["required"] = [r for r in node["required"] if r["name"] != "结论"]
         problems, _ = self.check()
         self.assertEqual([p[0] for p in problems], ["研究任务的“结论”"])
-        self.flow("research_task", "试探")["nodes"] = None            # a flow not read yet may be the one that holds it
+        self.flow("research_task", "探索")["nodes"] = None            # a flow not read yet may be the one that holds it
         self.assertEqual(self.check()[0], [])
 
     def test_the_freeze_is_not_judged_from_the_probe_flow_alone(self):
-        self.flow("research_task", "验证")["nodes"] = None
+        self.flow("research_task", "正式实验")["nodes"] = None
         problems, notes = self.check()
         self.assertEqual(problems, [])
-        self.assertTrue(any("验证" in n for n in notes))
+        self.assertTrue(any("正式实验" in n for n in notes))
 
     def test_a_type_without_a_flow(self):
         self.type("feedback")["flows"] = {}
@@ -326,18 +326,18 @@ class DiffTest(SpaceCase):
         task["fields"].append({"field_key": "field_new", "name": "复现种子", "field_type": "text"})
         task["fields"] = [f for f in task["fields"] if f["name"] != "去向"]
         next(f for f in task["fields"] if f["name"] == "结论")["options"].pop()
-        next(f for f in task["flows"].values() if f["name"] == "验证")["nodes"][0]["required"] = []
+        next(f for f in task["flows"].values() if f["name"] == "正式实验")["nodes"][0]["required"] = []
         del new["types"][self.type_key("feedback")]
         lines = space.diff(self.snap, new)
-        for part in ("类型“反馈”没有了", "多了字段 复现种子", "少了字段 去向", "字段“结论”的选项变了", "流程“验证”的节点、负责角色或必填项变了"):
+        for part in ("类型“反馈”没有了", "多了字段 复现种子", "少了字段 去向", "字段“结论”的选项变了", "流程“正式实验”的节点、负责角色或必填项变了"):
             self.assertTrue(any(part in line for line in lines), part)
 
 
 class TextTest(SpaceCase):
     def test_flow_tables(self):
         text = space.flows_md(self.snap)
-        self.assertIn("### 研究任务：验证", text)
-        self.assertIn("| 4 | 确定假设条件 | 算法 | ", text)
+        self.assertIn("### 研究任务：正式实验", text)
+        self.assertIn("| 4 | 假设评审 | 算法 | ", text)
         self.assertIn("### 决策\n", text)                                    # one flow: the type's name is enough
         binding, _ = self.bind()
         doc = space.to_markdown(self.snap, self.contract, binding)
@@ -395,7 +395,7 @@ class CliTest(SpaceCase):
         code, out = self.run_cli("check", "--target", self.tmp)
         self.assertEqual(code, 0)
         self.assertIn("约定核对（contract_version 1）：通过", out)
-        self.assertIn("研究任务：验证", self.run_cli("show", "--target", self.tmp)[1])
+        self.assertIn("研究任务：正式实验", self.run_cli("show", "--target", self.tmp)[1])
 
     def test_check_names_what_is_missing(self):
         task = self.type("research_task")
@@ -498,11 +498,12 @@ class ContractTest(unittest.TestCase):
             problems = self.contract(change).validate()
             self.assertTrue(any(part in p for p in problems), (part, problems))
 
-    def test_the_template_is_2_2_0(self):
-        """A space is made from template 2.2.0 (plugin 1.0.5 on): published as a new template with a new link;
+    def test_the_template_is_2_3_0(self):
+        """A space is made from template 2.3.0 (plugin 1.1.0 on): 2.2.0 with the research task's flows, six steps,
+        three fields and one option renamed. 2.2.0 was published as a new template with a new link (plugin 1.0.5 on);
         2.1.0 keeps its own link for plugin 1.0.4 and earlier."""
         c = orgspec.Contract(orgspec.OrgSpec())
-        self.assertEqual(c.template, {"name": "Solo-Lab 科研模版", "version": "2.2.0",
+        self.assertEqual(c.template, {"name": "Solo-Lab 科研模版", "version": "2.3.0",
                                       "url": "https://project.feishu.cn/templates/detail/67ba9ba510e046fe9bd35be99b883f26"})
 
     def test_former_state_names_are_checked(self):
