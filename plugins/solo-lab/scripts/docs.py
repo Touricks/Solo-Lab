@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Write package documents (Feishu Docs). The commands print what they would do first; nothing is
-written without --apply.
+written without --apply. Every session may run this script: a document is written by the session that
+answers for it, and each command holds the session it runs in against the document's owner
+(ledger_core.must_be). Nothing here writes a work item: what a new version changes on its work item is
+printed as the request to send to the scribe.
 
     docs.py revise <ID> <draft> --note N    the next version of a 需求包 or 决策包: the main document's
                                             opening up to 状态包 replaced in place, a line in 交接记录
@@ -27,6 +30,10 @@ import project_paths  # noqa: E402
 import space  # noqa: E402
 import ledger_core as core  # noqa: E402
 
+SCRIBE_ROLE = "pmo-scribe"                    # the skeleton of knowledge-base nodes is the scribe's: no session's document
+STATUS_ROLES = ("pmo-router", "pmo-p2")       # who keeps a research task's 状态包, besides the document's owner
+
+
 def last_block_before(xml, end_id):
     """Id of the last top-level block before end_id in a range fragment.
 
@@ -51,7 +58,10 @@ def last_block_before(xml, end_id):
 
 
 def status_block(lg, item_id, path):
-    url = lg.doc_url(item_id)
+    it = lg.item(item_id)
+    names, seq, owner = core.doc_owner(lg, it)
+    core.must_be(lg, "换 #%s 的状态包" % item_id, names=names, roles=STATUS_ROLES, seq=seq, why="状态包归 %s、路由或入口写" % owner)
+    url = lg.doc_url(item_id, it)
     with open(path, encoding="utf-8") as f:
         content = f.read()
     if not content.lstrip().startswith("## 状态包"):
@@ -116,14 +126,16 @@ def revise(lg, item_id, path, note):
     “<标签> 第 N 版（日期）：<改了什么>”. The document keeps its link and identity; earlier versions stay in
     the document's history. Checked first: the draft passes the package check, its type and relation are the
     item's, its version is the previous one plus one, a decision is still 待决定 and any other item is not
-    closed; the item's 紧急程度 (a request's 截止时间) is read too, and one the space has no option for is
-    skipped with a reminder, as register does, and so are a decision's 执行方 and 研究员要做的事 where the
-    space has those fields (header_fields). A draft copied from the main document has no title line: the
-    item keeps the title it has. Then, in this order, the fields are written, the document's opening is
-    replaced and the line is added to 交接记录, unless it is there already; the receipt and the local decision
-    state follow last. A step that fails says what is already written; the same command run again goes on
-    from there and adds no second line. Nothing is sent to the researcher: the queue shows the new version
-    when they come."""
+    closed; the session is the document's owner (doc_owner). A draft copied from the main document has no
+    title line: the item keeps the title it has. Then the document's opening is replaced and the line is added
+    to 交接记录, unless it is there already; the receipt and the local decision state follow last. A step that
+    fails says what is already written; the same command run again goes on from there and adds no second
+    line. The work item is not written here (1.1.0: only the scribe writes work items). What this version
+    changes on it is printed as one `workitem.py update` for the scribe: the item's name, 紧急程度 (a
+    request's 截止时间), a decision's 执行方 and 研究员要做的事 where the space has those fields, a sheet's
+    发出方 and 序列, 来源工作项; a value the item holds already is left out, one the field does not take is
+    skipped with a reminder. Nothing is sent to the researcher: the queue shows the new version when they
+    come."""
     spec = lg.spec
     if not (note or "").strip():
         raise core.LedgerError("修订要写改了什么：--note '<改了什么>'，它会记进交接记录")
@@ -141,6 +153,8 @@ def revise(lg, item_id, path, note):
     if m and not core.is_placeholder(value) and not re.fullmatch(r"#?%s|\[#?%s\]\(\S+\)" % (item_id, item_id), value):
         raise core.LedgerError("修订稿的“关联工作项”写的是“%s”，要修订的是 #%s：写“#%s”，或者照新草稿写“待建”" % (value, item_id, item_id))
     it = lg.item(item_id)
+    names, seq, owner = core.doc_owner(lg, it, d)
+    core.must_be(lg, "修订 #%s 的主文档" % item_id, names=names, seq=seq, why="这份文档归 %s 写，请它来修订" % owner)
     rec = core.receipt_of(lg, item_id)
     if not core.title_of(d.text):                      # copied from the main document, which has no title line: the title stays
         d.task = rec.get("title") or re.split(r"[：:]", (it or {}).get("name") or "", 1)[-1].strip() or d.task
@@ -188,35 +202,37 @@ def revise(lg, item_id, path, note):
     name, title = core.naming(spec, d, sheet) if core.title_of(d.text) else (None, None)
     title = title.replace("<工作项 ID>", str(item_id)) if title else None
     kinds = core.receipt_kind(spec, wid, d)
-    updates = []                                  # field values are read before anything is written
-    if wid == "decision" and kinds.get("urgency"):
-        wanted = ("urgency", kinds["urgency"])
-    elif wid != "decision" and "due" in lg.contract.slots(wid, "fields") and core.utc_noon_ms(d.header.get("回复期限", "")):
-        wanted = ("due", d.header["回复期限"])
-    else:
-        wanted = None
-    if wanted:
+    asks = []                                     # (field name, value) for the scribe: what the item does not hold yet
+
+    def ask(ref, raw):
         try:
-            updates.append(lg.entry(wid, *wanted))
+            f = lg.field(wid, ref)
+            lg.value(wid, ref, raw)               # a value the field does not take is not asked for
         except (core.LedgerError, KeyError, orgspec.OrgSpecError) as e:
-            print("提醒：跳过字段 %s（之后可以用 update 补）：%s" % (wanted[0], e))
-    updates += core.header_fields(lg, wid, d)
+            print("提醒：跳过字段 %s（之后可以请书记员用 update 补）：%s" % (ref, e))
+            return
+        if it is None or not holds(it, f, raw):
+            asks.append((f.get("name") or ref, str(raw).strip()))
+
+    if wid == "decision" and kinds.get("urgency"):
+        ask("urgency", kinds["urgency"])
+    elif wid != "decision" and "due" in lg.contract.slots(wid, "fields") and core.utc_noon_ms(d.header.get("回复期限", "")):
+        ask("due", d.header["回复期限"])
+    if wid == "decision":                         # 执行方 and 研究员要做的事, where the space has fields of those names
+        values = {orgspec.EXECUTOR: orgspec.executor_of(spec, d.header.get(orgspec.EXECUTOR)),
+                  orgspec.RESEARCHER_ACTION: (d.header.get(orgspec.RESEARCHER_ACTION) or "").strip()}
+        for field in core.HEADER_FIELDS:
+            if lg.key_of(wid, field) and values[field]:
+                ask(field, values[field])
     if sheet:                                     # the task takes the sender and the sequence of this version: the
-        wanted = [("sender", d.author)] if d.author else []           # first sheet is the one init wrote
+        if d.author:                              # first sheet is the one init wrote
+            ask("sender", d.author)
         if "sequence" in lg.contract.slots(wid, "fields"):
-            wanted.append(("sequence", spec.term("seq", d.sender_seq or "pmo")))
-        for ref, raw in wanted:
-            try:
-                updates.append(lg.entry(wid, ref, raw))
-            except (core.LedgerError, KeyError, orgspec.OrgSpecError) as e:
-                print("提醒：跳过字段 %s（之后可以用 update 补）：%s" % (ref, e))
-    if name and it is not None and it.get("name") and it["name"] != name:  # the title changed: the item is renamed,
-        updates.append({"field_key": "name", "field_value": name})         # and its document below
-    if d.source and "source_item" in lg.contract.slots(wid, "fields"):   # the upstream item this version names,
-        try:                                                              # as register writes it
-            updates.append(lg.entry(wid, "source_item", core.item_id_of(d.source)))
-        except (core.LedgerError, KeyError, orgspec.OrgSpecError) as e:
-            print("提醒：跳过字段 source_item（之后可以用 update 补）：%s" % e)
+            ask("sequence", spec.term("seq", d.sender_seq or "pmo"))
+    if name and it is not None and it.get("name") and it["name"] != name:  # the title changed: the item is renamed
+        asks.append((lg.label(wid, "name"), name))                         # by the scribe, its document below
+    if d.source and "source_item" in lg.contract.slots(wid, "fields"):   # the upstream item this version names
+        ask("source_item", core.item_id_of(d.source))
     body = revision_body(d, item_id, lg.item_url(wid, item_id))
     url = lg.doc_url(item_id, it)
     heads = core.heading_ids(lg, url)
@@ -237,9 +253,6 @@ def revise(lg, item_id, path, note):
         retitle = (doc_id, doc_title) if title and doc_id and doc_title is not None and doc_title.strip() != title else None
     done, logged = [], False                      # what is written already, should a later step fail
     try:
-        if updates:                               # the fields first: nothing in the document has changed if they fail
-            lg.meegle("workitem", "update", "--work-item-id", item_id, "--fields", json.dumps(updates, ensure_ascii=False), write=True)
-            done.append("工作项的字段已经按第 %d 版写了" % d.version)
         lg.lark("docs", "+update", "--doc", url, "--command", "block_replace", "--start-block-id", first, "--end-block-id", last,
                 "--doc-format", "markdown", "--content", "-", write=True, stdin=body)
         done.append("主文档开头已经换成第 %d 版" % d.version)
@@ -259,7 +272,7 @@ def revise(lg, item_id, path, note):
         if lg.mode != "apply" or not done and isinstance(e, core.WriteMaybeDone):
             raise
         if not done:
-            raise core.LedgerError("%s\n工作项和主文档都还没改；修好后重跑同一条命令" % e)
+            raise core.LedgerError("%s\n主文档还没改；修好后重跑同一条命令" % e)
         raise type(e)("%s\n%s；回执和本地决策状态还是第 %d 版。修好后重跑同一条命令接着做，交接记录不会多出一行" % (
             e, "，".join(done), previous))
     if lg.mode == "apply":
@@ -284,7 +297,27 @@ def revise(lg, item_id, path, note):
             "本地决策状态已按新版本更新。" if wid == "decision" and queue else ""))
     else:
         print("预览：会把 #%s 的主文档开头换成第 %d 版，交接记录追加一行。" % (item_id, d.version))
+    lg.field_asks = asks
+    if asks:
+        print(("这一版改了记在工作项上的内容，工作项只由书记员写：给书记员发【%s】，请它运行下面这条命令。\n%s" if lg.mode == "apply"
+               else "预览：这一版改了记在工作项上的内容，修订以后要请书记员运行（发【%s】）：\n%s") % (
+                   spec.term("msg", "register_request"), update_command(item_id, asks)))
     return d.version
+
+
+def holds(it, f, raw):
+    """Does the work item hold this value in this field already? Compared as the text `workitem get` shows;
+    a date by its day."""
+    current = it.get("name") if f["field_key"] == "name" else (it.get("fields") or {}).get(f["field_key"])
+    if f.get("field_type") == "date" and isinstance(current, dict) and current.get("timestamp") is not None:
+        return str(current["timestamp"]) == str(core.utc_noon_ms(str(raw)))
+    return (core.plain(current) or "") == str(raw).strip()
+
+
+def update_command(item_id, asks):
+    """The `workitem.py update` that writes asks: [(field name, value)]."""
+    return "python3.12 -I .claude/solo-lab/bin/workitem.py update %s %s --apply" % (
+        item_id, " ".join("--set %s" % core._quote("%s=%s" % (name, value)) for name, value in asks))
 
 
 def revision_logged(lg, url, heads, version, date):
@@ -321,6 +354,10 @@ def append(lg, item_id, path):
     first = next((l for l in content.splitlines() if l.strip()), "")
     if not re.search(r"\[[A-Za-z]+\+[0-2]\]", first):
         raise core.LedgerError("交接记录第一行要带会话标签，比如 [Alg+1]")
+    core.must_be(lg, "追加 #%s 的交接记录" % item_id, any_claim=True)
+    mine = (lg.caller or {}).get("tag")
+    if mine and mine not in first:
+        raise core.LedgerError("交接记录第一行的会话标签要是自己的 %s：每个会话只记自己的交接" % mine)
     url = lg.doc_url(item_id)
     lg.lark("docs", "+update", "--doc", url, "--command", "append", "--doc-format", "markdown",
             "--content", "-", write=True, stdin=content)
@@ -334,6 +371,8 @@ def relink(lg, item_id):
     was created with a placeholder there. The block is replaced in place: the document
     keeps its identity and link."""
     it = lg.item(item_id)
+    names, seq, owner = core.doc_owner(lg, it)
+    core.must_be(lg, "改 #%s 的主文档" % item_id, names=names, seq=seq, why="这份文档归 %s 写" % owner)
     url = lg.doc_url(item_id, it)
     data = lg.lark("docs", "+fetch", "--doc", url, "--detail", "with-ids")
     if data is None:
@@ -392,6 +431,7 @@ def existing_node(lg, space, parent, key, title):
 
 
 def ensure_node(lg, key):
+    core.must_be(lg, "建知识库节点", roles=(SCRIBE_ROLE,), why="知识库的节点由书记员建")
     if (lg.nodes.get(key) or {}).get("node_token"):
         print("节点 %s 已有：%s" % (key, lg.nodes[key].get("node_token")))
         return
@@ -469,7 +509,8 @@ def main(argv=None):
 def run_command(lg, args):
     if args.cmd == "revise":
         revise(lg, args.id, args.draft, args.note)
-        core.also_to_router(lg, args.id)
+        if lg.mode == "apply" and core.receipt_of(lg, str(args.id).lstrip("#")).get("type") == "cross_request":
+            print("跨序列需求：把这次修订告诉路由 %s 一声（修订的就是它的不用再说）。" % lg.spec.rules["naming"]["fixed_sessions"]["pmo-router"])
     elif args.cmd == "status-block":
         status_block(lg, args.id, args.file)
     elif args.cmd == "append":

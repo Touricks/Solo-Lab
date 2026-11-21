@@ -121,6 +121,15 @@ class LedgerCase(unittest.TestCase):
     def state(self, item_id):
         return self.fake.state_of(self.fake.item(item_id))
 
+    def scribe_writes(self, lg, item_id):
+        """What a revision asked the scribe for, written as the scribe writes it. From 1.1.0 docs.revise replaces
+        the document and leaves the work item alone: what the new version changes on it is printed as one
+        `workitem.py update` (lg.field_asks holds its values) for the author to send to the scribe."""
+        asks = list(getattr(lg, "field_asks", None) or [])
+        if asks:
+            self.quiet(workitem.update, self.lg(), item_id, ["%s=%s" % pair for pair in asks])
+        return asks
+
     def receipt(self, item_id):
         """The registration receipt packages/sent/<ID>.json."""
         with open(os.path.join(self.tmp, "packages", "sent", "%s.json" % item_id), encoding="utf-8") as f:
@@ -249,6 +258,9 @@ class RegisterTest(LedgerCase):
         self.assertNotIn("测出分数和波动。", opening)
         self.assertIn("## 状态包", body)                                                  # the document keeps its own
         self.assertIn("第 2 版（%s）：补耗时" % datetime.date.today().isoformat(), body)
+        self.assertEqual(self.value(task, "research_task", "sender"), "Product-p2-01")   # the work item is the scribe's:
+        self.assertIn("workitem.py update %s --set 发出方=Alg-p2-01 --set 序列=算法 --apply" % task, text)
+        self.scribe_writes(lg, task)
         self.assertEqual(self.value(task, "research_task", "sender"), "Alg-p2-01")       # sender and sequence follow
         self.assertEqual(self.receipt(task)["version"], 2)
         with open(revised, encoding="utf-8") as f:
@@ -278,13 +290,18 @@ class RegisterTest(LedgerCase):
 
     def test_a_revision_with_a_new_title_renames_the_item_and_its_document(self):
         """1.0.10: nothing renamed a main document; an item whose title changed kept a document under the old
-        one. A revision whose title differs renames the item, and replaces the document's title block, which
-        renames the document and its node in the knowledge space with it."""
+        one. A revision whose title differs replaces the document's title block, which renames the document and
+        its node in the knowledge space with it; the item is renamed by the scribe, whom the author asks (1.1.0)."""
         task = self.task()
         doc = self.fake.doc_of_link(self.value(task, "research_task", "main_doc"))
         self.assertIn("复现并测量基线", doc["title"])
         renamed = self.write((SHEET % ("正式实验", "产品 +2（Product-p2-01）")).replace("# 研究任务单：复现并测量基线", "# 研究任务单：复现基线 & 测波动"), "r.md")
-        _, text = self.out(docs.revise, self.lg(), task, renamed, "改名")
+        lg = self.lg()
+        _, text = self.out(docs.revise, lg, task, renamed, "改名")
+        self.assertEqual(self.fake.item(task)["name"], "复现并测量基线")                 # the work item is the scribe's to rename:
+        self.assertIn("给书记员发【登记请求】，请它运行下面这条命令。\n"                      # the author is given the command for it
+                      "python3.12 -I .claude/solo-lab/bin/workitem.py update %s --set '名称=复现基线 & 测波动' --apply" % task, text)
+        self.assertEqual(self.scribe_writes(lg, task), [("名称", "复现基线 & 测波动")])
         self.assertEqual(self.fake.item(task)["name"], "复现基线 & 测波动")
         self.assertEqual(doc["title"], "工作项 %s｜研究任务单：复现基线 & 测波动" % task)
         self.assertIn("改名：主文档和它的知识库节点的标题", text)
@@ -723,15 +740,19 @@ class Template220Test(LedgerCase):
         self.walk(task, 5)                                                        # step 4 signs with a decision at 待执行
         self.assertEqual(self.state(task), "设计实验方案")
 
-    def test_a_revision_writes_the_two_fields_again(self):
+    def test_a_revision_asks_for_the_two_fields_again(self):
         self.use_220()
         self.task()
         item = self.quiet(workitem.register, self.lg(), self.draft(PERMISSION))
         self.assertEqual(self.fields(item), ("Infra-p2-01", "无"))
         mine = lambda t: t.replace("- 执行方：Infra-p2-01\n- 研究员要做的事：无\n",
                                    "- 执行方：研究员\n- 研究员要做的事：在本机装好 Docker Desktop 并登录\n")
-        _, out = self.out(docs.revise, self.lg(), item, self.draft(PERMISSION, "v2.md", edit=version(2, "2026-11-22", mine)), "改由研究员执行")
+        lg = self.lg()
+        _, out = self.out(docs.revise, lg, item, self.draft(PERMISSION, "v2.md", edit=version(2, "2026-11-22", mine)), "改由研究员执行")
         self.assertIn("修订：#%s 的主文档开头换成第 2 版" % item, out)
+        self.assertEqual(self.fields(item), ("Infra-p2-01", "无"))                      # the fields wait for the scribe
+        self.assertIn("workitem.py update %s --set 执行方=研究员 --set '研究员要做的事=在本机装好 Docker Desktop 并登录' --apply" % item, out)
+        self.scribe_writes(lg, item)
         self.assertEqual(self.fields(item), ("研究员", "在本机装好 Docker Desktop 并登录"))
         self.assertEqual((self.receipt(item)["executor"], self.receipt(item)["researcher_action"]), ("研究员", "在本机装好 Docker Desktop 并登录"))
 
@@ -1326,17 +1347,141 @@ class SourceLineTest(LedgerCase):
             self.assertNotIn("来源工作项", f.read().split("\n## ", 1)[0])
         self.assertTrue(self.quiet(workitem.register, self.lg(), plain))    # nor is a package without the line
 
-    def test_a_revision_writes_the_upstream_item(self):
-        """A package registered before its template had the line gets it with its next version: revise writes
-        the field as register does (until 1.0.8 it left the field alone)."""
+    def test_a_revision_asks_for_the_upstream_item(self):
+        """A package registered before its template had the line gets it with its next version: revise asks the
+        scribe for the field register writes (until 1.0.8 it left the field alone; until 1.0.12 it wrote it)."""
         self.task()
         cross = self.quiet(workitem.register, self.lg(), self.draft(CROSS, "c.md"))
         item = self.quiet(workitem.register, self.lg(), self.draft(PERMISSION))
         self.assertFalse(self.value(item, "decision", "source_item"))
         v2 = self.draft(PERMISSION, "v2.md", edit=version(2, "2026-11-22", lambda t: t.replace(
             "- 关联工作项：待建\n", "- 关联工作项：待建\n- 来源工作项：#%s\n" % cross)))
-        self.quiet(docs.revise, self.lg(), item, v2, "补来源工作项")
+        lg = self.lg()
+        _, out = self.out(docs.revise, lg, item, v2, "补来源工作项")
+        self.assertFalse(self.value(item, "decision", "source_item"))
+        self.assertIn("workitem.py update %s --set 来源工作项=%s --apply" % (item, cross), out)
+        self.scribe_writes(lg, item)
         self.assertEqual(self.value(item, "decision", "source_item"), cross)
+
+
+class WhoWritesTest(LedgerCase):
+    """1.1.0: a document is written by the session that answers for it, and every session may run docs.py. The
+    script reads the session from its Bash environment and the pool's claims, and holds it against the
+    document's owner: the session a work item's 发出方 names, or the +2 of its sequence when 发出方 is no
+    session. The researcher's own session, which holds no claim, writes any document."""
+
+    CLAIMS = (("Alg-p2-01", "alg-p2"), ("Alg-p1-01", "alg-p1"), ("Product-p2-01", "product-p2"), ("PMO-p2-01", "pmo-p2"),
+              ("PMO-p1-01", "pmo-router"), ("PMO-p0-01", "pmo-scribe"))
+
+    def setUp(self):
+        super().setUp()
+        import pool
+        self.pool = pool
+        agents = {}
+        for name, role in self.CLAIMS:
+            abbrev, rank = name.split("-")[0], int(name.split("-p")[1][0])
+            seq = {"Alg": "alg", "Product": "product", "PMO": "pmo"}[abbrev]
+            agents[role] = {"tag": "[%s+%d]" % (abbrev, rank), "sequence": seq, "rank": rank}
+        os.makedirs(os.path.join(self.tmp, ".claude", "hooks"))
+        with open(os.path.join(self.tmp, ".claude", "hooks", "policy.json"), "w", encoding="utf-8") as f:
+            json.dump({"agents": agents}, f)
+        table = pool.empty()
+        for name, role in self.CLAIMS:
+            table["claims"][name] = {"name": name, "short": name.lower(), "role": role, "session_id": "sid-" + name, "desk": None}
+        table["pending"].append({"session_id": "sid-new", "name": "Alg-p1-02", "role": "alg-p1"})
+        pool.save_json(pool.pool_path(self.tmp), table)
+        self.env = dict(os.environ)
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.env)
+        super().tearDown()
+
+    def as_session(self, name=None):
+        """The next Ledger is made in this session; None is the researcher's own, which has no claim."""
+        os.environ.pop(self.pool.DESK_ENV, None)
+        if name is None:
+            os.environ.pop(self.pool.SESSION_ENV, None)
+        else:
+            os.environ[self.pool.SESSION_ENV] = name if name.startswith("sid-") else "sid-" + name
+
+    def test_the_session_is_read_from_the_claim(self):
+        self.as_session("Alg-p2-01")
+        lg = self.lg()
+        self.assertEqual(lg.caller, {"name": "Alg-p2-01", "role": "alg-p2", "tag": "[Alg+2]", "sequence": "alg", "rank": 2})
+        self.assertEqual(lg.tag, "[Alg+2]")
+        self.as_session()
+        lg = self.lg()
+        self.assertEqual((lg.caller, lg.origin, lg.tag), (None, "researcher", "[PMO+0]"))
+        self.as_session("sid-new")
+        self.assertEqual((self.lg().caller, self.lg().origin), (None, "pending"))
+
+    def test_a_revision_is_its_authors(self):
+        self.as_session()
+        self.task()
+        item = self.quiet(workitem.register, self.lg(), self.draft(ASSIGN, "a.md"))            # from Product-p2-01
+        v2 = lambda name: self.draft(ASSIGN, name, edit=lambda t: t.replace("第 1 版（2026-10-19）", "第 2 版（2026-10-20）"))
+        for other in ("Alg-p1-01", "Alg-p2-01", "PMO-p0-01", "PMO-p1-01"):
+            self.as_session(other)
+            self.assertEqual(self.fails(docs.revise, self.lg(), item, v2("o.md"), "x"),
+                             "（%s）不能修订 #%s 的主文档：这份文档归 Product-p2-01 写，请它来修订。" % (other, item))
+            self.assertIn("不能修订", self.fails(docs.revise, self.lg("preview"), item, v2("o.md"), "x"))     # the preview says so too
+        self.as_session("sid-new")
+        self.assertEqual(self.fails(docs.revise, self.lg(), item, v2("o.md"), "x"),
+                         "还没转正的会话不能修订 #%s 的主文档：先认领会话（pool.py claim），认领表有疑问的请研究员用 pool.py show 核对。" % item)
+        self.assertEqual(self.receipt(item)["version"], 1)
+        self.as_session("Product-p2-01")
+        _, out = self.out(docs.revise, self.lg(), item, v2("mine.md"), "补一句")
+        self.assertIn("修订：#%s 的主文档开头换成第 2 版" % item, out)
+        self.assertIn("[Product+2] 第 2 版（2026-10-20）：补一句",                                   # under its own tag
+                      self.fake.doc_of_link(self.value(item, "same_seq", "main_doc"))["body"])
+        self.as_session()                                                                # the researcher's session writes any
+        v3 = self.draft(ASSIGN, "v3.md", edit=lambda t: t.replace("第 1 版（2026-10-19）", "第 3 版（2026-10-21）"))
+        self.quiet(docs.revise, self.lg(), item, v3, "研究员自己改")
+        self.assertEqual(self.receipt(item)["version"], 3)
+
+    def test_a_sheet_from_the_researcher_is_its_sequences(self):
+        """A 研究任务单 whose 发出方 is 研究员 (the one init writes) is revised by the +2 of its sequence: the
+        entry. Once a revision names a session as its sender and the scribe has written it, that session writes."""
+        self.as_session()
+        import setup_core
+        task = self.quiet(workitem.register, self.lg(), self.write(setup_core.first_task_sheet({"name": "约束优化器", "description": "面向代码的约束优化器"}), "first.md"))
+        sheet = lambda who: (SHEET % ("正式实验", who)).replace("复现并测量基线", "约束优化器")
+        self.as_session("Product-p2-01")
+        self.assertEqual(self.fails(docs.revise, self.lg(), task, self.write(sheet("产品 +2（Product-p2-01）"), "p.md"), "访谈以后"),
+                         "（Product-p2-01）不能修订 #%s 的主文档：这份文档归 项目管理 +2 写，请它来修订。" % task)
+        self.as_session("PMO-p2-01")
+        lg = self.lg()
+        self.quiet(docs.revise, lg, task, self.write(sheet("产品 +2（Product-p2-01）"), "e.md"), "访谈以后")
+        self.as_session()
+        self.scribe_writes(lg, task)                                                   # 发出方 and 序列 are the scribe's to write
+        self.as_session("Product-p2-01")
+        self.quiet(docs.revise, self.lg(), task, self.write(sheet("产品 +2（Product-p2-01）"), "p2.md"), "补成功标准")
+        self.assertEqual(self.receipt(task)["version"], 3)
+
+    def test_the_status_block_the_log_and_the_nodes(self):
+        self.as_session()
+        task = self.task()
+        status = self.write("### 简介\n复现基线。\n", "status.md")
+        for name, ok in (("PMO-p1-01", True), ("PMO-p2-01", True), ("Product-p2-01", True), ("Alg-p2-01", False), ("PMO-p0-01", False)):
+            self.as_session(name)
+            if ok:
+                self.quiet(docs.status_block, self.lg(), task, status)
+            else:
+                self.assertEqual(self.fails(docs.status_block, self.lg(), task, status),
+                                 "（%s）不能换 #%s 的状态包：状态包归 Product-p2-01、路由或入口写。" % (name, task))
+        self.as_session("Alg-p2-01")                                                    # every session keeps its own notes
+        self.quiet(docs.append, self.lg(), task, self.write("[Alg+2] 接手第 2 步。\n", "note.md"))
+        self.assertEqual(self.fails(docs.append, self.lg(), task, self.write("[Product+2] 接手第 2 步。\n", "other.md")),
+                         "交接记录第一行的会话标签要是自己的 [Alg+2]：每个会话只记自己的交接")
+        self.as_session("sid-new")
+        self.assertIn("还没转正的会话不能追加 #%s 的交接记录" % task, self.fails(docs.append, self.lg(), task, self.write("[Alg+1] 接手。\n", "n2.md")))
+        self.as_session("Alg-p2-01")
+        self.assertEqual(self.fails(docs.ensure_node, self.lg(), "feedback"), "（Alg-p2-01）不能建知识库节点：知识库的节点由书记员建。")
+        self.as_session("PMO-p0-01")
+        self.quiet(docs.ensure_node, self.lg(), "feedback")
+        self.as_session("Alg-p2-01")
+        self.quiet(docs.ensure_node, self.lg("offline"), "feedback")                    # offline nothing is written, nothing asked
 
 
 class WriteBackTest(LedgerCase):
@@ -2250,17 +2395,18 @@ class DecisionStateTest(LedgerCase):
         self.assertEqual(entry["registered_at"], self.receipt(perm)["registered_at"])
 
     def test_a_revision_whose_urgency_the_space_has_no_option_for(self):
-        """revise reads the fields it writes before it writes anything: an urgency the space has no option for is
-        skipped with a reminder, as register does, and the document, the receipt and the local state all take the
-        new version once."""
+        """revise reads the values it asks the scribe for before it writes anything: an urgency the space has no
+        option for is skipped with a reminder, as register does, and the document, the receipt and the local state
+        all take the new version once."""
         self.task()
         odd = lambda t: t.replace("- 紧急程度：今天", "- 紧急程度：今天（下班前）")
         item, out = self.out(workitem.register, self.lg(), self.draft(PERMISSION, "p.md", edit=odd), pairs=["紧急程度=今天"])
         self.assertIn("提醒：跳过字段 urgency", out)
         v2 = self.draft(PERMISSION, "v2.md", edit=version(2, "2026-11-22", lambda t: odd(t).replace("- `docker build`\n", "")))
         _, out = self.out(docs.revise, self.lg(), item, v2, "不再冻结 docker build")
-        self.assertIn("提醒：跳过字段 urgency（之后可以用 update 补）", out)
+        self.assertIn("提醒：跳过字段 urgency（之后可以请书记员用 update 补）", out)
         self.assertIn("修订：#%s 的主文档开头换成第 2 版" % item, out)
+        self.assertNotIn("workitem.py update", out)                                    # nothing left to ask for
         entry = self.gates()["pending"][item]
         self.assertEqual((self.receipt(item)["version"], entry["version"]), (2, 2))
         self.assertNotIn("`docker build`", [f["text"] for f in entry["frozen"]])
@@ -2283,7 +2429,8 @@ class DecisionStateTest(LedgerCase):
     def test_a_decision_revised_twice(self):
         """B4: two revisions of a decision. The main document opens with the third version and its number, its
         交接记录 has two revision lines, the dropped option is gone from the opening, the link is the same.
-        The work item's 紧急程度, the receipt and the local decision state follow; the queue shows the version."""
+        The receipt and the local decision state follow, and the work item's 紧急程度 once the scribe has written
+        what the revision asked for; the queue shows the version."""
         self.task()
         item = self.quiet(workitem.register, self.lg(), self.draft(PERMISSION))
         link, count = self.value(item, "decision", "main_doc"), len(self.fake.docs)
@@ -2295,7 +2442,10 @@ class DecisionStateTest(LedgerCase):
         self.assertIn("用 docs.py revise", self.fails(workitem.register, self.lg(), v2))      # and it is not registered as new
         v3 = self.draft(PERMISSION, "v3.md", edit=version(3, "2026-11-23", lambda t: without_sandbox(t).replace(
             "- 紧急程度：今天", "- 紧急程度：插队").replace("- `docker build`\n", "")))
-        self.quiet(docs.revise, self.lg(), item, v3, "改成插队；不再冻结 docker build")
+        lg = self.lg()
+        _, out = self.out(docs.revise, lg, item, v3, "改成插队；不再冻结 docker build")
+        self.assertIn("workitem.py update %s --set 紧急程度=插队 --apply" % item, out)
+        self.assertEqual(self.scribe_writes(lg, item), [("紧急程度", "插队")])
         body = self.doc(item)["body"]
         self.assertTrue(body.startswith("- 包类型：决策包\n- 版本：第 3 版（2026-11-23）\n"), body[:80])
         opening, rest = body.split("## 状态包", 1)
@@ -2337,11 +2487,17 @@ class DecisionStateTest(LedgerCase):
         # a request revises while its work item is open: its 截止时间 follows a dated 回复期限
         a2 = self.draft(ASSIGN, "a2.md", edit=lambda t: t.replace("第 1 版（2026-10-19）", "第 2 版（2026-10-20）").replace(
             "- 回复期限：两周内交付", "- 回复期限：2026-11-30"))
-        self.quiet(docs.revise, self.lg(), request, a2, "回复期限写成日期")
+        lg = self.lg()
+        _, out = self.out(docs.revise, lg, request, a2, "回复期限写成日期")
+        self.assertIn("workitem.py update %s --set 截止时间=2026-11-30 --apply" % request, out)
+        self.scribe_writes(lg, request)
         self.assertEqual(self.value(request, "same_seq", "due"), ledger_core.utc_noon_ms("2026-11-30"))
         self.assertTrue(self.doc(request, "same_seq")["body"].startswith("- 包类型：需求包\n- 版本：第 2 版（2026-10-20）\n"))
         self.assertEqual(self.receipt(request)["version"], 2)
         self.assertNotIn(request, self.gates()["pending"])
+        _, out = self.out(docs.revise, self.lg(), request, self.draft(ASSIGN, "a3.md", edit=lambda t: t.replace(
+            "第 1 版（2026-10-19）", "第 3 版（2026-10-21）").replace("- 回复期限：两周内交付", "- 回复期限：2026-11-30")), "正文补一句")
+        self.assertNotIn("workitem.py update", out)                                    # the item holds the date already: nothing to ask for
 
     def test_a_revision_copied_from_the_main_document_keeps_its_title(self):
         """The template has a revision start from the main document's opening, which has no title line. The item
@@ -2364,9 +2520,10 @@ class DecisionStateTest(LedgerCase):
         self.assertEqual((self.receipt(item)["title"], self.gates()["pending"][item]["title"]), ("候选代码在哪里跑",) * 2)
 
     def test_a_revision_that_fails_half_way_is_run_again(self):
-        """revise writes the fields first, then the document's opening, then the line in 交接记录, and the receipt
-        and the local state last. A step that fails says what is written already; the same command run again goes
-        on, and 交接记录 has one line for the version, also when the line was added and only its answer was lost."""
+        """revise replaces the document's opening, then adds the line in 交接记录, and writes the receipt and the
+        local state last. A step that fails says what is written already; the same command run again goes on, and
+        交接记录 has one line for the version, also when the line was added and only its answer was lost. The work
+        item is not written at any point (1.1.0): its 紧急程度 changes when the scribe runs what revise printed."""
         self.task()
         item = self.quiet(workitem.register, self.lg(), self.draft(PERMISSION))
         urgent = version(2, "2026-11-22", lambda t: t.replace("- 紧急程度：今天", "- 紧急程度：插队"))
@@ -2375,18 +2532,14 @@ class DecisionStateTest(LedgerCase):
         versions = lambda: (self.receipt(item)["version"], self.gates()["pending"][item]["version"])
         urgency = self.lg().field("decision", "urgency")["field_key"]
         shown = lambda: self.fake.shown(self.fake.item(item)["type_key"], urgency, self.value(item, "decision", "urgency"))["label"]
-        # the fields fail: nothing has changed anywhere
-        text = self.fails(docs.revise, self.lg(replies=[(("workitem", "update"), ledger_core.LedgerError("命令失败：502 Bad Gateway"))]), item, v2, "改成插队")
-        self.assertEqual(text, "命令失败：502 Bad Gateway\n工作项和主文档都还没改；修好后重跑同一条命令")
+        # the opening fails: nothing has changed anywhere
+        text = self.fails(docs.revise, self.lg(replies=[(("docs", "+update", "block_replace"), ledger_core.LedgerError("down"))]), item, v2, "改成插队")
+        self.assertEqual(text, "down\n主文档还没改；修好后重跑同一条命令")
         self.assertTrue(self.doc(item)["body"].startswith("- 包类型：决策包\n- 版本：第 1 版（2026-11-21）\n"))
         self.assertEqual((log(), versions(), shown()), ([], (1, 1), "今天"))
-        # the opening fails: the fields are written, the document is not
-        text = self.fails(docs.revise, self.lg(replies=[(("docs", "+update", "block_replace"), ledger_core.LedgerError("down"))]), item, v2, "改成插队")
-        self.assertEqual(text, "down\n工作项的字段已经按第 2 版写了；回执和本地决策状态还是第 1 版。修好后重跑同一条命令接着做，交接记录不会多出一行")
-        self.assertEqual((log(), versions(), shown()), ([], (1, 1), "插队"))
         # the line in 交接记录 fails: the opening is the new version already
         text = self.fails(docs.revise, self.lg(replies=[(("docs", "+update", "append"), ledger_core.LedgerError("down"))]), item, v2, "改成插队")
-        self.assertIn("\n工作项的字段已经按第 2 版写了，主文档开头已经换成第 2 版；回执和本地决策状态还是第 1 版。", text)
+        self.assertEqual(text, "down\n主文档开头已经换成第 2 版；回执和本地决策状态还是第 1 版。修好后重跑同一条命令接着做，交接记录不会多出一行")
         self.assertTrue(self.doc(item)["body"].startswith("- 包类型：决策包\n- 版本：第 2 版（2026-11-22）\n"))
         self.assertEqual((log(), versions()), ([], (1, 1)))
         # the line is added but its answer never comes: the next run finds it and adds no second one
@@ -2400,14 +2553,20 @@ class DecisionStateTest(LedgerCase):
             docs.revise(lg, item, v2, "改成插队")
         self.assertIn("主文档开头已经换成第 2 版；回执和本地决策状态还是第 1 版", str(e.exception))
         self.assertEqual((len(log()), versions()), (1, (1, 1)))
-        _, out = self.out(docs.revise, self.lg(), item, v2, "改成插队")
+        lg = self.lg()
+        _, out = self.out(docs.revise, lg, item, v2, "改成插队")
         self.assertIn("修订：#%s 的主文档开头换成第 2 版（文档链接不变），交接记录里已经有这一版的一行，没有再加。" % item, out)
         self.assertEqual((len(log()), versions(), self.gates()["pending"][item]["urgency"]), (1, (2, 2), "插队"))
+        self.assertEqual(lg.wrote("workitem"), [])                                     # not one write on the work item,
+        self.assertEqual(shown(), "今天")                                               # which waits for the scribe
+        self.assertIn("workitem.py update %s --set 紧急程度=插队 --apply" % item, out)
+        self.scribe_writes(lg, item)
+        self.assertEqual(shown(), "插队")
         # the order of the writes, on a run with nothing in its way
         lg = self.lg()
         self.quiet(docs.revise, lg, item, self.draft(PERMISSION, "v3.md", edit=version(3, "2026-11-23")), "改回今天")
         wrote = [("fields" if "workitem" in argv else argv[argv.index("--command") + 1]) for argv, write, _ in lg.calls if write]
-        self.assertEqual(wrote, ["fields", "block_replace", "append"])
+        self.assertEqual(wrote, ["block_replace", "append"])
 
     def test_another_sessions_note_is_not_the_line_of_the_revision(self):
         """交接记录 may name the version a revision brings before it is there: a session wrote “准备出第 2 版（日期）：…”.

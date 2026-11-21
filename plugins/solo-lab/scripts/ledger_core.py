@@ -234,7 +234,8 @@ class Ledger:
         wiki = self.ids.get("wiki") or {}
         self.nodes = wiki.get("nodes") or {}
         self.tenant = wiki.get("tenant_domain")
-        self.tag = os.environ.get("SOLO_LAB_TAG", "[PMO+0]")
+        self.caller, self.origin = who(root)        # the session that runs the script; None for the researcher's own
+        self.tag = (self.caller or {}).get("tag") or os.environ.get("SOLO_LAB_TAG", "[PMO+0]")
         self.planned = []
         self._me = None
 
@@ -1199,6 +1200,61 @@ def typed_item(lg, item_id, wid_hint=None):
 
 def is_last(node):
     return not node["next"]
+
+
+# ------------------------------------------------------------- who runs the script
+# From 1.1.0 a document is written by the session that answers for it, the work items by the scribe alone. Every
+# session may run docs.py; the script holds the session it runs in against the document's owner. The session is
+# read from the Bash environment and the pool's claims, which a session cannot change: the hook refuses a
+# command that sets those variables.
+def who(root):
+    """(caller, origin). caller is {name, role, tag, sequence, rank} of the claim the session holds; None for
+    the researcher's own session, a plain terminal and a project without a session pool (origin "researcher" or
+    None). A session that holds no claim gives (None, origin) with what it is: pool.ORIGIN_LABEL."""
+    try:
+        policy = pool.load_policy(root)
+        if not policy:
+            return None, None
+        claim, origin = pool.caller(root, policy)
+    except (pool.PoolError, OSError, ValueError, KeyError):
+        return None, "pool_unreadable"
+    if not claim:
+        return None, origin
+    pol = (policy.get("agents") or {}).get(claim.get("role")) or {}
+    return {"name": claim.get("name"), "role": claim.get("role"), "tag": pol.get("tag"),
+            "sequence": pol.get("sequence"), "rank": pol.get("rank")}, origin
+
+
+def doc_owner(lg, it=None, d=None):
+    """Who writes an item's main document: (session names, sequence, words). The session its 发出方 names; when
+    that is no session (研究员, 导师), the +2 of the item's sequence, 项目管理 where the item has none. Before
+    the item exists, or offline, the draft says both."""
+    sender = (lg.text_of(it, "sender") if it else None) or (getattr(d, "author", None) if d else None) or ""
+    if SESSION_NAME.match(sender.strip()):
+        return [sender.strip()], None, sender.strip()
+    by_cn = {cn: s for s, cn, _ in lg.spec.sequences()}
+    seq = by_cn.get((lg.text_of(it, "sequence") or "").strip()) if it else None
+    seq = seq or (getattr(d, "sender_seq", None) if d else None) or "pmo"
+    return [], seq, "%s +2" % lg.spec.term("seq", seq)
+
+
+def must_be(lg, what, names=(), roles=(), seq=None, why="", any_claim=False):
+    """Stop unless the session running the script may do `what`: one of the sessions in names, a session of
+    one of the roles, the +2 of seq, any session that holds a claim (any_claim), or the researcher's own
+    session. why says whose it is, for the message. Offline nothing is written and nothing is asked."""
+    me = lg.caller
+    if lg.mode == "offline":
+        return
+    if me is None:
+        if lg.origin in (None, "researcher"):
+            return
+        raise LedgerError("%s不能%s：先认领会话（pool.py claim），认领表有疑问的请研究员用 pool.py show 核对。" % (
+            pool.ORIGIN_LABEL.get(lg.origin, "未认领的会话"), what))
+    mine = (me.get("name") or "").lower()
+    if any_claim or any(mine == (n or "").lower() for n in names) or me.get("role") in roles \
+            or seq and me.get("sequence") == seq and me.get("rank") == 2:
+        return
+    raise LedgerError("（%s）不能%s%s。" % (me.get("name"), what, "：" + why if why else ""))
 
 
 def seq_of_session(lg, name):
