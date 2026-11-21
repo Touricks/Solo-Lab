@@ -357,7 +357,7 @@ def build_policy(spec, task, seqs):
         abbrev = spec.term("abbrev", seq)
         for rank in (2, 1, 0):
             name = agent_name(seq, rank)
-            pattern = fixed.get(name) or ("%s-p0-<工作项 ID>" % abbrev if rank == 0 else "%s-p%d-<序号>" % (abbrev, rank))
+            pattern = fixed.get(name) or ("%s-p0-<任务编号>" % abbrev if rank == 0 else "%s-p%d-<序号>" % (abbrev, rank))
             pol = {"tag": tag_of(abbrev, rank), "abbrev": abbrev, "rank": rank, "sequence": seq,
                    "sequence_cn": spec.term("seq", seq),
                    "limit": limits.get(name, limits["p%d" % rank]), "fixed_session": fixed.get(name),
@@ -562,7 +562,9 @@ def after_compaction(upper="上一级", entry=False):
 
 def common_role_lines(spec, seq, rank, name, pol, task, policy):
     lines = [
-        "- 工作项、字段、状态和文档只由书记员写；你能写的飞书内容只有带会话标签的评论（`meegle comment add`，hook 会补标签）。",
+        "- 文档谁负责谁写，工作项只由书记员写。你写的包和文档由你自己用 `docs.py` 传进飞书、自己修订，脚本会核对你是不是作者；"
+        "建工作项、填字段、确认和回滚节点、归档、加评论，给书记员发登记请求。直接敲 `lark-cli`、`meegle` 的写命令会被 hook 拒绝；"
+        "要删的文档记进研究员任务清单：`todo.py add --text '删文档 <链接>：<原因>'`。",
         "- 读台账和文档：`ledger.py get`、`ledger.py query`、`ledger.py trace`、`ledger.py status`，以及 `lark-cli docs +fetch --as user`。",
     ]
     docs = [p for p, owners in sorted(policy["soft_owned"].items()) if name in owners and p in SPEC_DOC_NAMES]
@@ -580,7 +582,7 @@ def sequence_lines(seq):
     if seq == "quality":
         lines.append("- 正式分数只由质量序列在冻结的 Eval Set 上跑出，正式集每一轮只跑一次；别的序列自己跑的是开发分，不进结论。评测协议的只读路径只有质量序列能改，改动要研究员确认。")
     if seq == "liaison":
-        lines.append("- 材料写成草稿，由书记员上传到知识库的“汇报文档”节点；每份材料发出前要研究员签字（走决策包），研究员自己转交。读者不用飞书：不给他们开任何飞书权限。读者是研究员本人或组织里的会话的东西，不归外联写。")
+        lines.append("- 材料写成交付包，自己用 `docs.py upload` 传进知识库；每份材料发出前要研究员签字（走决策包），研究员自己转交。读者不用飞书：不给他们开任何飞书权限。读者是研究员本人或组织里的会话的东西，不归外联写。")
     return lines
 
 
@@ -592,42 +594,59 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
     reg, receipt = spec.term("msg", "register_request"), spec.term("msg", "register_receipt")
     if rank == 0:
         session = ("会话池里你是一个桌面会话，池位名写作 `%s-p0-01` 这样的两位序号：侧栏标题、短名和消息抬头都用它。"
-                   "接受委托时，委托消息里“会话名：”那一行给的 `%s` 只写进工作项名称、包和“负责会话”字段。" % (pol["abbrev"], pol["session_pattern"]))
+                   "接受委托时，委托消息里“会话名：”那一行给的 `%s` 只写进包里；任务编号是“上级工作项 ID-序号”，比如 2101-3。" % (pol["abbrev"], pol["session_pattern"]))
     else:
         session = "会话池里你是一个桌面会话，会话名在开局那句话里，写作 `%s` 这样的两位序号，认领后不变，消息抬头用它。" % pol["session_pattern"].replace("<序号>", "01")
     lines = [
         "- 会话名：%s会话标签是 `%s`。" % (session, pol["tag"]),
-        "- 开工或接手：先读交给你的包；再用 `python3.12 -I .claude/solo-lab/bin/ledger.py get <工作项 ID>` 读工作项，读主文档的“状态包”接上进度。不靠对话记状态。",
-        "- " + after_compaction("入口" if rank == 2 else "上一级"),
+        "- 开工或接手：先读交给你的包；再用 `python3.12 -I .claude/solo-lab/bin/ledger.py get <工作项 ID 或任务编号>` 读它，读主文档的“状态包”接上进度。不靠对话记状态。",
+        "- " + after_compaction("路由" if rank == 2 else "上一级"),
         "- 写包用技能 `solo-lab:packages`（模板副本在 `.claude/solo-lab/templates/`）。草稿写到 `packages/drafts/%s/`，文件名照 `%s`；写完跑 `python3.12 -I .claude/solo-lab/bin/orgspec.py lint <路径>`。" % (seq, n["draft"]),
     ]
-    # every rank delivers the same way: the scribe uploads, then the package goes straight to whoever asked. Until
-    # 1.0.12 a +2 answering another sequence handed its delivery to the entry, which passed it on.
-    lines.append("- 交付：写好交付包，先给 `%s` 发【%s】：写草稿路径，动作“上传答复”，再写一行“确认节点：#<需求 ID>，由 <你的会话名> 提出”，它上传交付包并确认“执行”这一步。"
-                 "拿到【%s】后给委托方发消息，首行写 `%s：<包名> <包路径>`，下面是三行以内的摘要。%s发完把回执（delivered 或 queued，以及 message_id）写进本轮的最后一句。" % (
-                     scribe, reg, receipt, msg_head(spec, "report", receiver="<委托方会话名>"),
-                     "别的序列发来的跨序列需求，委托方就是发起它的那个 +2：交付直接发给它，不经入口。" if rank == 2 else ""))
-    dispatch = ("再跑 `python3.12 -I .claude/solo-lab/bin/pool.py show --role %s` 找空闲的会话。有空闲的：登记请求写“开工：是”，拿到【%s #ID】后发 "
-                "`%s：<包名> <包路径>`%s。没有空闲的：登记请求写“开工：否”，工作项留在“待开工”排队；等有会话空出来，先请书记员确认“开工”这一步（`workitem.py confirm <工作项 ID> --by <承接方的会话名>`），再委托。")
+    # 1.1.0: whoever delivers uploads its own delivery (docs.py upload). For a work item the scribe then fills the
+    # request's 交付包 field and confirms 执行; a +0's task has no work item, and its delivery needs nobody else.
+    report_head = msg_head(spec, "report", item="<编号>" if rank == 0 else "<工作项 ID>", receiver="<委托方会话名>")
+    sent_line = "发完把回执（delivered 或 queued，以及 message_id）写进本轮的最后一句。"
+    if rank == 0:
+        lines.append("- 交付：写好交付包，包头“关联工作项”写委托给你的任务编号（#<上级工作项 ID>-<序号>），运行 `%sdocs.py upload <交付包路径> --apply` 自己上传，"
+                     "它挂在需求包下面，不找书记员。再给委托方发消息，首行写 `%s：<包名> <包路径>`，下面是三行以内的摘要。%s"
+                     "委托给你的是纯数字的工作项 ID 时（升级前登记的），上传以后还要给 `%s` 发【%s】：写 `workitem.py reply <交付包路径> --apply` 和“确认节点：#<需求 ID>，由 <你的会话名> 提出”。" % (
+                         BIN, report_head, sent_line, scribe, reg))
+    else:
+        lines.append("- 交付：写好交付包，运行 `%sdocs.py upload <交付包路径> --apply` 自己上传，它挂在需求的主文档下面。再给 `%s` 发【%s】：写 `workitem.py reply <交付包路径> --apply`，"
+                     "再写一行“确认节点：#<需求 ID>，由 <你的会话名> 提出”，它填“交付包”字段并确认“执行”这一步。"
+                     "拿到【%s】后给委托方发消息，首行写 `%s：<包名> <包路径>`，下面是三行以内的摘要。%s%s" % (
+                         BIN, scribe, reg, receipt, report_head,
+                         "别的序列发来的跨序列需求，委托方就是发起它的那个 +2：交付直接发给它，不经入口和路由。" if rank == 2 else "", sent_line))
+    dispatch = ("再跑 `python3.12 -I .claude/solo-lab/bin/pool.py show --role %s` 找空闲的会话。有空闲的：登记请求写“开工：是”，拿到【%s #ID】后先运行 "
+                "`docs.py relink <ID> --apply` 把工作项 ID 写进文档，再发 `%s：<包名> <包路径>`%s。没有空闲的：登记请求写“开工：否”，工作项留在“待开工”排队；"
+                "等有会话空出来，先请书记员确认“开工”这一步（`workitem.py confirm <工作项 ID> --by <承接方的会话名>`），再委托。")
+    # 1.1.0: what is handed to a +0 has no work item. The session that hands it out uploads the package, gets a number
+    # for it, sends it and accepts the delivery itself; the scribe is not asked.
+    to_p0 = ("这类活不建工作项，也不找书记员：运行 `%sdocs.py upload <草稿路径> --source <%s> --apply`，输出里给出任务编号（上级工作项 ID-序号，比如 2101-3）。"
+             "再跑 `pool.py show --role %s` 找空闲的 +0，发 `%s：<包名> <包路径>`，消息里单独写一行“会话名：%s-p0-<编号>”；没有空闲的先放着，`pool.py show --queue <你的会话名>` 会列出还没派出去的。"
+             "收到【%s #<编号>】后对照验收标准看交付包（`ledger.py get <编号>` 列出它的链接），运行 `docs.py accept <编号> --result 通过 --apply`；"
+             "不通过的写 `--result 不通过 --note '<要改什么>'`，再给它发【%s #<编号>】。")
     closed = "要派的活是不是封闭任务，和在途的 +0 有没有改同一批文件；有重叠的排在它后面做，不并行"
     if rank == 2:
-        lines.append(("- 委托 +1：先写下发关系的需求包，给 `%s` 发【%s】（写草稿路径）。" % (scribe, reg))
+        lines.append(("- 委托 +1：先写下发关系的需求包，运行 `%sdocs.py upload <草稿路径> --apply` 自己上传，再给 `%s` 发【%s】（写草稿路径）。" % (BIN, scribe, reg))
                      + dispatch % (pol["spawn"][0], receipt, msg_head(spec, "assign", receiver="<+1 的池位名>"), ""))
-        lines.append("- 本序列没开 +1 时，封闭任务直接委托 +0：需求包写执行关系，方法和验收标准一起写明，登记请求里写“来源工作项 #<这件活所属的研究任务或跨序列需求 ID>”，"
-                     "消息里单独写一行“会话名：%s-p0-<工作项 ID>”，其余照上一条。做到一半还要新信息或新判断的事不派给 +0，自己做。补 +0 之前先看两件事：%s。" % (pol["abbrev"], closed))
+        lines.append("- 本序列没开 +1 时，封闭任务直接委托 +0：需求包写执行关系，方法和验收标准一起写明。" + to_p0 % (
+            BIN, "这件活所属的研究任务或跨序列需求 ID", agent_name(seq, 0), msg_head(spec, "assign", item="<编号>", receiver="<+0 的池位名>"), pol["abbrev"],
+            spec.term("msg", "report"), spec.term("msg", "resume")) + "做到一半还要新信息或新判断的事不派给 +0，自己做。补 +0 之前先看两件事：%s。" % closed)
         if seq in (task.get("pool") or {}).get("later", []):
             lines.append("- 本序列开池时只有你一个会话：活自己做。有封闭任务（查文献、跑一段分析、独立复核这类）时补 +0；有要长期占上下文的设计阶段时才补 +1，这个阶段结束就请研究员释放它。")
     elif rank == 1:
         lines.append("- 哪类活自己做：看一件事做到一半还需不需要新的信息或新的判断。不需要的是封闭任务，交 +0；需要的（开跑一个批次并盯着、撤作业、合并和解冲突、命令被拦下以后的重试这类）你自己做，不派给 +0。"
                      "自己做的时候，盯守交给脚本或后台任务，你只读汇总，免得上下文被日志撑大。+0 报来“这个任务不是封闭任务”的，收回自己做。补 +0 之前先看两件事：%s。" % closed)
-        lines.append(("- 委托 +0：执行关系的需求包按验收标准划分，不按运行次数划分。先给 `%s` 发【%s】（写草稿路径和“来源工作项 #<它所属的下发需求包 ID>”）。" % (scribe, reg))
-                     + dispatch % (pol["spawn"][0], receipt, msg_head(spec, "assign", receiver="<+0 的池位名>"),
-                                   "，消息里单独写一行“会话名：%s-p0-<工作项 ID>”" % pol["abbrev"]))
+        lines.append("- 委托 +0：执行关系的需求包按验收标准划分，不按运行次数划分。" + to_p0 % (
+            BIN, "它所属的下发需求包 ID", pol["spawn"][0], msg_head(spec, "assign", item="<编号>", receiver="<+0 的池位名>"), pol["abbrev"],
+            spec.term("msg", "report"), spec.term("msg", "resume")))
     else:
         lines.append("- 你不再往下委托。交给你的是封闭任务：照需求包的方法和验收标准做完就交付。任务中途第二次被要求转向（改方法、改范围、撤掉重来这类）时先停下，"
                      "告诉委托方“这个任务不是封闭任务”，由它收回自己做；第一次转向照做。")
     if rank in (1, 2):
-        lines.append("- 验收：收到【%s】后，对照需求包的验收标准看交付包，`ledger.py get <需求 ID>` 的“交付包”字段是它的链接。通过：给 `%s` 发【%s】，动作“确认节点”和“归档”，"
+        lines.append("- 验收工作项（下发的需求、跨序列需求）：收到【%s】后，对照需求包的验收标准看交付包，`ledger.py get <需求 ID>` 的“交付包”字段是它的链接。通过：给 `%s` 发【%s】，动作“确认节点”和“归档”，"
                      "写“确认节点：#<需求 ID>，由 <你的会话名> 提出”。不通过：动作“回滚节点”，写“回滚节点：#<需求 ID> 退回到 执行，原因：<一句话>”，"
                      "拿到【%s】后给承接方发【%s】说明要改什么。%s" % (
                          spec.term("msg", "report"), scribe, reg, receipt, spec.term("msg", "resume"),
@@ -643,20 +662,25 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
     if rank == 2:
         # 1.0.12: a request to another sequence goes to the router once (duplicates, conflicts, registration), and
         # from then on the two +2 talk to each other. Until then every message of it passed through the entry.
-        lines.append("- 跨序列的需求包写成草稿，给路由 `%s` 发 `%s：跨序列需求包 <包路径>`。它对照台账查重复和冲突，请书记员登记，用【%s #ID】把工作项 ID 回给你；"
-                     "你再直接给承接方 +2 发 `%s：<包名> <包路径>`。它说和进行中的工作重复、或者碰到冻结项的，照它说的先处理，不发委托。"
-                     "决策包照旧写成草稿发给入口 `%s`，抬头用【%s】。" % (
-                         router, msg_head(spec, "notice", item=None, receiver=router), spec.term("msg", "notice"),
-                         msg_head(spec, "assign", receiver="<承接方 +2 的会话名>"), entry, spec.term("msg", "decide")))
+        lines.append("- 跨序列的需求包写成草稿，运行 `%sdocs.py upload <草稿路径> --apply` 自己上传，再给路由 `%s` 发 `%s：跨序列需求包 <包路径>`。它对照台账查重复和冲突，请书记员登记，"
+                     "用【%s #ID】把工作项 ID 回给你；你运行 `docs.py relink <ID> --apply`，再直接给承接方 +2 发 `%s：<包名> <包路径>`。它说和进行中的工作重复、或者碰到冻结项的，照它说的先处理，不发委托。" % (
+                         BIN, router, msg_head(spec, "notice", item=None, receiver=router), spec.term("msg", "notice"),
+                         msg_head(spec, "assign", receiver="<承接方 +2 的会话名>")))
+        lines.append("- 决策包写成草稿，运行 `%sdocs.py upload <草稿路径> --apply` 自己上传，给 `%s` 发【%s】登记；拿到【%s #ID】后运行 `docs.py relink <ID> --apply`，"
+                     "再给路由 `%s` 发 `%s：<事项一句话> <主文档链接>`。路由转告入口，入口讲给研究员；你不直接找入口。" % (
+                         BIN, scribe, reg, receipt, router, msg_head(spec, "decide", receiver=router)))
+        lines.append("- 进展和里程碑发给路由 `%s`，不发入口：研究任务走完一步、跨序列需求验收、出现要研究员动手的事、工作项过了截止时间，用【%s #ID】告诉它，它改状态包、转告入口。"
+                     "研究员的话由入口交路由、路由转给你，抬头是【%s】或【%s #ID】，是原话，路由只加了抬头。" % (
+                         router, spec.term("msg", "notice"), spec.term("msg", "notice"), spec.term("msg", "resume")))
         lines.append("- 别的序列发来的跨序列需求，发起方 +2 直接用【%s #ID】发给你。先接单：给 `%s` 发【%s】，写“确认节点：#<ID>，由 <你的会话名> 提出”和三项必填（需求复述、承接范围、预计交付时间），"
                      "这时还不写交付包；拿到【%s】后用【%s #ID】把这三项告诉发起方。不接：请书记员“回滚节点：#<ID> 退回到 提出”并写原因，再告诉发起方。接了以后序列内照常委托。" % (
                          spec.term("msg", "assign"), scribe, reg, receipt, spec.term("msg", "notice")))
         lines.append("- 跨序列需求登记以后，澄清、答复、进度和验收意见都带着工作项 ID 直接和对方 +2 往来，不经入口和路由；路由从登记回执和派发日志看进展。"
-                     "改范围、改成功标准、改冻结项不在往来里谈定：写决策包交入口。")
+                     "改范围、改成功标准、改冻结项不在往来里谈定：写决策包，照上面登记后交路由。")
         lines.append("- 研究任务走到你们序列负责的那一步时，这一步归你推进；书记员确认上一步以后会用【%s】告诉你。先用 `python3.12 -I .claude/solo-lab/bin/ledger.py next <研究任务 ID>` 看这一步必填什么，"
                      "序列内的事委托 +1，要别的序列配合就发跨序列的需求包。要填链接的产出有两条路。你自己写的（和研究员谈出来的规格、需求文档这一类）：写在本地，"
-                     "登记请求里把字段写成 `<字段>=@<本地文件>`，书记员上传到研究任务单下面并填上链接；研究员签字前要看的，先请书记员用 "
-                     "`workitem.py update <任务 ID> --set <字段>=@<本地文件>` 传上去，把链接写进决策包。委托下去做的（要查、要跑、要整理的调研文档、实验方案、探索记录这一类）："
+                     "运行 `docs.py attach <任务 ID> <字段> <本地文件> --apply` 自己传到研究任务单下面，登记请求里把字段写成 `<字段>=@<本地文件>`，书记员照文件找到那份文档、填上链接；"
+                     "研究员签字前要看的，把 attach 输出的链接写进决策包。委托下去做的（要查、要跑、要整理的调研文档、实验方案、探索记录这一类）："
                      "走本序列的一条同序列需求，验收通过以后用承接方那份交付包文档的链接，它在那条需求的“交付包”字段里。产出齐了，给 `%s` 发【%s】请它确认节点，写明各必填字段的值。"
                      "正式分数只认质量序列在冻结的 Eval Set 上跑出的。" % (spec.term("msg", "notice"), scribe, reg))
     else:
@@ -666,20 +690,20 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
     lines += common_role_lines(spec, seq, rank, name, pol, task, policy)
     if rank == 2:
         lines += [
-            "- 研究员会直接点开你的会话交代事情。这时先运行 `python3.12 -I .claude/solo-lab/bin/notify.py focus open --topic '<一句话>'`，用 `notify.py send %s --text '…'` 告诉入口；做完或研究员说“结束”时运行 `notify.py focus close`。谈定的事写成决策包（渠道：研究员主动发起）交给入口登记。没写进台账的决定不算数。" % entry,
-            "- 被其他 agent 会话叫醒的轮次，研究员多半不在，不向研究员提问：要研究员拍板的事写决策包，或给入口发【%s】；+1 和 +0 要拍板的事写进交付包。收尾里的提问 hook 会去掉。" % spec.term("msg", "decide"),
+            "- 研究员会直接点开你的会话交代事情。这时先运行 `python3.12 -I .claude/solo-lab/bin/notify.py focus open --topic '<一句话>'`，用 `notify.py send %s --text '…'` 告诉路由；做完或研究员说“结束”时运行 `notify.py focus close`。谈定的事写成决策包（渠道：研究员主动发起），照决策包的做法上传、登记，再交路由。没写进台账的决定不算数。" % router,
+            "- 被其他 agent 会话叫醒的轮次，研究员多半不在，不向研究员提问：要研究员拍板的事写决策包，登记后给路由发【%s】；+1 和 +0 要拍板的事写进交付包。收尾里的提问 hook 会去掉。" % spec.term("msg", "decide"),
             "- 只要研究员动一下手、没有选项要他挑的事（恢复集群连接、下载数据、连 VPN、跑一条只有他能跑的命令这类），不写决策包：运行 `todo.py add --text '<要他做什么>' --for <工作项 ID> --done-when '<做完怎么算数>'` 记进研究员任务清单，入口向研究员列出；他做完了，或者你自己核对到了结果，运行 `todo.py done <编号>`。建错的、不做了的工作项归档不了，也不去推它的节点：运行 `todo.py add --for <工作项 ID> --terminate --text '<为什么不要它了>'`，由研究员在网页上终止。有两个以上的选项要他挑，或者做了以后不好撤回的，是决策，照旧写决策包。",
             "- 决策定下以后要研究员亲手做的事（整理数据、挂 API、维护沙箱、开 Docker、调设置这类），写在决策包包头“研究员要做的事”。"
             "每份决策包都有这一行，没有要研究员亲手做的写“无”。"
             "包头还有“执行方”一行，写这条决策定下以后由谁执行：“研究员”，或者执行它的会话名，多半是你自己。"
             "执行方写会话的只收各序列的 +2、入口和路由，要下级干的活由你用需求包委托。"
-            "只要有一个选项要研究员亲手做，执行方就写“研究员”；他选了不用他动手的选项，入口请书记员确认“决定”时用 `--executor` 把执行方改成会话。"
+            "只要有一个选项要研究员亲手做，执行方就写“研究员”；他选了不用他动手的选项，路由请书记员确认“决定”时用 `--executor` 把执行方改成会话。"
             "执行方是研究员时“研究员要做的事”不能是“无”，执行方是会话时写“无”，对不上包检查会退回。"
             "被决策卡住的工作项，登记以后请书记员把阻塞原因写成“等研究员：决策 #<ID>”，这条决策归档以后再请它清掉。"
-            "研究员定了，书记员确认“决定”，决策到“待执行”，并通知执行方。执行方是研究员的，他做完了，入口请书记员归档，再通知你；"
+            "研究员定了，书记员确认“决定”，决策到“待执行”，并通知执行方。执行方是研究员的，他做完了，路由请书记员归档，再通知你；"
             "执行方是你的，书记员把决定内容发给你，你照决定执行完，马上请书记员归档，不在待执行里停留。",
-            "- 决策登记以后、研究员定之前要改，复制主文档开头到“状态包”之前的部分改成新草稿，“版本”写上一版加 1，请书记员用 `docs.py revise` 原位换掉，"
-            "不另登记；修订不推给研究员。决策待定期间，包里“冻结的动作”谁都不做，选项中立的准备照常做。不可逆事项清单（`org/org.md`）里的事，"
+            "- 决策登记以后、研究员定之前要改，复制主文档开头到“状态包”之前的部分改成新草稿，“版本”写上一版加 1，自己运行 "
+            "`docs.py revise <决策 ID> <新草稿> --note '<改了什么>' --apply` 原位换掉，不另登记；输出里列出要书记员改的字段（紧急程度、执行方这类）的，照它给书记员发登记请求。修订不推给研究员。决策待定期间，包里“冻结的动作”谁都不做，选项中立的准备照常做。不可逆事项清单（`org/org.md`）里的事，"
             "要等研究员定了、所选选项里列了它才做。hook 不拦这些命令，也不按待定决策冻结，权限照 Claude Code 自己的检查。"
             "上面两条规矩不变，靠你照规则办、每轮的冻结提示和包检查。一件事可逆不可逆，你按判据判断，清单是必须写不可逆的下限。"
             "可逆的决策登记满到期时长（`org/decisions.md`，默认 24 小时）"
@@ -719,52 +743,42 @@ CROSS_RECORD = "packages/drafts/pmo/跨序列协调记录.md"     # the router k
 
 
 def entry_values(spec, policy):
-    """The parts of the entry's definition that name sessions and message heads."""
+    """The parts of the entry's definition that name sessions and message heads. From 1.1.0 the entry talks to the
+    researcher and to the router only: what the researcher says goes to the router once, written down as it was
+    said; what the sequences report reaches the router, which passes on milestones and decisions."""
     pol = policy["agents"]["pmo-p2"]
     router = policy["agents"]["pmo-router"]["fixed_session"]
-    scribe = policy["agents"]["pmo-scribe"]["fixed_session"]
-    targets = code_list(pol["spawn"])
     me = pol["fixed_session"]
     return {
         "entry_runs_as": "在会话池里是研究员平时对话的会话",
         "entry_preface": "先写清工作方式：用中文回答，先给结论；先读再改，做完核对结果；研究员在场就问，不在场就写进决策队列，不猜参数、不编结果。你会运行很久，上下文一定会被压缩，所以不靠对话记状态：每次都从台账、状态包和 `python3.12 -I .claude/solo-lab/bin/pool.py show` 读。",
-        "entry_to_router": "给 `%s` 发 `%s：<一句话>`，把原话和脚本输出写进消息（长的先写进 `packages/drafts/pmo/` 再给路径）。它把结论用【%s】发回给你。" % (
-            router, msg_head(spec, "assign", item=None, sender=me, receiver=router), spec.term("msg", "report")),
-        "entry_dispatch": (
-            "**委托。** 照派发图给这些角色的会话发消息：%s。已经有工作项的事用【委托 #ID】；"
-            "还没有工作项的（研究员刚交代的新任务、要对方起草的包）用【通知】，正文写研究员的原话和要它做什么。"
-            "两种都先跑 `python3.12 -I .claude/solo-lab/bin/pool.py show --role <角色>` 找人：有空闲的发给空闲的，优先发给台账里“负责会话”对应的那个；"
-            "显示“研究员在用”的不打断，用 `notify.py send <会话名> --text '...' --work-item <ID>` 留言，紧急的才发消息。"
-            "消息首行写 `%s：<包名> <包路径>`，下面写要它做什么；正文不复述，包在文件里。回执是 delivered 或 queued 才算发出；"
-            "对方收没收到，以对方 hook 记在 `.claude/logs/dispatch.jsonl` 的时间为准。\n\n**登记。** 工作项、字段、状态和文档只由书记员写。"
-            "要登记的东西写成一条“%s”，发给 `%s`，它写完回【%s #ID】：") % (
-            targets, msg_head(spec, "assign", sender=me, receiver="<+2 的会话名>"), spec.term("msg", "register_request"), scribe,
-            spec.term("msg", "register_receipt")),
-        "entry_extra_info": "**补充信息（R1、R2）。** 在工作项下加带标签的评论（请书记员登记，或自己 `meegle comment add`），再给负责会话发【%s #ID】说明一句；它正被研究员直接用着的，改用 `notify.py send` 留言。【%s】只由委托方发。" % (
-            spec.term("msg", "notice"), spec.term("msg", "resume")),
-        "entry_queue": "清单长、要附选项和建议时，给 `%s` 发【%s】请它汇总成表：每件写状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、选项、建议，改过版的在事项后面写版本号；已经到期、继续等研究员的排最前，其次是“插队”的。研究员在本会话里" % (
-            router, spec.term("msg", "assign")),
+        "to_router_head": msg_head(spec, "notice", item=None, sender=me, receiver=router),
+        "decide": spec.term("msg", "decide"),
+        "entry_queue": "清单长、要附选项和建议时，请路由 `%s` 汇总成表：每件写状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、选项、建议，改过版的在事项后面写版本号；已经到期、继续等研究员的排最前，其次是“插队”的。研究员在本会话里" % router,
         "entry_focus": (
             "**研究员直接交代。** 当前这一步由谁负责，照上面“研究任务”一段查；两个流程的对照在 `org/phases.md`。\n\n%s\n\n"
-            "这时那个会话会自己运行 `notify.py focus open`，并用 `notify.py send` 告诉你。"
-            "`pool.py show` 显示它“研究员在用”期间不委托它，新信息照“委托”一段留言。"
-            "谈定的事它会写成决策包（渠道：研究员主动发起）交给你：照 R6 请书记员登记，“待签版本”写了要更新的字段的一并写进去。\n\n**会话池。"
-            "** 研究员说“恢复”时，运行 `pool.py show --recover`，照它列的清单发消息（你自己委托出去的发【%s #ID】，别人委托的请委托方发），先让书记员补完写到一半的登记。"
-            "研究员在本会话明确说“补位”或“再开一个 …”时才开会话：路由和书记员由你开，其余序列的会话由那个序列的 +2 开；"
+            "这时那个会话会自己运行 `notify.py focus open`，并告诉路由；`pool.py show` 显示它“研究员在用”。"
+            "谈定的事它会写成决策包（渠道：研究员主动发起），自己上传、登记，路由照 R6 请书记员确认“决定”，再告诉你。\n\n**会话池。"
+            "** 研究员说“恢复”时，运行 `pool.py show --recover`，把清单交给路由，由它照清单发消息、让书记员补完写到一半的登记。"
+            "研究员在本会话明确说“补位”或“再开一个 …”时才开会话：路由由你开（书记员由路由开），其余序列的会话由那个序列的 +2 开；"
             "开法照 `pool.py claim` 输出里的开池表，开好马上 `pool.py expect` 预登记。没人要求时不开会话。"
-            "委托一批工作项之前先看额度：5 小时额度用了八成以上，只委托紧急程度为“插队”的。"
-            "你开的会话每结束一轮，应用会叫醒你一次，这不算交付：先跑 `pool.py show --queue %s`，有待开工的工作项又有空闲会话就委托出去，没有就一句话结束本轮。") % (
-            bullets([spec.render(spec.rules["entry"]["focus_rule"])]), spec.term("msg", "resume"), me),
-        "entry_cross": "**跨序列需求不经你转手。** 发起方 +2 把需求包交路由 `%s` 查重、登记，再直接委托承接方 +2；接单、答复、交付、验收都在两个 +2 之间。"
-                       "看进展用 `route.py cross` 和路由的协调记录 `%s`。"
-                       "路由报来改范围、改标准、改冻结项的内容，或者两边说法对不上的，请有关的 +2 写决策包。各序列交来的包只有决策包经你，包的流向表在 `org/org.md`。" % (router, CROSS_RECORD),
+            "你开的会话每结束一轮，应用会叫醒你一次，这不算交付：没有路由发来的消息，就一句话结束本轮。") % (
+            bullets([spec.render(spec.rules["entry"]["focus_rule"])])),
+        "entry_cross": "跨序列需求不经你：发起方 +2 交路由查重、登记，再直接委托承接方 +2，看进展用 `route.py cross` 和路由的协调记录 `%s`。" % CROSS_RECORD,
         "entry_permissions": "**权限提示。** 每个会话的权限提示只出现在它自己的会话里；`pool.py show --watch` 把等研究员批准的会话列在最前。请研究员不要对飞书写操作的提示选“不再询问”。",
         "after_compaction": after_compaction("研究员", entry=True),
-        "entry_status": "**状态包由你维护。** 研究任务主文档末尾的“状态包”记这条任务现在的状态：上游卡在哪条决策、哪些实验条件已经定死、哪些工作暂停了。"
-                        "工作项状态变化、研究员定下新决策、暂停或恢复某类工作时，你改写它："
-                        "先 `ledger.py status <研究任务 ID>` 读现在的，把整段（简介、当前状态、近期变化、风险）改好存成 `packages/drafts/pmo/` 下的文件，"
-                        "请书记员 `docs.py status-block <研究任务 ID> --file <文件>` 整段替换。",
     }
+
+
+REGISTER_FORM = """```text
+登记请求
+- 草稿：packages/drafts/<序列>/<文件>.md（请求方已经用 docs.py upload 传好）
+- 动作：新建工作项 / 填交付包字段 / 确认节点 / 回滚节点 / 归档 / 改字段 / 评论
+- 来源工作项：#<ID>
+- 开工：是（下发关系的需求包，登记后马上委托 +1 的；排队的写“否”）
+- 确认节点：#<ID>，由 <提出请求的会话名> 提出，必填项：<字段名>=<值>；链接字段可以写 <字段名>=@<本地文件>（先用 docs.py attach 传好）或 <字段名>=<文档链接>
+- 回滚节点：#<ID> 退回到 <节点名>，原因：<一句话>；研究任务的回退附研究员批准的决策 #<ID>
+```"""
 
 
 def pmo_file(spec, rank, task, policy):
@@ -778,8 +792,9 @@ def pmo_file(spec, rank, task, policy):
               "rank_given": row["given"], "rank_outputs": bullets(row["outputs"], "  "),
               "rank_escalate": row["escalate"], "naming": bullets(naming_lines(spec))}
     scribe = policy["agents"]["pmo-scribe"]["fixed_session"]
+    entry = policy["agents"]["pmo-p2"]["fixed_session"]
     if rank == 2:
-        desc = "项目管理 +2（入口）。研究员平时对话的会话：信息和指示都先到这里，按路由决策表分发，管理决策队列和会话池。"
+        desc = "项目管理 +2（入口）。研究员平时对话的会话：只和研究员对话，把他的话照录交给路由，读状态包、决策队列和台账回答他，把决策和里程碑讲给他。"
         common.update({
             "description_json": yaml_str(prefix + desc),
             "seq_intro": s["intro"], "handoff_rules": spec.handoff_rules(), "signoff": spec.signoff_items(),
@@ -789,34 +804,40 @@ def pmo_file(spec, rank, task, policy):
         common.update(entry_values(spec, policy))
         return render(scaffold("agents/entry.md.tmpl"), common)
     if rank == 1:
-        router_scribe = "**交给书记员。** 入口要你安排登记、分发或归档时，给 `%s` 发【%s】，等它回【%s】，再把书记员的写入结果和异常清单写进给入口的【%s】。" % (
-            scribe, spec.term("msg", "register_request"), spec.term("msg", "register_receipt"), spec.term("msg", "report"))
-        router_report = "**交付。** 给入口发【%s】：路由结论，或者决策队列表，或者书记员的写入结果。正文长的写进 `packages/drafts/pmo/`，消息里只给路径和三行摘要。" % spec.term("msg", "report")
-        me, notice = pol["fixed_session"], spec.term("msg", "notice")
+        me, notice, reg, receipt = pol["fixed_session"], spec.term("msg", "notice"), spec.term("msg", "register_request"), spec.term("msg", "register_receipt")
+        router_scribe = "**交给书记员。** 要登记、确认、回滚或归档时，给 `%s` 发【%s】，等它回【%s】。格式：\n\n%s" % (scribe, reg, receipt, REGISTER_FORM)
+        router_report = ("**给入口的消息。** 只有三种：里程碑，要研究员定的事（【%s #ID】），你判断不了归属的话。正文长的写进 `packages/drafts/pmo/`，消息里只给路径和三行摘要。"
+                         "你开的会话（书记员）每结束一轮，应用会叫醒你一次，这不算交付：没有要处理的消息，就一句话结束本轮。" % spec.term("msg", "decide"))
+        router_status = ("**状态包由你维护。** 研究任务主文档末尾的“状态包”记这条任务现在的状态：上游卡在哪条决策、哪些实验条件已经定死、哪些工作暂停了；各会话压缩上下文以后先读它，入口用它回答研究员。"
+                         "工作项状态变化、研究员定下新决策、暂停或恢复某类工作时，你改写它：先 `ledger.py status <研究任务 ID>` 读现在的，把整段（简介、当前状态、近期变化、风险）改好存成 `packages/drafts/pmo/` 下的文件，"
+                         "运行 `python3.12 -I .claude/solo-lab/bin/docs.py status-block <研究任务 ID> --file <文件> --apply` 整段替换。")
         # 1.0.12: the router is where a request to another sequence starts, and it keeps the record of what the
-        # two +2 then settle between themselves. Until then it only answered the entry, and a real pool never asked.
+        # two +2 then settle between themselves. 1.1.0: the +2 uploads the package itself before it hands it in.
         router_cross = (
-            "**跨序列需求的委托。** 各序列的 +2 把跨序列的需求包草稿用【%s】发给你。先跑 `python3.12 -I .claude/solo-lab/bin/route.py classify --draft <包路径>`，草稿没通过检查的退回作者。"
+            "**跨序列需求的委托。** 各序列的 +2 把跨序列的需求包自己上传，再把草稿路径用【%s】发给你。先跑 `python3.12 -I .claude/solo-lab/bin/route.py classify --draft <包路径>`，草稿没通过检查的退回作者。"
             "再对照台账查两件事：和进行中的工作有没有重复（`ledger.py query cross`、`ledger.py query open --sequence <承接序列>`）；"
             "有没有碰到所属研究任务签字后冻结的字段，或者待定决策“冻结的动作”（`ledger.py status <研究任务 ID>`、`ledger.py query queue`）。"
-            "没有问题：给 `%s` 发【%s】（草稿路径，动作“新建工作项并上传”），拿到【%s #ID】后回给发起方 `%s：已登记，可以委托`，由它直接委托承接方 +2。"
-            "有问题：不登记，把是哪一条回给发起方；要研究员定的，另给入口发【%s】。你不改写包的内容，不替序列判断做不做，也不委托承接方。\n\n"
+            "没有问题：给 `%s` 发【%s】（草稿路径，动作“新建工作项”），拿到【%s #ID】后回给发起方 `%s：已登记，可以委托`，由它直接委托承接方 +2。"
+            "有问题：不登记，把是哪一条回给发起方；要研究员定的，请发起方写决策包。你不改写包的内容，不替序列判断做不做，也不委托承接方。\n\n"
             "**协调记录。** 跨序列需求登记以后，两个 +2 直接往来，不经你和入口。书记员在这类工作项上每写一次（接单、交付、验收、回滚、归档），会把【%s】另发一份给你。"
             "收到后跑 `python3.12 -I .claude/solo-lab/bin/route.py cross <工作项 ID>` 看这条需求的往来（日志只记每条消息的首行，内容读首行写的包），"
             "更新 `%s`：每条进行中的跨序列需求一行，写谁在等谁、卡在哪一步、前置条件齐没齐、最近一次往来。"
-            "有下面三种情况，给入口发【%s】，写明是哪条需求、哪一句：往来里出现改范围、改成功标准、改冻结项的内容；两个序列的说法对不上；"
+            "有下面三种情况，告诉入口，写明是哪条需求、哪一句：往来里出现改范围、改成功标准、改冻结项的内容；两个序列的说法对不上；"
             "过了截止时间没有动静（期限看 `ledger.py query cross`，`route.py cross` 会标出 48 小时没有往来的）。都没有就一句话结束本轮，不给入口发消息。") % (
-            notice, scribe, spec.term("msg", "register_request"), spec.term("msg", "register_receipt"),
-            msg_head(spec, "notice", item="<工作项 ID>", sender=me, receiver="<发起方 +2 的会话名>"), spec.term("msg", "report"),
-            spec.term("msg", "register_receipt"), CROSS_RECORD, spec.term("msg", "report"))
-        common.update({"description_json": yaml_str(prefix + "项目管理 +1（路由）。按路由决策表给出路由结论、入口要时汇总决策队列、安排书记员登记；给跨序列需求查重、登记，维护跨序列协调记录；不委托序列 +2。"),
+            notice, scribe, reg, receipt,
+            msg_head(spec, "notice", item="<工作项 ID>", sender=me, receiver="<发起方 +2 的会话名>"), receipt, CROSS_RECORD)
+        common.update({"description_json": yaml_str(prefix + "项目管理 +1（路由）。消息的枢纽：把研究员的话对着台账分给会话，收各序列的进展、交付和要拍板的事，维护研究任务的状态包和跨序列协调记录，只把里程碑和要研究员定的事交给入口；给跨序列需求查重、安排登记。"),
                        "routing_table": spec.routing_table(), "router_scribe": router_scribe, "router_report": router_report,
-                       "router_cross": router_cross, "after_compaction": after_compaction("入口")})
+                       "router_cross": router_cross, "router_status": router_status, "after_compaction": after_compaction("入口", entry=True),
+                       "notice": notice, "reg": reg, "receipt": receipt, "decide": spec.term("msg", "decide"), "assign": spec.term("msg", "assign"),
+                       "entry": entry, "resume_head": msg_head(spec, "resume", sender=me, receiver="<负责会话的会话名>"),
+                       "to_entry_head": msg_head(spec, "notice", sender=me, receiver=entry),
+                       "decide_head": msg_head(spec, "decide", sender=me, receiver=entry)})
         return render(scaffold("agents/router.md.tmpl"), common)
     intake = "\n\n会话池里各会话直接给你发【%s】。一次处理一条；你在忙时，后来的消息会自动排队。写完给请求方回 `%s：<写了什么>`，下面列出异常。写台账前先不加 `--apply` 预览，确认后再加；脚本自己会加文件锁，同一时间只有一个写入。" % (
         spec.term("msg", "register_request"), msg_head(spec, "register_receipt", sender=scribe, receiver="<请求方会话名>"))
-    common.update({"description_json": yaml_str(prefix + "项目管理 +0（书记员）。台账和文档唯一的写入方：按登记请求和需求包建工作项、上传文档、写字段、确认和回滚节点、归档。"),
-                   "docs_tree": spec.docs_tree(), "scribe_intake": intake, "after_compaction": after_compaction("入口")})
+    common.update({"description_json": yaml_str(prefix + "项目管理 +0（书记员）。飞书项目唯一的写入方：按登记请求建工作项、写字段和评论、确认和回滚节点、归档；文档由各会话自己上传，书记员不上传、不修订、不删。"),
+                   "docs_tree": spec.docs_tree(), "scribe_intake": intake, "after_compaction": after_compaction("路由")})
     return render(scaffold("agents/scribe.md.tmpl"), common)
 
 
@@ -856,11 +877,13 @@ def where_text(task, ids):
 HARD_RULES = ("hook 只拦两类事：会损坏数据的，和研究员多半不在时向他提的问题。在任何会话里都直接拒绝：用编辑工具改 `.claude/` 下的 hook、配置和角色定义，"
               "用编辑工具改评测协议的只读路径（质量序列的会话和研究员自己的会话例外：改动弹窗要研究员确认，bypass 和 dontAsk 模式下也拒绝），"
               "high-risk-write 和带 `--yes` 的飞书命令，派发时带 `name`，用 Agent 工具派书记员，不照规定写法的认领、预登记和释放，第二条入口或书记员认领。"
-              "在研究员自己的会话里弹窗询问、在别的会话里拒绝：书记员以外的会话写飞书和台账，在共享工作区里切分支、stash、reset 或 pull，释放认领。"
+              "在研究员自己的会话里弹窗询问、在别的会话里拒绝：书记员以外的会话写工作项（`workitem.py` 和 `meegle` 的写命令），"
+              "任何会话直接敲 `lark-cli` 的文档写命令（写文档只经 `docs.py`，它每个认领的会话都能运行，脚本自己核对是不是作者），"
+              "在共享工作区里切分支、stash、reset 或 pull，释放认领。"
               "不可逆事项清单（`org/org.md`）里的命令、删改文件的 shell 命令，hook 都不拦，权限照 Claude Code 自己的检查。规矩不变，靠规则、每轮提示和包检查："
               "清单里的事要先有研究员批准的决策，待定决策“冻结的动作”谁都不做，评测协议的只读路径和 `.claude/` 下的文件用 shell 命令也不许改。"
               "池会话被其他 agent 会话叫醒的轮次：拒绝 AskUserQuestion，去掉收尾工具里的提问（ask、actions、blocked），"
-              "只有插队决策的登记回执到入口的那一轮放行一次。"
+              "只有路由把一条插队的决策转告入口的那一轮放行一次。"
               "别的派发规则是规范：违反时 hook 提醒、记日志，不拦截。")
 
 
@@ -879,7 +902,9 @@ def shared_mechanics(spec, policy):
         "开会话：会话一层开一层，+2 开本序列的 +1，+1 开自己下面的 +0，侧栏里新会话嵌在开它的会话下面。开局那句话点了名要你开的，在认领那一轮照认领输出开，这是研究员初始化时定下的开法；"
         "此后研究员在你的会话里明确要求（“补位”“再开一个 alg-p0”）时照表开。人手不够时运行 `pool.py refill <角色>` 记一条补位请求，"
         "开这个角色的会话在同一轮提一张启动卡；研究员在那个会话里点一下才开，不会自动开。",
-        "工作项、字段、节点和文档只由唯一认领的书记员 `%s` 写，写操作都走 `ledger.py`；其他会话只能加带会话标签的评论。每一步谁负责、必填什么，以飞书空间为准：`ledger.py next <工作项 ID>` 现读。" % scribe,
+        "工作项、字段、节点和评论只由唯一认领的书记员 `%s` 写（`workitem.py`）；文档谁负责谁写，各会话用 `docs.py` 上传和修订自己的文档。"
+        "+1 派给 +0 的活不建工作项，按“上级工作项 ID-序号”编号（比如 2101-3），在消息抬头里和工作项 ID 一样用。每一步谁负责、必填什么，以飞书空间为准：`ledger.py next <工作项 ID>` 现读。" % scribe,
+        "入口 `%s` 只和研究员、路由往来：研究员的话由入口照录交给路由 `%s`，路由转给该知道的会话；进展、交付和【%s】发给路由，不发入口。" % (entry, router, spec.term("msg", "decide")),
         "high-risk-write 和带 `--yes` 的飞书命令、在本目录切分支、stash、reset 之类的 git 命令都由研究员执行：把完整命令写给研究员。",
         "知识库、文档和云空间的命令显式带 `--as user`；收发消息和订阅事件带 `--as bot`。",
         HARD_RULES,
@@ -888,20 +913,21 @@ def shared_mechanics(spec, policy):
 
 def pool_sections(spec, policy):
     entry = policy["agents"]["pmo-p2"]["fixed_session"]
+    router = policy["agents"]["pmo-router"]["fixed_session"]
     decide = spec.term("msg", "decide")
     return "\n".join([
         "", "## 本目录怎样落实全局约定", "",
         bullets([
             "消息首行的抬头就是自报会话名。",
-            "授权链看登记回执（`packages/sent/<工作项 ID>.json`）和派发图（`org/org.md` 的“派发图”）：对得上就照做；对不上，发【%s】给入口 `%s`。" % (decide, entry),
+            "授权链看登记回执（`packages/sent/<工作项 ID>.json`）和派发图（`org/org.md` 的“派发图”）：对得上就照做；对不上，告诉路由 `%s`。" % router,
             "送达以收方 hook 的记录为准，不回 ACK，也不等 ACK。",
             "本项目的会话池就是研究员认可的派发方式：委托消息发给池里的会话，不改用后台子智能体。",
             "改了共享文件不群发通知，别人看台账里的“负责会话”。",
             "被其他 agent 会话叫醒的轮次，研究员多半不在，不向研究员提问。这类轮次有三种：其他会话发来的消息、本会话开出的会话结束一轮的回报、开会话时上级写的首轮。"
-            "这时面向研究员最多写一行状态，不标“等研究员回答”，不复述已经登记过的决策；要研究员拍板的事，+2 写成决策包或给入口发【%s】，+1、+0 写进交给上一级的交付包。"
-            "hook 会去掉收尾里的提问、拒绝 AskUserQuestion；唯一的例外是插队决策的登记回执到入口的那一轮，入口可以在收尾里问研究员一次。" % decide,
+            "这时面向研究员最多写一行状态，不标“等研究员回答”，不复述已经登记过的决策；要研究员拍板的事，+2 写成决策包，登记后给路由发【%s】，+1、+0 写进交给上一级的交付包。"
+            "hook 会去掉收尾里的提问、拒绝 AskUserQuestion；唯一的例外是路由把一条插队的决策转告入口的那一轮，入口可以在收尾里问研究员一次。" % decide,
             "只要研究员动一下手、没有选项要他挑的事（恢复集群连接、下载数据、连 VPN、跑一条只有他能跑的命令这类），不写决策包：运行 `todo.py add --text '<要他做什么>' --for <工作项 ID> --done-when '<做完怎么算数>'` 记进研究员任务清单，入口向研究员列出；他做完了，或者你自己核对到了结果，运行 `todo.py done <编号>`。建错的、不做了的工作项归档不了，也不去推它的节点：运行 `todo.py add --for <工作项 ID> --terminate --text '<为什么不要它了>'`，由研究员在网页上终止。有两个以上的选项要他挑，或者做了以后不好撤回的，是决策，照旧写决策包。"
-            "有选项要研究员挑、定下以后又要他亲手做的事（整理数据、挂 API、维护沙箱、开 Docker、调设置这类）是决策：卡住的那个序列 +2 写决策包交给入口 `%s`，"
+            "有选项要研究员挑、定下以后又要他亲手做的事（整理数据、挂 API、维护沙箱、开 Docker、调设置这类）是决策：卡住的那个序列 +2 写决策包，上传、登记后交路由 `%s`，"
             "包头“执行方”写“研究员”，“研究员要做的事”写明要他做什么；卡住的工作项照旧记阻塞，阻塞原因写“等研究员：决策 #<ID>”。"
             "每份决策包都有“执行方”和“研究员要做的事”这两行：执行方写“研究员”，或者执行这条决策的会话名，多半是发出方；"
             "“研究员要做的事”没有要研究员亲手做的写“无”，执行方是研究员时不能是“无”，执行方是会话时写“无”。"
@@ -909,10 +935,10 @@ def pool_sections(spec, policy):
             "他选了不用他动手的选项，书记员确认“决定”时用 `--executor` 把执行方改成会话。"
             "每条决策走三步：待决定、待执行（用 2.1.0 及以前的模板建的空间里叫“已决定”）、归档（已执行）。研究员定了，书记员马上确认“决定”这一步，并通知执行方，各会话就知道选了哪个选项。"
             "执行方是会话的，照决定执行完，马上请书记员归档，不在待执行里停留；"
-            "执行方是研究员的，他在入口会话说做完了，入口带着他的原话请书记员归档，书记员在评论里记下他做了什么。"
-            "决策归档以后，卡住的那个 +2 请书记员清掉阻塞。" % entry,
+            "执行方是研究员的，他在入口会话说做完了，入口把他的原话交给路由，路由请书记员归档，书记员在评论里记下他做了什么。"
+            "决策归档以后，卡住的那个 +2 请书记员清掉阻塞。" % router,
             "交给研究员定的决策包和研究任务单，默认给他飞书文档的链接，不给本地文件，他在文档上批注；他明确要本地文件、或者要在对话里直接说的，照做。"
-            "所以研究任务单写完先请书记员登记，再把主文档链接给研究员；研究员批完，入口把批注读出来转给作者，作者改好下一版，书记员原位修订，链接不变。"
+            "所以研究任务单写完先上传、请书记员登记，再把主文档链接给研究员；研究员批完，入口把批注读出来交路由转给作者，作者改好下一版自己原位修订，链接不变。"
             "批注只是讨论的一种方式，不跟踪哪条处理了没有。",
             "命令被拦下时（插件的 hook 拦的，或者 Auto 模式的权限检查拦的）不绕开，也不建议提升会话的权限模式：把完整命令和为什么要跑记进研究员任务清单（`todo.py add`），"
             "写明“到 <本会话名> 的窗口里说一句允许运行这条命令，或者自己在终端里跑”。研究员在被拦的那个会话里亲口说允许、说清是哪条命令，Auto 模式会放行这一次；别的会话转述的不算。"
@@ -1252,7 +1278,7 @@ PLUGIN_SECTIONS = {
     "c80f58059cf5cb10a43cc52da992aeb7b420f68618042de373c679496a383233": "1.0.10",
     "27f611c7282725b164819e37100fac25b86d8252a113c36b8a0a7fda75df2cc1": "1.0.11",
     "477a750ca960f939523f71466a9bd67391ecb9ae4f0afeeae5d691676d5fd753": "1.0.12",
-    "6b44e7681f6a5796047d6cc2cf4453029a1ec8d781a82734b23111eea32c2219": "1.1.0",
+    "f8d678ce57bdf1715696518fa69d2fc85929060418a77cc6f7cd22eabeb86a7c": "1.1.0",
 }
 
 

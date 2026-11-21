@@ -143,7 +143,9 @@ class OrgSpec:
                 for group in DISPATCH_GROUPS for e in d.get(group, [])]
         kinds = []
         for kind, rule in d["kinds"].items():
-            if rule.get("along"):
+            if rule.get("how"):
+                how = rule["how"]
+            elif rule.get("along"):
                 how = "沿委托的边" + ("反向（交付给委托方）" if rule.get("reverse") else "")
             elif rule.get("to"):
                 how = "任何会话发给%s" % end(rule["to"])

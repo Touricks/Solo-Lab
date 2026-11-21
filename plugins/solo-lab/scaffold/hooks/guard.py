@@ -1370,7 +1370,7 @@ def check_wrapup(data, who, policy):
     if st is None or not isinstance(tool_input, dict) or not any(filled(tool_input.get(k)) for k in ASK_KEYS):
         return Verdict()
     if st.get("ask_ok") and who.role == policy.get("entry_role"):
-        return Verdict(gate="allowed_urgent", note="本轮登记了插队决策 #%s，可以问这一次。" % st["ask_ok"])
+        return Verdict(gate="allowed_urgent", note="本轮有插队的决策 #%s 转到你这里，可以问这一次。" % st["ask_ok"])
     verdict = Verdict("allow", "其他 agent 会话叫醒的轮次，收尾里的提问已去掉", gate="stripped",
                       note="这一轮是其他 agent 会话叫醒的：收尾里的提问已去掉，只留回顾。")
     verdict.updated = {k: v for k, v in tool_input.items() if k not in ASK_KEYS}
@@ -1384,13 +1384,13 @@ def check_ask(data, who, policy):
     if st is None:
         return Verdict()
     decide = (policy.get("msg") or {}).get("decide", "需拍板")
-    reason = ("这一轮是其他 agent 会话叫醒的，研究员多半不在：不用 AskUserQuestion。要研究员拍板的事写决策包或发【%s】给入口；"
+    reason = ("这一轮是其他 agent 会话叫醒的，研究员多半不在：不用 AskUserQuestion。要研究员拍板的事写成决策包，登记后发【%s】给路由；"
               "+1、+0 写进交给上一级的交付包。" % decide)
     if who.role == policy.get("entry_role"):
-        note = ("本轮登记了插队决策 #%s：在收尾里问研究员这一次。" % st["ask_ok"] if st.get("ask_ok")
-                else "要研究员拍板的事写成决策包，请书记员登记进决策队列。")
+        note = ("本轮有插队的决策 #%s 转到你这里：在收尾里问研究员这一次。" % st["ask_ok"] if st.get("ask_ok")
+                else "要研究员拍板的事写成决策包，交路由登记进决策队列。")
     elif (policy["agents"].get(who.role) or {}).get("rank") == 2:
-        note = "要研究员拍板的事写成决策包，或者写【%s】发给入口。" % decide
+        note = "要研究员拍板的事写成决策包，登记后写【%s】发给路由。" % decide
     else:
         note = "要拍板的事写进交给上一级的交付包。"
     return Verdict("deny", reason, gate="denied", note=note)

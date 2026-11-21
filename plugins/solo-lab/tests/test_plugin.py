@@ -528,8 +528,8 @@ class DecisionsFileTest(ProjectCase):
         for key in ("mode", "main_agent"):
             self.assertNotIn(key, pol)
         agents = pol["agents"]
-        self.assertIn("alg-p2", agents["pmo-p2"]["spawn"])
-        self.assertNotIn("alg-p2", agents["pmo-router"]["spawn"])
+        self.assertEqual(agents["pmo-p2"]["spawn"], ["pmo-router"])          # 1.1.0: the entry talks to the router alone,
+        self.assertIn("alg-p2", agents["pmo-router"]["spawn"])              # which passes the researcher's words on
         self.assertEqual(agents["alg-p2"]["spawn"], ["alg-p1"])
         self.assertEqual(agents["alg-p0"]["spawn"], [])
         self.assertTrue(agents["pmo-scribe"]["ledger_write"])
@@ -624,13 +624,14 @@ class RouteTest(ProjectCase):
 
     def test_drafts(self):
         # a request to another sequence goes to the router, which hands its work item ID back to the sender (1.0.12)
-        cases = {2: ("R7", "pmo-router"), 4: ("R7", "pmo-router"), 7: ("R5", "pmo-scribe"), 8: ("R6", "pmo-scribe")}
+        cases = {2: ("R7", "pmo-router"), 4: ("R7", "pmo-router"), 7: ("R5", "pmo-router"), 8: ("R6", "pmo-router")}
         for block, (row, hop) in cases.items():
             out = route.classify_draft(self.spec, self.tmp, self.draft(block, "b%d.md" % block))
             self.assertEqual((out["row"], out.get("next_hop")), (row, hop), block)
         steps = "\n".join(route.classify_draft(self.spec, self.tmp, self.draft(2, "c.md"))["steps"])
         self.assertIn("路由对照台账查重复和冲突", steps)
-        self.assertIn("把工作项 ID 用【通知 #ID】回给发起方，由它直接委托 alg-p2", steps)
+        self.assertIn("发起方 +2 自己上传需求包（docs.py upload <草稿路径> --apply），把草稿路径用【通知】发给路由", steps)
+        self.assertIn("把工作项 ID 用【通知 #ID】回给发起方，由它写回文档（docs.py relink）、直接委托 alg-p2", steps)
 
     def test_in_sequence_package_not_routed(self):
         out = route.classify_draft(self.spec, self.tmp, self.draft(0))
@@ -1533,10 +1534,10 @@ class FeishuDocsTest(ProjectCase):
 # ---------------------------------------------------------- pool mode
 def assign_targets(seq, rank, seqs):
     """Who a role hands work to, written out by hand to check the assign edges in rules.json."""
-    if (seq, rank) == ("pmo", 2):
-        return ["%s-p2" % s for s in seqs if s != "pmo"] + ["pmo-router"]
-    if (seq, rank) == ("pmo", 1):
-        return ["pmo-scribe"]
+    if (seq, rank) == ("pmo", 2):                      # 1.1.0: the entry hands everything to the router,
+        return ["pmo-router"]
+    if (seq, rank) == ("pmo", 1):                      # which passes it on to the +2 of each sequence
+        return ["%s-p2" % s for s in seqs if s != "pmo"] + ["pmo-scribe"]
     if rank == 0:
         return []
     return ["%s-p%d" % (seq, rank - 1)]
@@ -1701,19 +1702,24 @@ class PoolSetupTest(PoolProjectCase):
         self.assertIn("【登记请求】", self.read(".claude/agents/alg-p1.md"))
         self.assertIn("【登记回执", self.read(".claude/agents/pmo-scribe.md"))
         # every step of a request has someone who asks the scribe for it
-        for name in ("alg-p0", "alg-p1"):
-            self.assertIn("动作“上传答复”，再写一行“确认节点：#<需求 ID>，由 <你的会话名> 提出”", self.read(".claude/agents/%s.md" % name))
-        for name in ("alg-p1", "alg-p2"):
-            self.assertIn("- 验收：", self.read(".claude/agents/%s.md" % name))
-        self.assertNotIn("- 验收：", self.read(".claude/agents/alg-p0.md"))
+        for name in ("alg-p1", "alg-p2"):                                    # 1.1.0: whoever delivers uploads; the scribe fills the field
+            self.assertIn("docs.py upload <交付包路径> --apply` 自己上传，它挂在需求的主文档下面。再给 `PMO-p0-01` 发【登记请求】：写 `workitem.py reply <交付包路径> --apply`，"
+                          "再写一行“确认节点：#<需求 ID>，由 <你的会话名> 提出”", self.read(".claude/agents/%s.md" % name))
+            self.assertIn("- 验收工作项（下发的需求、跨序列需求）：", self.read(".claude/agents/%s.md" % name))
+        p0 = self.read(".claude/agents/alg-p0.md")                          # a +0's task has no work item: nobody else is asked
+        self.assertIn("docs.py upload <交付包路径> --apply` 自己上传，它挂在需求包下面，不找书记员。", p0)
+        self.assertNotIn("- 验收", p0)
         lead = self.read(".claude/agents/alg-p2.md")
         # 1.0.12: a request to another sequence starts at the router, and the two +2 then talk to each other
-        self.assertIn("给路由 `PMO-p1-01` 发 `【通知】<你的会话名> → PMO-p1-01：跨序列需求包 <包路径>`", lead)
-        self.assertIn("你再直接给承接方 +2 发 `【委托 #<工作项 ID>】<你的会话名> → <承接方 +2 的会话名>：<包名> <包路径>`", lead)
+        self.assertIn("自己上传，再给路由 `PMO-p1-01` 发 `【通知】<你的会话名> → PMO-p1-01：跨序列需求包 <包路径>`", lead)
+        self.assertIn("你运行 `docs.py relink <ID> --apply`，再直接给承接方 +2 发 `【委托 #<工作项 ID>】<你的会话名> → <承接方 +2 的会话名>：<包名> <包路径>`", lead)
         self.assertIn("先接单：给 `PMO-p0-01` 发【登记请求】", lead)
         self.assertIn("拿到【登记回执】后用【通知 #ID】把这三项告诉发起方", lead)
-        self.assertIn("委托方就是发起它的那个 +2：交付直接发给它，不经入口。", lead)
-        self.assertIn("改范围、改成功标准、改冻结项不在往来里谈定：写决策包交入口。", lead)
+        self.assertIn("委托方就是发起它的那个 +2：交付直接发给它，不经入口和路由。", lead)
+        self.assertIn("改范围、改成功标准、改冻结项不在往来里谈定：写决策包，照上面登记后交路由。", lead)
+        # 1.1.0: a decision package is uploaded by its +2, registered by the scribe and handed to the router, not the entry
+        self.assertIn("再给路由 `PMO-p1-01` 发 `【需拍板 #<工作项 ID>】<你的会话名> → PMO-p1-01：<事项一句话> <主文档链接>`。路由转告入口，入口讲给研究员；你不直接找入口。", lead)
+        self.assertIn("进展和里程碑发给路由 `PMO-p1-01`，不发入口", lead)
         self.assertIn("本序列没开 +1 时，封闭任务直接委托 +0：需求包写执行关系", lead)
         self.assertNotIn("本序列开池时只有你一个会话", lead)                  # this pool opens every sequence in full
         for gone in ("交付包发给入口", "由入口转交", "由入口用【", "交给入口，由它请书记员"):
@@ -1729,7 +1735,7 @@ class PoolSetupTest(PoolProjectCase):
                      "【通知 #<工作项 ID>】PMO-p1-01 → <发起方 +2 的会话名>：已登记，可以委托", "都没有就一句话结束本轮，不给入口发消息"):
             self.assertIn(part, router, part)
         entry = self.read(".claude/agents/pmo-p2.md")
-        self.assertIn("**跨序列需求不经你转手。**", entry)
+        self.assertIn("跨序列需求不经你：发起方 +2 交路由查重、登记，再直接委托承接方 +2", entry)
         self.assertIn("看进展用 `route.py cross` 和路由的协调记录", entry)
         for gone in ("各序列交来的包怎么转", "跨序列需求的接单和交付，登记请求都由你发给书记员"):
             self.assertNotIn(gone, entry, gone)
@@ -1738,15 +1744,15 @@ class PoolSetupTest(PoolProjectCase):
         # a command that was stopped is no reason to widen a session's permission mode
         for part in ("不建议提升会话的权限模式", "两类之间的消息双向被扣", "研究员在被拦的那个会话里亲口说允许", "发消息得到“未送达”（undelivered）时不连续重发"):
             self.assertIn(part, claude, part)
-        self.assertIn("登记请求里把字段写成 `<字段>=@<本地文件>`，书记员上传到研究任务单下面并填上链接", lead)   # what the +2 writes itself
+        self.assertIn("登记请求里把字段写成 `<字段>=@<本地文件>`，书记员照文件找到那份文档、填上链接", lead)   # what the +2 writes itself
         self.assertIn("验收通过以后用承接方那份交付包文档的链接", lead)       # what it hands down
         self.assertIn("链接字段给的是 `@文件` 时不读内容", self.read(".claude/agents/pmo-scribe.md"))
         scribe = self.read(".claude/agents/pmo-scribe.md")
-        self.assertIn("你也接任何会话的登记请求", scribe)
+        self.assertIn("你接任何会话的登记请求", scribe)
         self.assertIn("新建由路由来提（它先查过重复和冲突；入口自己发起的由入口提）", scribe)
         self.assertIn("输出里写着“回执另发一份给路由”的，把同一条回执也发给路由。", scribe)
         self.assertIn("【通知 #<任务 ID>】PMO-p0-01 → <那个 +2 的会话名>：研究任务走到“<节点>”", scribe)
-        self.assertIn("接着请它归档这条研究任务", self.read(".claude/agents/pmo-p2.md"))
+        self.assertIn("它请书记员确认这一步，接着归档这条研究任务", self.read(".claude/agents/pmo-p2.md"))
         self.assertIn("### 派发图", self.read("org/org.md"))
         self.assertIn("初始池", self.read("org/grants.md"))
 
@@ -3810,6 +3816,24 @@ class PoolReviewStateTest(PoolProjectCase):
         self.assertIn("未了事项：无", out.get("additionalContext", ""))
         self.assertEqual(self.session("s-alg2")["turn_origin"], "researcher")
 
+    def test_a_message_past_the_router_is_pointed_at_it(self):
+        """1.1.0: the entry talks to the researcher and the router only; a message between the entry and a
+        sequence's session tells the one that received it where it should have gone."""
+        self.route("expect", "PMO-p1-01", "--role", "pmo-router", "--desk", "d-router", sid="s-entry")
+        self.claim("pmo-router", "PMO-p1-01", "s-router", desk="d-router")
+        _, out = self.prompt("s-entry", "【通知 #2101】Alg-p2-01 → PMO-p2-01：复现跑完了")
+        self.assertIn("入口只和研究员、路由往来，这条越过了路由 PMO-p1-01：进展、交付和要研究员拍板的事该发给路由",
+                      out.get("additionalContext", ""))
+        _, out = self.prompt("s-alg2", "【通知】PMO-p2-01 → Alg-p2-01：研究员说先停一下")
+        self.assertIn("研究员的话该由入口照录交给路由，路由转给你；这条照常处理，回话发给路由，不发入口", out.get("additionalContext", ""))
+        _, out = self.prompt("s-router", "【通知】PMO-p2-01 → PMO-p1-01：研究员的话在 packages/drafts/pmo/研究员-20261121-0900.md")
+        self.assertNotIn("越过了路由", out.get("additionalContext", ""))
+        _, out = self.prompt("s-entry", "【需拍板 #2105】PMO-p1-01 → PMO-p2-01：评测集要不要换")
+        self.assertNotIn("越过了路由", out.get("additionalContext", ""))
+        self.assertNotIn("派发图里", out.get("additionalContext", ""))            # the router carries what is to be decided to the entry
+        _, out = self.prompt("s-router", "【需拍板 #2105】Alg-p2-01 → PMO-p1-01：评测集要不要换")
+        self.assertNotIn("派发图里", out.get("additionalContext", ""))
+
     def test_a_message_addressed_to_another_session_takes_no_lease(self):
         _, out = self.prompt("s-alg2", "【委托 #2103】PMO-p2-01 → Infra-p2-01：需求包 x.md")
         self.assertIn("不是本会话", out.get("additionalContext", ""))
@@ -3911,6 +3935,8 @@ class PoolReviewStateTest(PoolProjectCase):
     def test_the_opening_context_stays_within_budget_with_waiting_decisions(self):
         """What the entry is told about decisions past their expiry and what every pool session is told is frozen
         come out of the same budget as the role text in the turn that opens the session; at most five expiry lines a turn."""
+        self.route("expect", "PMO-p1-01", "--role", "pmo-router", "--desk", "d-router", sid="s-entry")
+        self.claim("pmo-router", "PMO-p1-01", "s-router", desk="d-router")
         for i in range(400):
             self.prompt("s-alg2", "【委托 #%d】PMO-p2-01 → Alg-p2-01：需求包 x.md" % (3000 + i))
         for i in range(20):
@@ -3922,7 +3948,7 @@ class PoolReviewStateTest(PoolProjectCase):
                                    "default_option": "按轮次分目录", "executor": "RnD-p2-01",
                                    "frozen": [{"kind": "category", "category": "privileged_app", "name": "特权应用", "qualifier": "Docker",
                                                "text": "特权应用：Docker（第 %d 条决策，写得很长很长很长很长很长）" % k},
-                                              {"kind": "text", "text": "`docker build`（第 %d 条决策）" % k}]} for k in range(8)}
+                                              {"kind": "text", "text": "`docker build`（第 %d 条决策）" % k}]} for k in range(16)}
         with open(os.path.join(self.tmp, ".claude", "state", "gates.json"), "w", encoding="utf-8") as f:
             json.dump({"version": 2, "pending": pending}, f, ensure_ascii=False)
         self.route("release", "PMO-p2-01", sid="s-researcher")
@@ -3931,9 +3957,13 @@ class PoolReviewStateTest(PoolProjectCase):
         self.assertLessEqual(len(text), pool_lib.INJECT_LIMIT)
         self.assertIn("## 怎么干活", text)                                          # the role text, cut to what is left
         self.assertIn("待定决策冻结的动作", text)
-        self.assertEqual(text.count("已到期"), 6)                                   # five lines and how many more
-        self.assertIn("另有 3 条已到期的待定决策", text)
+        self.assertNotIn("已到期：请书记员按到期默认确认", text)                     # 1.1.0: what takes its default is the router's
         self.assertIn("还有 20 条消息没看", text)
+        _, out = self.prompt("s-router", "继续")                                    # to have the scribe confirm: it is told every turn
+        text = out.get("additionalContext", "")
+        self.assertEqual(text.count("已到期：请书记员按到期默认确认"), 5)             # five of the eight that take their default
+        self.assertIn("另有 3 条已到期的待定决策", text)
+        self.assertIn("再告诉入口一声", text)
 
     def test_a_malformed_inbox_line_loses_nothing(self):
         path = os.path.join(self.tmp, "inbox", "pmo-p2.jsonl")
@@ -4011,7 +4041,9 @@ class ReviewTextTest(PoolProjectCase):
         for text in (p1, p0):
             self.assertNotIn("跨序列的需求包、送审包、决策包写成草稿发给入口", text)
             self.assertIn("写进交给上一级的交付包", text)
-        self.assertIn("开工：否", p1)
+        self.assertIn("开工：否", self.read(".claude/agents/alg-p2.md"))
+        self.assertIn("这类活不建工作项，也不找书记员", p1)                      # 1.1.0: what a +1 hands to a +0
+        self.assertNotIn("开工：否", p1)
         self.assertIn("消息抬头都用它", p0)
         self.assertNotIn("执行结果可以直接送审", q0)
         self.assertNotIn("研究员在本会话里研究员", self.read(".claude/agents/pmo-p2.md"))
@@ -4529,16 +4561,17 @@ class DeliveryTextTest(PoolProjectCase):
                      "距他上一条消息 30 分钟以上，或者第一次", "之前提过的也附", "改版、截止前、每日汇总都不推",
                      "**面向研究员的内容。** 你主动给研究员的只有两类：决策（给主文档的飞书链接，执行方和要研究员亲手做的事一并写上）、"
                      "里程碑（研究任务走完一步、出了结论）",
-                     "收到【需拍板】，请发来的 +2 写成决策包，不直接转问研究员",
+                     "路由转来的【需拍板】都是登记好的决策包，没有决策包的事不转问研究员",
                      "面向研究员最多写一行状态，不提问，不标“等研究员回答”，不复述已经登记过的决策",
                      "`pool.py show` 里的研究员任务清单和补位请求跟在决策清单后面列出，它们不算决策"):
             self.assertIn(part, entry)
-        self.assertIn("研究员在本会话里拍板后，请书记员确认决策的“决定”这一步", entry)     # what follows the decision stays
-        self.assertIn("入口要时汇总决策队列", texts["pmo-router.md"])
+        self.assertIn("研究员在本会话里拍板后，把他的原话照录成文件交给路由", entry)       # 1.1.0: the entry does not ask the scribe
+        self.assertIn("入口要汇总时，读每份决策包的认知层、选项、建议和不决定的后果", texts["pmo-router.md"])
+        self.assertIn("给书记员发【登记请求】：写“确认节点：#<决策 ID>，由 研究员 提出”，把原话照抄上去", texts["pmo-router.md"])
         claude = texts["CLAUDE.md"]
         for part in ("被其他 agent 会话叫醒的轮次，研究员多半不在，不向研究员提问",
                      "其他会话发来的消息、本会话开出的会话结束一轮的回报、开会话时上级写的首轮",
-                     "hook 会去掉收尾里的提问、拒绝 AskUserQuestion", "唯一的例外是插队决策的登记回执到入口的那一轮",
+                     "hook 会去掉收尾里的提问、拒绝 AskUserQuestion", "唯一的例外是路由把一条插队的决策转告入口的那一轮",
                      "hook 只拦两类事：会损坏数据的，和研究员多半不在时向他提的问题",
                      "池会话被其他 agent 会话叫醒的轮次：拒绝 AskUserQuestion，去掉收尾工具里的提问"):
             self.assertIn(part, claude)
@@ -4550,7 +4583,7 @@ class DeliveryTextTest(PoolProjectCase):
         decisions = self.read("org/decisions.md")
         self.assertIn("紧急程度为“插队”的，登记那一轮可以问研究员一次", decisions)
         self.assertIn("2026-11-15 定下推送时机", decisions)
-        self.assertIn("被其他 agent 会话叫醒的轮次，池会话都不向研究员提问，只有插队决策的登记回执到入口的那一轮，入口可以在收尾里问一次", decisions)
+        self.assertIn("被其他 agent 会话叫醒的轮次，池会话都不向研究员提问，只有路由把一条插队的决策转告入口的那一轮，入口可以在收尾里问一次", decisions)
         policy = json.loads(self.read(".claude/hooks/policy.json"))
         text = pool_lib.injection(self.tmp, policy, {"name": "PMO-p2-01", "role": "pmo-p2"}, "规则已更新。")
         self.assertNotIn("下文略", text)                                         # the entry's role text is injected whole
@@ -4627,15 +4660,15 @@ class DeliveryTextTest(PoolProjectCase):
         for part in ("你主动给研究员的只有两类：决策（给主文档的飞书链接，执行方和要研究员亲手做的事一并写上）、里程碑（研究任务走完一步、出了结论）",
                      "再把待决定的决策和等研究员执行的决策全部附在末尾，之前提过的也附，每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接",
                      "**决策的三个阶段。** 每条决策走三步：待决定、待执行（用 2.1.0 及以前的模板建的空间里叫“已决定”）、归档（已执行）。"
-                     "研究员定了，照上面马上请书记员确认“决定”这一步，书记员会通知包头写的执行方，各会话就知道选了哪个选项",
+                     "研究员定了，照上面马上把原话交给路由，路由请书记员确认“决定”这一步，书记员会通知包头写的执行方，各会话就知道选了哪个选项",
                      "执行方是研究员的：`ledger.py query queue` 在它定了以后、归档以前列成“待执行”",
-                     "登记请求里写“归档：#<决策 ID>，由 研究员 提出”，照抄他的原话，写明他做了什么，书记员记成评论再归档",
+                     "研究员在本会话说做完了，把他的原话交给路由，写明他做了什么，路由请书记员记成评论再归档",
                      "执行方是会话的，书记员把决定内容发给它，它照决定执行完，马上请书记员归档，不在待执行里停留",
-                     "执行方是你自己的（比如第 9 步的决策），你也照决定办完马上请书记员归档",
+                     "执行方是你自己的（比如第 9 步的决策），你照决定办完，请路由安排归档",
                      "被决策卡住的工作项照旧记阻塞，阻塞原因写“等研究员：决策 #<ID>”，决策归档以后由卡住的那个 +2 请书记员清掉",
                      "研究员任务清单和补位请求跟在决策清单后面列出，它们不算决策",
                      # the table the router is asked for: the same columns as the entry skill and the router's role
-                     "请它汇总成表：每件写状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、选项、建议，"
+                     "汇总成表：每件写状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、选项、建议，"
                      "改过版的在事项后面写版本号；已经到期、继续等研究员的排最前，其次是“插队”的。"):
             self.assertIn(part, entry)
         claude = texts["CLAUDE.md"]
@@ -4651,14 +4684,14 @@ class DeliveryTextTest(PoolProjectCase):
                      "“研究员要做的事”没有要研究员亲手做的写“无”，执行方是研究员时不能是“无”，执行方是会话时写“无”。",
                      "每条决策走三步：待决定、待执行（用 2.1.0 及以前的模板建的空间里叫“已决定”）、归档（已执行）。研究员定了，书记员马上确认“决定”这一步，并通知执行方",
                      "执行方是会话的，照决定执行完，马上请书记员归档，不在待执行里停留；",
-                     "执行方是研究员的，他在入口会话说做完了，入口带着他的原话请书记员归档，书记员在评论里记下他做了什么。",
+                     "执行方是研究员的，他在入口会话说做完了，入口把他的原话交给路由，路由请书记员归档，书记员在评论里记下他做了什么。",
                      "决策归档以后，卡住的那个 +2 请书记员清掉阻塞"):
             self.assertIn(part, claude)
         alg = texts["alg-p2.md"]
         for part in ("写在决策包包头“研究员要做的事”。每份决策包都有这一行，没有要研究员亲手做的写“无”。",
                      "包头还有“执行方”一行，写这条决策定下以后由谁执行：“研究员”，或者执行它的会话名，多半是你自己。",
                      "执行方是研究员时“研究员要做的事”不能是“无”，执行方是会话时写“无”，对不上包检查会退回。",
-                     "执行方是研究员的，他做完了，入口请书记员归档，再通知你",
+                     "执行方是研究员的，他做完了，路由请书记员归档，再通知你",
                      "被决策卡住的工作项，登记以后请书记员把阻塞原因写成“等研究员：决策 #<ID>”，这条决策归档以后再请它清掉",
                      "执行方是你的，书记员把决定内容发给你，你照决定执行完，马上请书记员归档，不在待执行里停留"):
             self.assertIn(part, alg)
@@ -4694,18 +4727,19 @@ class DeliveryTextTest(PoolProjectCase):
         with open(path, "w", encoding="utf-8") as f:
             f.write(example_blocks()[7])
         out = route.classify_draft(self.spec, self.tmp, path)
-        self.assertEqual((out["row"], out["next_hop"]), ("R5", "pmo-scribe"))
+        self.assertEqual((out["row"], out["next_hop"]), ("R5", "pmo-router"))
         steps = "\n".join(out["steps"])
         self.assertNotIn("每日", steps)
-        self.assertIn("登记回执到的那一轮，在状态里提一次：事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）、主文档链接", steps)
+        self.assertIn("作者给路由发【需拍板 #ID】，路由核对已登记，转告入口", steps)
+        self.assertIn("路由转来的那一轮，入口在状态里提一次：事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）、主文档链接", steps)
         self.assertIn("“插队”的，这一轮可以在收尾里问研究员一次", steps)
-        self.assertIn("研究员主动来谈时，连同其余待决定的决策和等研究员执行的决策列给他", steps)
-        self.assertIn("研究员定了，书记员确认“决定”这一步，决策到“待执行”；书记员把决定内容发给执行方 Alg-p2-01，"
+        self.assertIn("研究员主动来谈时，入口连同其余待决定的决策和等研究员执行的决策列给他", steps)
+        self.assertIn("研究员定了，入口把原话交给路由，路由请书记员确认“决定”这一步，决策到“待执行”；书记员把决定内容发给执行方 Alg-p2-01，"
                       "它照决定执行完，马上请书记员归档", steps)                    # the package's 执行方
         with open(path, "w", encoding="utf-8") as f:                              # one the researcher carries out
             f.write(example_blocks()[9])
         steps = "\n".join(route.classify_draft(self.spec, self.tmp, path)["steps"])
-        self.assertIn("研究员定了，书记员确认“决定”这一步，决策到“待执行”；执行方是研究员，他说做完了，请书记员归档", steps)
+        self.assertIn("研究员定了，入口把原话交给路由，路由请书记员确认“决定”这一步，决策到“待执行”；执行方是研究员，他说做完了，路由请书记员归档", steps)
         with open(path, "w", encoding="utf-8") as f:                              # decided in a talk with Product-p2-01
             f.write(example_blocks()[8])
         out = route.classify_draft(self.spec, self.tmp, path)
@@ -5265,16 +5299,19 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
                          "状态包里已定的实验条件和暂停范围，和手上任务包的写法冲突时，以状态包和台账为准，并报给",
                          "或者找不到所属研究任务，说一句“跳过”再继续；`ledger.py status` 读失败，报出失败原因后继续，不卡住。"):
                 self.assertIn(part, text, role)
-            upper = ("研究员" if role == "pmo-p2" else "入口" if pol["rank"] == 2 or pol["sequence"] == "pmo" else "上一级")
+            upper = {"pmo-p2": "研究员", "pmo-router": "入口"}.get(role) or ("路由" if pol["rank"] == 2 or pol["sequence"] == "pmo" else "上一级")
             self.assertIn("以状态包和台账为准，并报给%s。" % upper, text, role)
-            self.assertIn("没有研究任务可读，或者" if role == "pmo-p2" else "手上没有工作项，或者", text, role)
+            # the router keeps the 状态包 of every task and the entry answers from them (1.1.0): both read them all
+            self.assertIn("没有研究任务可读，或者" if role in ("pmo-p2", "pmo-router") else "手上没有工作项，或者", text, role)
         entry = self.read(".claude/agents/pmo-p2.md")
         self.assertIn("找出没归档的研究任务（`ledger.py query tasks`），和手上工作项所属的研究任务", entry)
-        for part in ("**状态包由你维护。** 研究任务主文档末尾的“状态包”记这条任务现在的状态：上游卡在哪条决策、哪些实验条件已经定死、哪些工作暂停了。",
+        router = self.read(".claude/agents/pmo-router.md")                # 1.1.0: the router keeps it, with docs.py, and the entry reads it
+        for part in ("**状态包由你维护。** 研究任务主文档末尾的“状态包”记这条任务现在的状态：上游卡在哪条决策、哪些实验条件已经定死、哪些工作暂停了；",
                      "工作项状态变化、研究员定下新决策、暂停或恢复某类工作时，你改写它：先 `ledger.py status <研究任务 ID>` 读现在的",
-                     "请书记员 `docs.py status-block <研究任务 ID> --file <文件>` 整段替换。"):
-            self.assertIn(part, entry)
-        for other in ("alg-p2", "pmo-router", "pmo-scribe"):
+                     "运行 `python3.12 -I .claude/solo-lab/bin/docs.py status-block <研究任务 ID> --file <文件> --apply` 整段替换。"):
+            self.assertIn(part, router)
+        self.assertIn("研究任务的状态包（`ledger.py status <研究任务 ID>`，路由维护）", entry)
+        for other in ("alg-p2", "pmo-p2", "pmo-scribe"):
             self.assertNotIn("状态包由你维护", self.read(".claude/agents/%s.md" % other), other)
         claude = self.read("CLAUDE.md")
         compact = claude.split("## Compact Instructions", 1)[1]
@@ -5675,9 +5712,10 @@ class TextsAfterTheGatesTest(PoolProjectCase):
                 ("pmo-scribe.md", "确认“决定”时加 `--executor <会话名>`，只收各序列的 +2、入口和路由。"),
                 ("pmo-scribe.md", "要把执行方改成研究员的，脚本会拒绝：请发出方写下一版，用 `docs.py revise`。"),
                 ("pmo-scribe.md", "先 `workitem.py rollback <ID> --to 决定 --reason '<原因>' --by 研究员`，再带 `--executor` 确认。"),
-                ("pmo-p2.md", "包头执行方是研究员、他选的选项却不用他动手的，请求里写明改由哪个会话执行（各序列的 +2、入口或路由），书记员确认时加 `--executor <会话名>`。"),
+                ("pmo-router.md", "包头执行方是研究员、他选的选项却不用他动手的，写明改由哪个会话执行（各序列的 +2、入口或你），书记员确认时加 `--executor <会话名>`。"),
+                ("pmo-p2.md", "包头执行方是研究员、他选的选项却不用他动手的，写明改由哪个会话执行。"),
                 ("alg-p2.md", "执行方写会话的只收各序列的 +2、入口和路由，要下级干的活由你用需求包委托。"),
-                ("alg-p2.md", "入口请书记员确认“决定”时用 `--executor` 把执行方改成会话。"),
+                ("alg-p2.md", "路由请书记员确认“决定”时用 `--executor` 把执行方改成会话。"),
                 ("CLAUDE.md", "执行方写会话的只收各序列的 +2、入口和路由；只要有一个选项要研究员亲手做就写“研究员”，"
                               "他选了不用他动手的选项，书记员确认“决定”时用 `--executor` 把执行方改成会话。"),
                 ("org/decisions.md", "书记员确认“决定”时用 `workitem.py confirm --executor <会话名>` 把执行方改成那个会话。"),

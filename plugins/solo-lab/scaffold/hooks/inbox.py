@@ -20,13 +20,13 @@ The hook also:
   researcher anything (guard.py takes the question out of the wrap-up and denies
   AskUserQuestion), and in the report of a session it opened, not to pass on that
   the session waits on the researcher. The entry writes one line of status at
-  most; when the turn is the first 【登记回执】 addressed to it for a decision that
-  went into the decision queue (its receipt in packages/sent/ says type decision
-  and queue true), it mentions that decision this once, and may ask about it in
-  the wrap-up when it jumps the queue (urgent: ask_ok is set to its ID). The
-  mention is logged as decision_announced in .claude/logs/dispatch.jsonl, so the
-  receipts that come later for the same decision (the confirmation of 决定, an
-  archive, a re-send) mention nothing;
+  most; when the turn is the first 【需拍板】 addressed to it for a decision that
+  went into the decision queue (1.1.0: the router carries it on once the scribe
+  has registered it; its receipt in packages/sent/ says type decision and queue
+  true), it mentions that decision this once, and may ask about it in the wrap-up
+  when it jumps the queue (urgent: ask_ok is set to its ID). The mention is
+  logged as decision_announced in .claude/logs/dispatch.jsonl, so a later message
+  about the same decision mentions nothing;
 - when the researcher writes to the entry with no earlier message of theirs on
   record in this session, or after 30 minutes or more (pool.FOCUS_IDLE), asks it
   to list after its answer the decisions waiting on the researcher (`ledger.py
@@ -39,8 +39,10 @@ The hook also:
 - reads the local decision state .claude/state/gates.json (ledger.py writes it,
   this hook only reads it): every pool session gets one line a turn with what the
   decisions still waiting freeze (1.0.4). No hook stops those actions (1.0.6): the
-  line and the rules are what keeps them, and the line says so. The entry, in every
-  turn, gets a line for each waiting decision past its expiry time, which is its
+  line and the rules are what keeps them, and the line says so. The router (1.1.0;
+  until then the entry) gets, in every turn, a line for each waiting decision that
+  takes its default, and the entry one for each that keeps waiting, once past its
+  expiry time, which is its
   registration plus the expiry time in org/decisions.md, worked out here as ledger.py
   works it out (pool.expiry_hours, pool.expires_at): a reversible one that may take
   its default (pool.takes_default) is to be confirmed by the scribe with `workitem.py
@@ -182,7 +184,7 @@ FEISHU = "照路由决策表处理"
 ENTRY_WOKEN = ("本轮由其他 agent 会话叫醒%s，研究员多半不在。面向研究员最多写一行状态：不提问，不标“等研究员回答”，"
                "不复述已经登记过的决策；收尾里的提问会被 hook 去掉。")
 POOL_WOKEN = "本轮由其他 agent 会话叫醒%s：不向研究员提问，要拍板的事照规则写进包里；收尾里的提问会被 hook 去掉。"
-QUEUED = "本轮登记了待定决策 #%s：在这一行状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和主文档链接，不超过 3 行。"
+QUEUED = "本轮有待定决策 #%s 转到你这里：在这一行状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和主文档链接，不超过 3 行。"
 URGENT = "它是插队的：本轮可以在收尾里问研究员一次。"
 URGENT_AMONG = "其中 #%s 是插队的：本轮可以在收尾里问研究员一次。"
 # The app reports a session this one opened from the wrap-up as the model wrote it, before guard.py
@@ -199,7 +201,7 @@ GATES_FILE = "gates.json"
 FROZEN = "待定决策冻结的动作，决策定下以前谁都不做（hook 不拦，要自己守住），选项中立的准备照常做：%s。"
 FROZEN_SHOWN = 700                    # characters of the frozen line at most
 MORE_FROZEN = "……（全文看 python3.12 -I .claude/solo-lab/bin/ledger.py query queue 列的决策包）"
-DUE_DEFAULT = "#%s 已到期：请书记员按到期默认确认（workitem.py confirm %s --by 到期默认），书记员确认后通知执行方 %s 照到期默认动作办（%s）；已经请过的不再请。"
+DUE_DEFAULT = "#%s 已到期：请书记员按到期默认确认（workitem.py confirm %s --by 到期默认），书记员确认后通知执行方 %s 照到期默认动作办（%s），再告诉入口一声；已经请过的不再请。"
 MAX_DUE = 5                           # lines about decisions past their expiry, at most, a turn
 MORE_DUE = "另有 %d 条已到期的待定决策，见 python3.12 -I .claude/solo-lab/bin/ledger.py query queue。"
 DUE_WAIT = "#%s 已到期，继续等，研究员来谈时排在最前；不推给研究员，不提醒截止。"
@@ -225,15 +227,14 @@ def queued_decision(root, item_id):
 
 
 def announced(root, item_id):
-    """Was the entry told about this queued decision already? Only its first register receipt counts:
-    the scribe answers every later request about it (confirm 决定, archive, a re-send) with the
-    same 【登记回执 #ID】."""
+    """Was the entry told about this queued decision already? Only the first 【需拍板 #ID】 the router
+    carries to it counts: a later one about the same decision (a reminder, a re-send) is nothing new."""
     return any(r.get("event") == "decision_announced" and str(r.get("id")) == str(item_id) for r in pool.read_events(root))
 
 
 def woken_text(source, entry, fresh=()):
     """A turn another agent session started: nobody to ask. The entry also mentions, this once, the
-    decisions the turn's register receipt put into the queue (fresh: (ID, receipt) each), and may ask about
+    decisions the router carried to it in this turn (fresh: (ID, receipt) each), and may ask about
     one that jumps the queue. The report of a session this one opened may still say it waits on the researcher."""
     sender = "（来自 %s）" % source[:SOURCE_SHOWN] if source else ""
     side = SIDE_REPORT if source == pool.FROM_MY_SESSIONS else ""
@@ -367,11 +368,11 @@ def pool_prompt(data, policy, root):
     msg = pool.parse_message(policy, body) if who.origin == "claim" else None
     entry = who.origin == "claim" and who.role == policy.get("entry_role")
     pl, ok = pool.load(root)
-    fresh = []                                          # (ID, receipt) of the decisions this receipt is the first word of
-    if entry and ok and origin == "agent" and msg and msg["kind"] == "register_receipt" \
-            and pool.addressed_to(policy, pl, msg, who.claim):
-        # every item the header names: the scribe answers several requests with one 【登记回执 #A / #B】, and until
-        # 1.0.9 only the first counted, so a decision named second was announced by a later receipt about it
+    fresh = []                                          # (ID, receipt) of the decisions this message is the first word of
+    # 1.1.0: a decision reaches the entry from the router, as 【需拍板 #ID】, once its +2 has uploaded it and the scribe
+    # has registered it (until then the scribe's 【登记回执】 to the entry was that first word)
+    if entry and ok and origin == "agent" and msg and msg["kind"] == "decide" and pool.addressed_to(policy, pl, msg, who.claim):
+        # every item the header names: one message may carry several, 【需拍板 #A / #B】
         for item in msg.get("ids") or [msg.get("id")]:
             rec = queued_decision(root, item)
             # a later receipt for it, or a revision: nothing new for the researcher
@@ -402,7 +403,10 @@ def pool_prompt(data, policy, root):
         return finish(parts), {}
     me = who.claim
     pending = load_pending(root)
-    due = expired(pending, at, pool.expiry_hours(root)[0]) if entry and pending else []
+    hub = who.role == policy.get("router_role")
+    due = expired(pending, at, pool.expiry_hours(root)[0]) if (entry or hub) and pending else []
+    # 1.1.0: the router has the scribe confirm what takes its default; the entry only keeps the others first in its list
+    due = [(i, e) for i, e in due if pool.takes_default(e) == hub]
     if origin == "agent":
         parts.append(woken_text(source, entry, fresh))
         for item, rec in fresh:
@@ -441,7 +445,7 @@ def pool_prompt(data, policy, root):
                 locked_pool["owners"][msg["id"]] = me["name"]
         if hits:
             parts.append("这条消息有几处和规范对不上（只提醒，不拦）：\n" + "\n".join("- " + h for h in hits))
-    if due:                                         # the entry, every turn: decisions past their expiry time
+    if due:                                         # the router and the entry, every turn: decisions past their expiry time
         parts.append(due_lines(due))
     frozen = frozen_text(pending)
     if frozen:                                      # every pool session, every turn

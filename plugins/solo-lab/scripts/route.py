@@ -97,8 +97,9 @@ def classify_text(spec, root, text, offline):
 
 
 def classify_draft(spec, root, path):
-    """Where a package goes. From 1.0.12 a request to another sequence is checked and registered by the router
-    and then goes between the two +2."""
+    """Where a package goes. From 1.1.0 its author uploads it, the scribe only builds the work item, and what the
+    researcher is to decide goes through the router to the entry; a request to another sequence is checked and
+    registered by the router and then goes between the two +2 (1.0.12)."""
     with open(path, encoding="utf-8") as f:
         text = f.read()
     errors, _ = orgspec.lint_text(spec, text)
@@ -107,32 +108,39 @@ def classify_draft(spec, root, path):
     d = ledger_core.Draft(spec, path)
     to_seq = d.receiver_seq
     notice = spec.term("msg", "notice")
+    upload = "docs.py upload <草稿路径> --apply"
     if d.pid == "decision":
         who = orgspec.executor_of(spec, d.header.get(orgspec.EXECUTOR))
-        carry = ("执行方是研究员，他说做完了，请书记员归档" if who == orgspec.RESEARCHER
+        carry = ("执行方是研究员，他说做完了，路由请书记员归档" if who == orgspec.RESEARCHER
                  else "书记员把决定内容发给执行方 %s，它照决定执行完，马上请书记员归档" % who)
         if d.header.get("渠道") == spec.term("channel", "researcher"):
-            tell = "给“受影响的工作项”的负责会话发消息【%s #ID】；显示“研究员在用”的改用 notify.py send 留言" % notice
-            return result(spec, "R6", "研究员主动发起的决策包", next_hop="pmo-scribe",
-                          steps=["书记员 register 后确认“决定”这一步，填决定内容和决定人", carry, tell])
-        return result(spec, "R5", "决策队列来的决策包", next_hop="pmo-scribe",
-                      steps=["书记员 register，停在“待决定”",
-                             "登记回执到的那一轮，在状态里提一次：事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）、主文档链接；"
+            tell = "路由给“受影响的工作项”的负责会话发消息【%s #ID】；显示“研究员在用”的改用 notify.py send 留言" % notice
+            return result(spec, "R6", "研究员主动发起的决策包", next_hop="pmo-router",
+                          steps=["和研究员谈的那个会话自己上传决策包（%s），把草稿路径交给路由" % upload,
+                                 "路由请书记员 register 后确认“决定”这一步，填决定内容和决定人；作者用 docs.py relink 把工作项 ID 写回文档",
+                                 carry, tell])
+        return result(spec, "R5", "决策队列来的决策包", next_hop="pmo-router",
+                      steps=["作者自己上传（%s），请书记员 register，停在“待决定”；拿到工作项 ID 后用 docs.py relink 写回文档" % upload,
+                             "作者给路由发【%s #ID】，路由核对已登记，转告入口" % spec.term("msg", "decide"),
+                             "路由转来的那一轮，入口在状态里提一次：事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）、主文档链接；"
                              "紧急程度为“插队”的，这一轮可以在收尾里问研究员一次",
-                             "研究员主动来谈时，连同其余待决定的决策和等研究员执行的决策列给他",
-                             "研究员定了，书记员确认“决定”这一步，决策到“待执行”；" + carry])
+                             "研究员主动来谈时，入口连同其余待决定的决策和等研究员执行的决策列给他",
+                             "研究员定了，入口把原话交给路由，路由请书记员确认“决定”这一步，决策到“待执行”；" + carry])
     route = next((r for r in spec.rules["package_routes"] if r["pkg"] == d.pid and (r["rel"] or None) == d.rel), None)
     if d.pid == "request" and d.rel == "cross":
         hop = "%s-p2" % to_seq if to_seq else None
-        steps = ["路由对照台账查重复和冲突：ledger.py query cross、ledger.py query open --sequence <承接序列>；所属研究任务冻结的字段和待定决策“冻结的动作”",
-                 "没有问题：请书记员 register（“提出”随登记确认，停在待接单），把工作项 ID 用【%s #ID】回给发起方，由它直接委托 %s" % (notice, hop),
-                 "和进行中的工作重复、或者碰到冻结项：不登记，把是哪一条回给发起方；要研究员定的报入口"]
+        steps = ["发起方 +2 自己上传需求包（%s），把草稿路径用【%s】发给路由" % (upload, notice),
+                 "路由对照台账查重复和冲突：ledger.py query cross、ledger.py query open --sequence <承接序列>；所属研究任务冻结的字段和待定决策“冻结的动作”",
+                 "没有问题：请书记员 register（“提出”随登记确认，停在待接单），把工作项 ID 用【%s #ID】回给发起方，"
+                 "由它写回文档（docs.py relink）、直接委托 %s" % (notice, hop),
+                 "和进行中的工作重复、或者碰到冻结项：不登记，把是哪一条回给发起方；要研究员定的转告入口"]
         return result(spec, "R7", "%s（%s → %s）" % (spec.pkg(d.pid) + "（%s）" % spec.term("rel", d.rel),
                                                   route["from"] if route else "?", route["to"] if route else "?"),
                       next_hop="pmo-router", steps=steps)
     if d.pid == "delivery" and d.rel == "cross":
-        return result(spec, None, "跨序列的%s不经过入口和路由：承接方请书记员上传答复、确认“执行”，再直接交付给发起方 +2" % spec.pkg(d.pid), next_hop=None)
-    return result(spec, None, "序列内的%s不经过入口，交给本序列上一级" % spec.pkg(d.pid), next_hop=None)
+        return result(spec, None, "跨序列的%s不经过入口和路由：承接方自己上传答复（%s），请书记员填“交付包”字段、确认“执行”，"
+                                  "再直接交付给发起方 +2" % (spec.pkg(d.pid), upload), next_hop=None)
+    return result(spec, None, "序列内的%s不经过入口和路由，在本序列的上下级之间直接往来" % spec.pkg(d.pid), next_hop=None)
 
 
 def result(spec, row, reason, **extra):

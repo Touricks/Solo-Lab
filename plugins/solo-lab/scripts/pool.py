@@ -919,7 +919,15 @@ def receive_checks(policy, root, pool, msg, me):
         out.append("发出方 %s 不在会话池的认领表里；先用 pool.py show 核对是谁发的" % sender)
     if not addressed_to(policy, pool, msg, me):
         out.append("抬头写的接收方是 %s，不是本会话 %s；确认是不是发错了" % (msg["to"], me["name"]))
-    if sender_claim and not kind_allowed(policy, kind, sender_claim["role"], me["role"]):
+    entry_role, hub = policy.get("entry_role"), policy.get("router_role")
+    ends = {sender_claim["role"], me["role"]} if sender_claim else set()
+    if hub in policy["agents"] and entry_role in ends and not ends <= {entry_role, hub, policy.get("scribe_role")}:
+        # 1.1.0: the entry talks to the researcher and the router only
+        fixed = policy["agents"][hub].get("fixed_session") or hub
+        out.append("入口只和研究员、路由往来，这条越过了路由 %s：%s" % (fixed, (
+            "进展、交付和要研究员拍板的事该发给路由，由它改状态包、把里程碑告诉你；这条转给路由，并请发出方以后直接发给它"
+            if me["role"] == entry_role else "研究员的话该由入口照录交给路由，路由转给你；这条照常处理，回话发给路由，不发入口")))
+    elif sender_claim and not kind_allowed(policy, kind, sender_claim["role"], me["role"]):
         out.append("派发图里 %s（%s）不给 %s（%s）发【%s】；照规范该走本序列上一级，跨序列的该由两边的 +2 往来，接不接先和发出方确认" % (
             sender, sender_claim["role"], me["name"], me["role"], names.get(kind, kind)))
     routing = sender_claim and sender_claim["role"] == policy.get("entry_role") and me["role"] == policy.get("router_role")
@@ -1009,7 +1017,8 @@ NOTHING_HELD = ("上下文刚压缩过。派发记录里本会话没有未了的
 TASK_UNKNOWN = ("%s 在本地回执里查不到所属研究任务：用 ledger.py get <工作项 ID> 看“所属研究任务”字段，"
                 "没有就用 ledger.py trace <工作项 ID> 沿“来源工作项”往上找，找到了%s；找不到就说一句“跳过”再继续")
 EACH_TASK = "逐条运行 %s" % (STATUS_CMD % "<研究任务 ID>")
-# The entry keeps the 状态包 of every research task that is not archived, so it reads them all, whatever it holds.
+# The router keeps the 状态包 of every research task that is not archived and the entry answers the researcher from
+# them (1.1.0; until then the entry kept them), so both read them all, whatever they hold.
 ENTRY_COMPACTED = COMPACTED.replace("所属研究任务的", "研究任务的")
 ENTRY_TASKS = ENTRY_COMPACTED + "未了事项属于研究任务 %s；连同其余没归档的（ledger.py query tasks 列出），" + EACH_TASK + "。"
 ENTRY_NOTHING = ENTRY_COMPACTED + "用 ledger.py query tasks 列出没归档的研究任务，" + EACH_TASK + "；一条都没有，说一句“跳过”再继续。"
@@ -1127,12 +1136,18 @@ def status_hint(root, items, entry=False):
         return HINT_FAILED % (str(e)[:120] or type(e).__name__)
 
 
+def reads_every_task(policy, role):
+    """The two sessions that read the 状态包 of every research task that is not archived, whatever they hold: the
+    router keeps them (1.1.0; until then the entry did), and the entry answers the researcher from them."""
+    return role in (policy.get("entry_role"), policy.get("router_role"))
+
+
 def compaction_hint(root, policy, claim, owners=None, current=None):
     """status_hint for the session that holds claim, from the open items the dispatch log gives it and the item
     its status file names (current). Whatever goes wrong on the way becomes the line that says so."""
     try:
         sent, owed = open_items(root, claim.get("name"), owners)
-        return status_hint(root, held_items(sent, owed, current), entry=claim.get("role") == policy.get("entry_role"))
+        return status_hint(root, held_items(sent, owed, current), entry=reads_every_task(policy, claim.get("role")))
     except Exception as e:
         return HINT_FAILED % (str(e)[:120] or type(e).__name__)
 
@@ -1192,7 +1207,7 @@ def injection(root, policy, claim, reason="", limit=INJECT_LIMIT, owners=None, c
     tail = "未了事项：%s。台账和状态包是正本：开工前用 ledger.py get 读工作项，找人用 pool.py show。完整说明在 .claude/agents/%s.md。" % (
         "；".join(items) or "无", role)
     if compacted:
-        tail += "\n\n" + status_hint(root, held_items(sent, owed, current), entry=role == policy.get("entry_role"))
+        tail += "\n\n" + status_hint(root, held_items(sent, owed, current), entry=reads_every_task(policy, role))
     body = role_body(root, role)
     room = limit - len(head) - len(tail) - 4
     if len(body) > room:

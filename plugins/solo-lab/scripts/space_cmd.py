@@ -106,7 +106,7 @@ def binding_doc(spec, contract, ids, snap, problems=None, notes=(), changes=(), 
         lines += ["缺的节点可以一次建齐：`docs.py ensure-node all`，先预览，再加 `--apply`。它先建一级节点，再建各序列的节点；"
                   "知识空间里已经有同名节点的直接用，不再建。要先有知识空间：`space.py feishu --live --apply` 找不到同名的知识空间就新建一个。", ""]
     if renames:
-        lines += ["命令行没有给知识库节点改名的子命令；节点标题跟着节点文档的一级标题走。先读一遍节点文档：是空的，书记员可以写入只有新标题的正文："
+        lines += ["命令行没有给知识库节点改名的子命令；节点标题跟着节点文档的一级标题走。先读一遍节点文档：是空的，可以写入只有新标题的正文，这条命令记进研究员任务清单，由研究员在自己的会话里跑（哪个会话都不直接写文档）："
                   "`lark-cli docs +update --doc <节点链接> --command overwrite --doc-format markdown --content '# <新标题>' --as user`；"
                   "有内容的，请研究员在网页上改标题。", ""]
     lark = ids.get("lark") or {}

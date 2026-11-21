@@ -31,13 +31,13 @@ import setup_core  # noqa: E402
 
 WRAPUP = "mcp__ccd_turn__wrap_up"
 WOKEN = "本轮由其他 agent 会话叫醒"
-QUEUED = "本轮登记了待定决策"
+QUEUED = "本轮有待定决策"
 LIST_DUE = ("先回答研究员，再跑 python3.12 -I .claude/solo-lab/bin/ledger.py query queue，把待决定的决策和等研究员执行的决策附在末尾，"
             "每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接，改过版的在事项后面写版本号；"
             "pool.py show 里的研究员任务清单和补位请求一起列，它们不算决策；清单里飞书项目的工作项合成一件事说，补位请求写明启动卡在哪个会话里。都没有就不附。")
-QUEUED_TEXT = ("本轮登记了待定决策 #%s：在这一行状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和主文档链接，"
+QUEUED_TEXT = ("本轮有待定决策 #%s 转到你这里：在这一行状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和主文档链接，"
                "不超过 3 行。")
-DENIED = ("这一轮是其他 agent 会话叫醒的，研究员多半不在：不用 AskUserQuestion。要研究员拍板的事写决策包或发【需拍板】给入口；"
+DENIED = ("这一轮是其他 agent 会话叫醒的，研究员多半不在：不用 AskUserQuestion。要研究员拍板的事写成决策包，登记后发【需拍板】给路由；"
           "+1、+0 写进交给上一级的交付包。")
 
 # How prompts start, as the hooks got them in the desktop app on 2026-11-15. Bodies are shortened
@@ -140,13 +140,15 @@ class TurnOriginTest(PoolProjectCase):
 
 # ------------------------------------------------------------------ inbox
 class DeliveryCase(PoolProjectCase):
-    """A started pool: the entry, the scribe, the algorithm and quality sequences claimed."""
+    """A started pool: the entry, the router, the scribe, the algorithm and quality sequences claimed."""
 
     ASK = {"ask": "先跑哪个？", "actions": [{"label": "先跑 A"}, {"label": "先跑 B"}], "blocked": True}
 
     def setUp(self):
         super().setUp()
         self.started_pool()
+        self.route("expect", "PMO-p1-01", "--role", "pmo-router", "--desk", "d-router", sid="s-entry")
+        self.claim("pmo-router", "PMO-p1-01", "s-router", desk="d-router")
 
     def context(self, sid, text):
         _, out = self.prompt(sid, text)
@@ -172,6 +174,12 @@ class DeliveryCase(PoolProjectCase):
     def registered(self, item, to="PMO-p2-01"):
         """The scribe's register receipt for work item item, as another session's message."""
         return wrap("【登记回执 #%s】PMO-p0-01 → %s：已登记成 #%s，主文档 https://example.feishu.cn/wiki/X%s" % (item, to, item, item))
+
+    def carried(self, item, to="PMO-p2-01"):
+        """The router's 【需拍板 #ID】 for a decision its +2 uploaded and the scribe registered (1.1.0): the first
+        word of that decision the entry gets."""
+        return wrap("【需拍板 #%s】PMO-p1-01 → %s：评测口径要不要换，主文档 https://example.feishu.cn/wiki/X%s" % (item, to, item),
+                    "[示例] PMO-p1-01")
 
     def wrap_up(self, sid, **fields):
         """The guard's answer to a wrap-up call; it must let the call through (exit 0), with or without a rewrite."""
@@ -201,10 +209,10 @@ class InboxDeliveryTest(DeliveryCase):
             self.assertEqual(constant(path, "LIST_DUE"), LIST_DUE, path)
             self.assertEqual(constant(path, "QUEUED"), QUEUED_TEXT, path)
 
-    def test_a_queued_decision_is_mentioned_in_the_turn_it_is_registered(self):
+    def test_a_queued_decision_is_mentioned_in_the_turn_it_reaches_the_entry(self):
         self.receipt("2301", type="decision", queue=True, urgent=False)
-        text = self.context("s-entry", self.registered("2301"))
-        self.assertIn(WOKEN + "（来自 [示例] PMO-p0-01），研究员多半不在。面向研究员最多写一行状态：不提问，不标“等研究员回答”，"
+        text = self.context("s-entry", self.carried("2301"))
+        self.assertIn(WOKEN + "（来自 [示例] PMO-p1-01），研究员多半不在。面向研究员最多写一行状态：不提问，不标“等研究员回答”，"
                       "不复述已经登记过的决策；收尾里的提问会被 hook 去掉。" + QUEUED_TEXT % "2301", text)
         self.assertNotIn("它是插队的", text)
         st = self.session("s-entry")
@@ -214,8 +222,8 @@ class InboxDeliveryTest(DeliveryCase):
 
     def test_one_that_jumps_the_queue_may_be_asked_once(self):
         self.receipt("2302", type="decision", queue=True, urgent=True)
-        text = self.context("s-entry", self.registered("2302"))
-        self.assertIn("本轮登记了待定决策 #2302", text)
+        text = self.context("s-entry", self.carried("2302"))
+        self.assertIn("本轮有待定决策 #2302 转到你这里", text)
         self.assertIn("它是插队的：本轮可以在收尾里问研究员一次。", text)
         self.assertEqual(self.session("s-entry")["ask_ok"], "2302")
         self.context("s-entry", "好")
@@ -224,14 +232,15 @@ class InboxDeliveryTest(DeliveryCase):
         self.assertNotIn("ask_ok", self.session("s-entry"))
         self.assertEqual(self.announced(), [("2302", True)])
 
-    def test_later_receipts_for_a_queued_decision_mention_nothing(self):
-        """The scribe answers every request about a decision with the same 【登记回执 #ID】: only the first is its registration."""
+    def test_later_messages_about_a_queued_decision_mention_nothing(self):
+        """Only the first 【需拍板 #ID】 the router carries to the entry is that decision's first word: the router
+        sending it again, and the scribe's receipts about it, mention nothing."""
         self.receipt("2302", type="decision", queue=True, urgent=True)
-        self.context("s-entry", self.registered("2302"))
+        self.context("s-entry", self.carried("2302"))
         self.context("s-entry", "选 B")                                                  # the researcher decides
-        for later in (scribe_receipt("2302", "已确认“决定”，决定内容：选 B"), scribe_receipt("2302", "交接记录已追加：第 2 版"),
-                      scribe_receipt("2302", "#2302 已归档"), wrap("【登记回执 #2302（重发，上一条作废）】PMO-p0-01 → PMO-p2-01：已登记成 #2302"),
-                      REMINDERS + self.registered("2302")):
+        for later in (scribe_receipt("2302", "已确认“决定”，决定内容：选 B"), scribe_receipt("2302", "#2302 已归档"),
+                      wrap("【通知 #2302】PMO-p1-01 → PMO-p2-01：#2302 已确认“决定”，执行方 Alg-p2-01 在办", "[示例] PMO-p1-01"),
+                      self.carried("2302"), REMINDERS + self.carried("2302")):
             text = self.context("s-entry", later)
             self.assertIn(WOKEN, text, later)
             self.assertNotIn(QUEUED, text, later)
@@ -240,51 +249,52 @@ class InboxDeliveryTest(DeliveryCase):
             self.assertEqual(self.wrap_up("s-entry", **self.ASK).get("updatedInput"), {"recap": "做完了"}, later)
             self.assertEqual(self.guard_log()[-1]["agent_turn_gate"], "stripped")
         self.assertEqual(self.announced(), [("2302", True)])
-        # a receipt the entry sees for another session is not a registration it mentions
+        # the scribe's receipt is not that first word (until 1.1.0 it was), nor is one addressed to another session
         self.receipt("2303", type="decision", queue=True, urgent=True)
-        self.assertNotIn(QUEUED, self.context("s-entry", self.registered("2303", to="Alg-p2-01")))
+        self.assertNotIn(QUEUED, self.context("s-entry", self.registered("2303")))
+        self.assertNotIn(QUEUED, self.context("s-entry", self.carried("2303", to="Alg-p2-01")))
         self.assertNotIn("ask_ok", self.session("s-entry"))
-        self.assertIn("本轮登记了待定决策 #2303", self.context("s-entry", self.registered("2303")))
+        self.assertIn("本轮有待定决策 #2303 转到你这里", self.context("s-entry", self.carried("2303")))
         self.assertEqual(self.session("s-entry")["ask_ok"], "2303")
 
-    def test_a_receipt_for_several_items_mentions_each_decision_once(self):
-        """1.0.10: the scribe answers several requests with one 【登记回执 #A / #B】. Only the first ID counted:
-        a decision named second was not mentioned at its registration, and the next receipt about it (a
-        comment added) mentioned it as newly registered, when the entry had listed it already."""
+    def test_a_message_for_several_items_mentions_each_decision_once(self):
+        """1.0.10: one header may name several items, 【… #A / #B】. Only the first ID counted: a decision named
+        second was not mentioned in that turn, and the next message about it mentioned it as new, when the
+        entry had listed it already."""
         self.receipt("2310", type="same_seq", queue=False, urgent=False)
         self.receipt("2311", type="decision", queue=True, urgent=False)
         self.receipt("2312", type="decision", queue=True, urgent=True)
-        several = wrap("【登记回执 #2310 / #2311 / #2312】PMO-p0-01 → PMO-p2-01：三份包都已登记", "[示例] PMO-p0-01")
+        several = wrap("【需拍板 #2310 / #2311 / #2312】PMO-p1-01 → PMO-p2-01：三件一起转给你", "[示例] PMO-p1-01")
         text = self.context("s-entry", several)
-        self.assertIn("本轮登记了待定决策 #2311、#2312：", text)
+        self.assertIn("本轮有待定决策 #2311、#2312 转到你这里：", text)
         self.assertIn("其中 #2312 是插队的：本轮可以在收尾里问研究员一次。", text)
         self.assertEqual(self.session("s-entry")["ask_ok"], "2312")
         self.assertEqual(self.announced(), [("2311", False), ("2312", True)])
-        later = wrap("【登记回执 #2311 / #2310】PMO-p0-01 → PMO-p2-01：两条评论已照原文加上", "[示例] PMO-p0-01")
+        later = wrap("【需拍板 #2311 / #2310】PMO-p1-01 → PMO-p2-01：这两条还没定", "[示例] PMO-p1-01")
         text = self.context("s-entry", later)
         self.assertIn(WOKEN, text)
-        self.assertNotIn(QUEUED, text)                                            # mentioned once, at its registration
+        self.assertNotIn(QUEUED, text)                                            # mentioned once, when it first came
         self.assertEqual(len(self.announced()), 2)
 
     def test_messages_behind_reminders_are_read(self):
         self.receipt("2302", type="decision", queue=True, urgent=True)
-        self.assertIn("本轮登记了待定决策 #2302", self.context("s-entry", REMINDERS + self.registered("2302")))
+        self.assertIn("本轮有待定决策 #2302 转到你这里", self.context("s-entry", REMINDERS + self.carried("2302")))
         self.assertEqual(self.session("s-entry")["ask_ok"], "2302")
         self.prompt("s-alg1", REMINDERS + wrap("【委托 #2101】Alg-p2-01 → Alg-p1-01：需求包 x.md", "[示例] Alg-p2-01"))
         self.assertEqual(self.pool()["owners"]["2101"], "Alg-p1-01")
         self.assertEqual(self.session("s-alg1")["work_item"], "2101")
 
-    def test_other_receipts_put_nothing_into_the_queue(self):
+    def test_other_work_items_put_nothing_into_the_queue(self):
         self.receipt("2303", type="same_seq", queue=False, urgent=False)
         self.receipt("2304", status="registered", draft="packages/drafts/alg/x.md")       # written before 1.0.3
         self.receipt("2306", type="decision", queue=False, urgent=False)                    # 研究员主动发起
         for item in ("2303", "2304", "2306", "2399"):                                       # 2399 has no receipt
-            text = self.context("s-entry", self.registered(item))
+            text = self.context("s-entry", self.carried(item))
             self.assertIn(WOKEN, text, item)
             self.assertNotIn(QUEUED, text, item)
             self.assertNotIn("ask_ok", self.session("s-entry"), item)
         self.receipt("2305", name="2305-20261116-决策包-评测口径.md.json", type="decision", queue=True, urgent=False)
-        self.assertIn("本轮登记了待定决策 #2305", self.context("s-entry", self.registered("2305")))
+        self.assertIn("本轮有待定决策 #2305 转到你这里", self.context("s-entry", self.carried("2305")))
 
     def test_a_pool_session_woken_by_another_session_asks_nothing(self):
         self.receipt("2301", type="decision", queue=True, urgent=True)
@@ -293,7 +303,7 @@ class InboxDeliveryTest(DeliveryCase):
         self.assertNotIn(QUEUED, text)
         self.assertEqual(self.session("s-alg1")["turn_origin"], "agent")
         self.assertEqual(self.pool()["owners"]["2101"], "Alg-p1-01")          # the header inside the wrapper is read
-        text = self.context("s-alg2", self.registered("2301", to="Alg-p2-01"))   # only the entry mentions decisions
+        text = self.context("s-alg2", self.carried("2301", to="Alg-p2-01"))      # only the entry mentions decisions
         self.assertIn("不向研究员提问", text)
         self.assertNotIn(QUEUED, text)
         self.assertNotIn("ask_ok", self.session("s-alg2"))
@@ -403,21 +413,21 @@ class GuardDeliveryTest(DeliveryCase):
 
     def test_the_entry_may_ask_once_about_a_decision_that_jumps_the_queue(self):
         self.receipt("2302", type="decision", queue=True, urgent=True)
-        self.prompt("s-entry", self.registered("2302"))
+        self.prompt("s-entry", self.carried("2302"))
         out = self.wrap_up("s-entry", **self.ASK)
         self.assertNotIn("updatedInput", out)
         self.assertNotIn("permissionDecision", out)
-        self.assertIn("本轮登记了插队决策 #2302，可以问这一次", out.get("additionalContext", ""))
+        self.assertIn("本轮有插队的决策 #2302 转到你这里，可以问这一次", out.get("additionalContext", ""))
         self.assertEqual(self.guard_log()[-1]["agent_turn_gate"], "allowed_urgent")
         code, out = self.ask("s-entry")                                        # the one question goes in the wrap-up
         self.assertEqual((code, out.get("permissionDecision")), (0, "deny"))
-        self.assertIn("本轮登记了插队决策 #2302：在收尾里问研究员这一次。", out.get("additionalContext", ""))
+        self.assertIn("本轮有插队的决策 #2302 转到你这里：在收尾里问研究员这一次。", out.get("additionalContext", ""))
         self.assertEqual(self.guard_log()[-1]["agent_turn_gate"], "denied")
         self.prompt("s-entry", wrap("【交付 #2101】Alg-p2-01 → PMO-p2-01：交付包 y.md", "[示例] Alg-p2-01"))
         self.assertEqual(self.wrap_up("s-entry", **self.ASK).get("updatedInput"), {"recap": "做完了"})
         code, out = self.ask("s-entry")
         self.assertEqual((code, out.get("permissionDecision")), (0, "deny"))
-        self.assertIn("要研究员拍板的事写成决策包，请书记员登记进决策队列。", out.get("additionalContext", ""))
+        self.assertIn("要研究员拍板的事写成决策包，交路由登记进决策队列。", out.get("additionalContext", ""))
         # a session that is not the entry loses the question even with ask_ok in its state
         self.prompt("s-alg2", wrap("【交付 #2101】Alg-p1-01 → Alg-p2-01：交付包 y.md", "[示例] Alg-p1-01"))
         self.set_state("s-alg2", ask_ok="2302")
@@ -464,7 +474,7 @@ class GuardDeliveryTest(DeliveryCase):
 
     def test_audit_counts_the_questions_by_who_started_the_turn(self):
         self.receipt("2302", type="decision", queue=True, urgent=True)
-        self.prompt("s-entry", self.registered("2302"))
+        self.prompt("s-entry", self.carried("2302"))
         self.wrap_up("s-entry", **self.ASK)                                   # the one the entry may ask
         self.prompt("s-entry", wrap("【交付 #2101】Alg-p2-01 → PMO-p2-01：交付包 y.md", "[示例] Alg-p2-01"))
         self.wrap_up("s-entry", **self.ASK)                                   # taken out
@@ -485,8 +495,9 @@ class GuardDeliveryTest(DeliveryCase):
 # ----------------------------------------------------------------- replay
 class ReplayTest(DeliveryCase):
     """The day from the issue: other sessions wake the entry 90 times; the researcher talks to it twice,
-    each time 30 minutes or more after the last. Three of the wake-ups are the scribe's later receipts
-    for decisions already in the queue (决定 confirmed, archived): they mention nothing."""
+    each time 30 minutes or more after the last. Three of the wake-ups are later messages about decisions
+    already in the queue (决定 confirmed, archived): they mention nothing. From 1.1.0 the entry is woken far
+    less often, by the router alone; the count stays as a worst case."""
 
     def test_ninety_wake_ups_and_two_talks(self):
         for item, urgent in (("2401", False), ("2402", True), ("2403", False)):    # decisions in the queue
@@ -495,7 +506,7 @@ class ReplayTest(DeliveryCase):
         turns = []
         for i in range(90):
             if i in (10, 40, 70):
-                turns.append(("receipt", self.registered({10: "2401", 40: "2402", 70: "2403"}[i])))
+                turns.append(("receipt", self.carried({10: "2401", 40: "2402", 70: "2403"}[i])))
             elif i in (25, 55):                                                    # a decision revised: no new one
                 item = "2401" if i == 25 else "2403"
                 turns.append(("revised", wrap("【通知 #%s】Alg-p2-01 → PMO-p2-01：决策包 #%s 改版（v2），选项 B 的代价改了" % (
@@ -542,19 +553,21 @@ class ReplayTest(DeliveryCase):
 # ----------------------------------------------------------------- 1.0.4
 FROZEN_HEAD = "待定决策冻结的动作，决策定下以前谁都不做（hook 不拦，要自己守住），选项中立的准备照常做："
 WAITS = "#%s 已到期，继续等，研究员来谈时排在最前；不推给研究员，不提醒截止。"
-DELIVERED = wrap("【交付 #2101】Alg-p2-01 → PMO-p2-01：交付包 y.md", "[示例] Alg-p2-01")
+DELIVERED = wrap("【通知 #2101】PMO-p1-01 → PMO-p2-01：研究任务 #2101 走完“复现基线”这一步", "[示例] PMO-p1-01")   # a milestone, to the entry
+PROGRESS = wrap("【通知 #2101】Alg-p2-01 → PMO-p1-01：复现跑完了，交付包 y.md", "[示例] Alg-p2-01")                  # progress, to the router
 
 
 def default_due(item, option, executor="RnD-p2-01"):
-    return "#%s 已到期：请书记员按到期默认确认（workitem.py confirm %s --by 到期默认），书记员确认后通知执行方 %s 照到期默认动作办（%s）；已经请过的不再请。" % (
+    return "#%s 已到期：请书记员按到期默认确认（workitem.py confirm %s --by 到期默认），书记员确认后通知执行方 %s 照到期默认动作办（%s），再告诉入口一声；已经请过的不再请。" % (
         item, item, executor, option)
 
 
 class GatesInboxTest(DeliveryCase):
     """1.0.4: the inbox hook reads the local decision state (.claude/state/gates.json) and never writes it. Every
-    pool session is told each turn what the decisions still waiting freeze. The entry is told each turn about
-    those past their expiry time (B8): a reversible one is for the scribe to confirm by its default; any other
-    keeps waiting, comes first when the researcher talks, and is not pushed to the researcher. A revision is
+    pool session is told each turn what the decisions still waiting freeze. Those past their expiry time (B8):
+    a reversible one is for the scribe to confirm by its default, and the router is told each turn (1.1.0; the
+    entry until then); any other keeps waiting, the entry is told each turn, it comes first when the researcher
+    talks, and is not pushed to the researcher. A revision is
     never announced. 1.0.6: the expiry is the registration plus the time org/decisions.md states now, worked out
     as ledger.py works it out; the state keeps no expiry of its own."""
 
@@ -575,7 +588,7 @@ class GatesInboxTest(DeliveryCase):
         with open(path, "w", encoding="utf-8") as f:
             f.write(re.sub(r"可逆决策的到期时长：登记后 [\d.]+ (?:小时|天)", "可逆决策的到期时长：" + written, text))
 
-    def test_what_has_expired_reaches_the_entry_only(self):
+    def test_what_has_expired_reaches_the_router_and_the_entry(self):
         reversible = self.pending("2701", 25, reversible=True, default="按轮次分目录", default_option="按轮次分目录", default_applies=True,
                                   executor="RnD-p2-01")
         self.gates(reversible,
@@ -583,33 +596,41 @@ class GatesInboxTest(DeliveryCase):
                    self.pending("2703", 26, reversible=True, default="等研究员", default_option=None, default_applies=False,
                                 executor="研究员", researcher_action="把旧记录拷到 NAS"),
                    self.pending("2704", 2, reversible=True, default="按变体分目录", default_option="按变体分目录", default_applies=True))
+        hub = self.context("s-router", PROGRESS)
+        self.assertIn(WOKEN, hub)
+        self.assertIn(default_due("2701", "按轮次分目录"), hub)                    # what takes its default is the router's
+        for item in ("2702", "2703", "2704"):
+            self.assertNotIn("#" + item, hub)
         woken = self.context("s-entry", DELIVERED)
         self.assertIn(WOKEN, woken)
-        self.assertIn(default_due("2701", "按轮次分目录"), woken)
-        for item in ("2702", "2703"):
+        self.assertNotIn("请书记员按到期默认确认", woken)
+        for item in ("2702", "2703"):                                             # what keeps waiting is the entry's
             self.assertIn(WAITS % item, woken)
         self.assertNotIn("#2704", woken)                                          # registered 2 hours ago
-        for sid, text in (("s-alg2", wrap("【交付 #2101】Alg-p1-01 → Alg-p2-01：交付包 y.md", "[示例] Alg-p1-01")), ("s-q1", "继续")):
-            self.assertNotIn("已到期", self.context(sid, text), sid)              # the entry's alone
+        for sid, text in (("s-alg2", wrap("【交付 #2101】Alg-p1-01 → Alg-p2-01：交付包 y.md", "[示例] Alg-p1-01")), ("s-q1", "继续"),
+                          ("s-scribe", "继续")):
+            self.assertNotIn("已到期", self.context(sid, text), sid)              # nobody else's
         talk = self.context("s-entry", "早")
         self.assertIn(FIRST_TALK + LIST_DUE + "已经到期、继续等研究员的决策（#2702、#2703）排在清单最前，不提截止。", talk)
-        self.assertIn(default_due("2701", "按轮次分目录"), talk)                   # every turn, until the scribe confirms it
+        self.assertNotIn("请书记员按到期默认确认", talk)
         self.assertNotIn(WOKEN, talk)
+        self.assertIn(default_due("2701", "按轮次分目录"), self.context("s-router", "继续"))   # every turn, until the scribe confirms it
         self.assertIn(WAITS % "2702", self.context("s-entry", NOTIFIED))          # the app's turns too
+        self.assertIn(default_due("2701", "按轮次分目录"), self.context("s-router", NOTIFIED))
         self.gates(self.pending("2702", 30, reversible=False, default="等研究员", default_applies=False))
-        text = self.context("s-entry", DELIVERED)
-        self.assertNotIn("#2701", text)                                           # confirmed: gone from the local state
-        self.assertIn(WAITS % "2702", text)
+        self.assertNotIn("已到期", self.context("s-router", PROGRESS))            # confirmed: gone from the local state
+        self.assertIn(WAITS % "2702", self.context("s-entry", DELIVERED))
         self.gates()
         self.assertNotIn("已到期", self.context("s-entry", DELIVERED))
         with open(os.path.join(self.tmp, ".claude", "state", "gates.json"), "w", encoding="utf-8") as f:
             f.write("{broken")
-        code, out = self.prompt("s-entry", DELIVERED)                               # never blocks the prompt
-        self.assertEqual(code, 0)
-        self.assertIn(WOKEN, out.get("additionalContext", ""))
+        for sid, text in (("s-entry", DELIVERED), ("s-router", PROGRESS)):
+            code, out = self.prompt(sid, text)                                    # never blocks the prompt
+            self.assertEqual(code, 0)
+            self.assertIn(WOKEN, out.get("additionalContext", ""))
 
     def test_the_expiry_follows_decisions_md_at_once(self):
-        """The entry is told a decision has expired by the expiry time org/decisions.md states now, the same time
+        """The router is told a decision has expired by the expiry time org/decisions.md states now, the same time
         `confirm --by 到期默认` goes by: after the researcher changes the line the two still agree, with no write to
         the local state in between. What a state written before 1.0.6 kept as expires_at is not read."""
         late = self.pending("2731", 30, reversible=True, default="按轮次分目录", default_option="按轮次分目录", default_applies=True,
@@ -617,25 +638,24 @@ class GatesInboxTest(DeliveryCase):
         waits = self.pending("2732", 30, reversible=False, default="等研究员", default_applies=False,
                              expires_at=pool_lib.stamp(pool_lib.now() + datetime.timedelta(days=30)))     # stale, the other way
         self.gates(late, waits, expiry_hours=24, expiry_from="默认", releases=[])
-        woken = self.context("s-entry", DELIVERED)
-        self.assertIn(default_due("2731", "按轮次分目录"), woken)
-        self.assertIn(WAITS % "2732", woken)
+        self.assertIn(default_due("2731", "按轮次分目录"), self.context("s-router", PROGRESS))
+        self.assertIn(WAITS % "2732", self.context("s-entry", DELIVERED))
         self.expiry("登记后 48 小时")                                               # 30 hours is not 48
-        text = self.context("s-entry", DELIVERED)
-        self.assertNotIn("已到期", text)
+        for sid, text in (("s-router", PROGRESS), ("s-entry", DELIVERED)):
+            self.assertNotIn("已到期", self.context(sid, text), sid)
         self.assertNotIn("排在清单最前", self.context("s-entry", "早"))
         self.expiry("登记后 1 天")
-        self.assertIn(default_due("2731", "按轮次分目录"), self.context("s-entry", DELIVERED))
+        self.assertIn(default_due("2731", "按轮次分目录"), self.context("s-router", PROGRESS))
         self.expiry("登记后 12 小时")
         self.gates(self.pending("2733", 13, reversible=True, default="A", default_option="A", default_applies=True, executor="Alg-p2-01"))
-        self.assertIn(default_due("2733", "A", "Alg-p2-01"), self.context("s-entry", DELIVERED))
+        self.assertIn(default_due("2733", "A", "Alg-p2-01"), self.context("s-router", PROGRESS))
         self.expiry("登记后两天")                                                   # unreadable: 24 hours, and the prompt goes through
-        self.assertNotIn("已到期", self.context("s-entry", DELIVERED))
+        self.assertNotIn("已到期", self.context("s-router", PROGRESS))
         os.remove(os.path.join(self.tmp, "org", "decisions.md"))                    # no file: 24 hours
-        self.assertNotIn("已到期", self.context("s-entry", DELIVERED))
+        self.assertNotIn("已到期", self.context("s-router", PROGRESS))
         self.gates(self.pending("2734", 25, reversible=True, default="A", default_option="A", default_applies=True, executor="Alg-p2-01"),
                    self.pending("2735", 25, registered_at="不是时间", default_applies=True))        # no registration time: not expired
-        text = self.context("s-entry", DELIVERED)
+        text = self.context("s-router", PROGRESS)
         self.assertIn(default_due("2734", "A", "Alg-p2-01"), text)
         self.assertNotIn("#2735", text)
 
@@ -649,12 +669,12 @@ class GatesInboxTest(DeliveryCase):
                    self.pending("2742", 30, default_applies=True, reopened_at=back, **default),         # as 1.0.5 wrote it
                    self.pending("2743", 30, default_applies=True, **default),
                    self.pending("2744", 3, default_applies=False, rolled_back_at=back, **default))       # not past its expiry yet
-        woken = self.context("s-entry", DELIVERED)
+        woken, hub = self.context("s-entry", DELIVERED), self.context("s-router", PROGRESS)
         for item in ("2741", "2742"):
             self.assertIn(WAITS % item, woken)
-            self.assertNotIn("confirm %s --by 到期默认" % item, woken)
-        self.assertIn(default_due("2743", "按轮次分目录"), woken)
-        self.assertNotIn("#2744", woken)
+            self.assertNotIn("confirm %s --by 到期默认" % item, woken + hub)
+        self.assertIn(default_due("2743", "按轮次分目录"), hub)
+        self.assertNotIn("#2744", woken + hub)
         talk = self.context("s-entry", "早")
         self.assertIn(FIRST_TALK + LIST_DUE + "已经到期、继续等研究员的决策（#2741、#2742）排在清单最前，不提截止。", talk)
 
@@ -679,11 +699,11 @@ class GatesInboxTest(DeliveryCase):
         self.assertTrue(text.endswith("……（全文看 python3.12 -I .claude/solo-lab/bin/ledger.py query queue 列的决策包）"), text[-80:])
 
     def test_a_revised_decision_is_not_announced_again(self):
-        """The scribe's 【登记回执】 for a revision mentions nothing, even when the decision now jumps the queue and was
+        """A 【需拍板】 for a revision mentions nothing, even when the decision now jumps the queue and was
         registered before the entry kept track of what it mentioned."""
         self.receipt("2721", type="decision", queue=True, urgent=True, version=2,
                      revisions=[{"version": 2, "date": "2026-11-22", "note": "改成插队", "draft": "packages/drafts/alg/v2.md"}])
-        text = self.context("s-entry", self.registered("2721"))
+        text = self.context("s-entry", self.carried("2721"))
         self.assertIn(WOKEN, text)
         self.assertNotIn(QUEUED, text)
         self.assertNotIn("它是插队的", text)
@@ -693,9 +713,9 @@ class GatesInboxTest(DeliveryCase):
 
 
 class ExpiryTest(DeliveryCase):
-    """1.0.4, B8 with the ledger. A reversible decision registered more than 24 hours ago: the entry is told, the
-    scribe's confirm --by 到期默认 writes a decision that starts with 到期默认： and is the option the package names,
-    and the entry hears no more of it. An irreversible one past its expiry: confirm --by 到期默认 is refused, the pool
+    """1.0.4, B8 with the ledger. A reversible decision registered more than 24 hours ago: the router is told (1.1.0;
+    the entry until then), the scribe's confirm --by 到期默认 writes a decision that starts with 到期默认： and is the
+    option the package names, and the router hears no more of it. An irreversible one past its expiry: confirm --by 到期默认 is refused, the pool
     sessions are still told what it freezes (the hook stops no command for it, 1.0.6), and the researcher gets no
     reminder; it comes first when they talk."""
 
@@ -731,11 +751,11 @@ class ExpiryTest(DeliveryCase):
 
     def test_an_expired_decision_takes_its_default_only_when_reversible(self):
         rev, perm = self.register(11, "rev.md"), self.register(10, "perm.md")
-        self.assertNotIn("已到期", self.context("s-entry", DELIVERED))
+        self.assertNotIn("已到期", self.context("s-entry", DELIVERED) + self.context("s-router", PROGRESS))
         self.age(rev, 25)
         self.age(perm, 100)
         woken = self.context("s-entry", DELIVERED)
-        self.assertIn(default_due(rev, "按轮次分目录"), woken)
+        self.assertIn(default_due(rev, "按轮次分目录"), self.context("s-router", PROGRESS))
         self.assertIn(WAITS % perm, woken)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -746,7 +766,7 @@ class ExpiryTest(DeliveryCase):
         with self.assertRaises(ledger_core.LedgerError), contextlib.redirect_stdout(io.StringIO()):
             workitem.confirm(self.lg(), perm, workitem.BY_DEFAULT)
         woken = self.context("s-entry", DELIVERED)
-        self.assertNotIn("#%s 已到期" % rev, woken)
+        self.assertNotIn("#%s 已到期" % rev, woken + self.context("s-router", PROGRESS))
         self.assertIn(WAITS % perm, woken)
         self.assertIn("#%s（实验平台用什么隔离候选代码）：“特权应用：Docker”" % perm, self.context("s-alg2", "继续"))    # still frozen, and told so
         self.assertEqual(self.bash("s-alg2", "open -a Docker"), (0, {}))               # the rules keep it, not the hook (1.0.6)
@@ -755,8 +775,8 @@ class ExpiryTest(DeliveryCase):
 
     def test_the_hook_and_the_ledger_agree_after_the_time_is_changed(self):
         """The case that went wrong before 1.0.6: the researcher changes the expiry time in org/decisions.md, and
-        until the next write to the local state the entry was told every turn to ask for 到期默认 while the scribe's
-        command was refused (or, the time made shorter, the entry was told nothing). Both read the line now."""
+        until the next write to the local state the session told of it was told every turn to ask for 到期默认 while the
+        scribe's command was refused (or, the time made shorter, it was told nothing). Both read the line now."""
         path = os.path.join(self.tmp, "org", "decisions.md")
 
         def expiry(written):
@@ -774,12 +794,12 @@ class ExpiryTest(DeliveryCase):
         rev = self.register(11, "rev.md")
         self.age(rev, 30)
         expiry("登记后 48 小时")
-        self.assertNotIn("已到期", self.context("s-entry", DELIVERED))               # the entry is not told ...
+        self.assertNotIn("已到期", self.context("s-router", PROGRESS))               # the router is not told ...
         self.assertIn("登记了 30 小时，还没满到期时长 48 小时（org/decisions.md）", refused())    # ... and the command would be refused
         expiry("登记后 24 小时")
-        self.assertIn(default_due(rev, "按轮次分目录"), self.context("s-entry", DELIVERED))
+        self.assertIn(default_due(rev, "按轮次分目录"), self.context("s-router", PROGRESS))
         self.assertIsNone(refused())                                                # told, and taken
-        self.assertNotIn("已到期", self.context("s-entry", DELIVERED))
+        self.assertNotIn("已到期", self.context("s-router", PROGRESS))
 
     def test_a_decision_the_researcher_rolled_back_is_not_taken_by_its_default(self):
         """With the ledger: a reversible decision the researcher decided and then rolled back. However long it has
@@ -788,11 +808,11 @@ class ExpiryTest(DeliveryCase):
         rev = self.register(11, "rev.md")
         self.age(rev, 30)
         self.quiet(workitem.confirm, self.lg(), rev, "研究员", ["决定内容=按变体分目录", "决定人=研究员"], option="按变体分目录")
-        self.assertNotIn("已到期", self.context("s-entry", DELIVERED))
+        self.assertNotIn("已到期", self.context("s-entry", DELIVERED) + self.context("s-router", PROGRESS))
         self.quiet(workitem.rollback, self.lg(), rev, "决定", "研究员想再看看", by="研究员")
         woken = self.context("s-entry", DELIVERED)
         self.assertIn(WAITS % rev, woken)
-        self.assertNotIn("请书记员按到期默认确认", woken)
+        self.assertNotIn("请书记员按到期默认确认", woken + self.context("s-router", PROGRESS))
         with self.assertRaises(ledger_core.LedgerError) as e, contextlib.redirect_stdout(io.StringIO()):
             workitem.confirm(self.lg(), rev, workitem.BY_DEFAULT)
         self.assertIn("定过一次，又回滚到了待决定", str(e.exception))

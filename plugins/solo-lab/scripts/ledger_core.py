@@ -1766,8 +1766,12 @@ def also_to_router(lg, item_id):
     1.0.12 the two +2 of such a request talk to each other and ask the scribe themselves, the entry is not in
     between; the router keeps the record of who waits for whom, and a receipt is what wakes it. The type is
     read from the registration receipt (packages/sent/<ID>.json): nothing more is asked of the space."""
-    if lg.mode == "apply" and item_id and receipt_of(lg, str(item_id).lstrip("#")).get("type") == "cross_request":
-        print("跨序列需求：这条回执另发一份给路由 %s（请求方就是它的不用再发）。" % lg.spec.rules["naming"]["fixed_sessions"]["pmo-router"])
+    kind = receipt_of(lg, str(item_id).lstrip("#")).get("type") if lg.mode == "apply" and item_id else None
+    router = lg.spec.rules["naming"]["fixed_sessions"]["pmo-router"]
+    if kind == "cross_request":
+        print("跨序列需求：这条回执另发一份给路由 %s（请求方就是它的不用再发）。" % router)
+    elif kind == "research_task":                     # 1.1.0: the router keeps the task's 状态包 and tells the entry the milestones
+        print("研究任务：这条回执另发一份给路由 %s，它改状态包、把里程碑告诉入口（请求方就是它的不用再发）。" % router)
 
 
 def parser(description):
