@@ -43,7 +43,7 @@ The hook also:
   turn, gets a line for each waiting decision past its expiry time, which is its
   registration plus the expiry time in org/decisions.md, worked out here as ledger.py
   works it out (pool.expiry_hours, pool.expires_at): a reversible one that may take
-  its default (pool.takes_default) is to be confirmed by the scribe with `ledger.py
+  its default (pool.takes_default) is to be confirmed by the scribe with `workitem.py
   confirm <ID> --by 到期默认`, who then tells the decision's 执行方 to act on the
   default; any other one, also one that was decided once and rolled back to 待决定,
   keeps waiting, comes first when the researcher next talks, and is not pushed to
@@ -199,7 +199,7 @@ GATES_FILE = "gates.json"
 FROZEN = "待定决策冻结的动作，决策定下以前谁都不做（hook 不拦，要自己守住），选项中立的准备照常做：%s。"
 FROZEN_SHOWN = 700                    # characters of the frozen line at most
 MORE_FROZEN = "……（全文看 python3.12 -I .claude/solo-lab/bin/ledger.py query queue 列的决策包）"
-DUE_DEFAULT = "#%s 已到期：请书记员按到期默认确认（ledger.py confirm %s --by 到期默认），书记员确认后通知执行方 %s 照到期默认动作办（%s）；已经请过的不再请。"
+DUE_DEFAULT = "#%s 已到期：请书记员按到期默认确认（workitem.py confirm %s --by 到期默认），书记员确认后通知执行方 %s 照到期默认动作办（%s）；已经请过的不再请。"
 MAX_DUE = 5                           # lines about decisions past their expiry, at most, a turn
 MORE_DUE = "另有 %d 条已到期的待定决策，见 python3.12 -I .claude/solo-lab/bin/ledger.py query queue。"
 DUE_WAIT = "#%s 已到期，继续等，研究员来谈时排在最前；不推给研究员，不提醒截止。"
@@ -208,7 +208,7 @@ WAITING_FIRST = "已经到期、继续等研究员的决策（%s）排在清单�
 
 def queued_decision(root, item_id):
     """The receipt of work item item_id when it is a decision that went into the decision queue:
-    ledger.py register writes type, queue and urgent into packages/sent/<ID>.json (or
+    workitem.py register writes type, queue and urgent into packages/sent/<ID>.json (or
     <ID>-<draft file>.json) from 1.0.3 on. None for anything else, an older receipt included."""
     if not item_id:
         return None

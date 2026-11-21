@@ -573,7 +573,7 @@ class Contract:
 # ------------------------------------------------------------------ lint
 HEADER = re.compile(r"^- ([^：:]+)[：:]\s*(.*)$")
 # Every package says which version it is: 第 1 版（2026-11-16） when new; for a request or a decision
-# `ledger.py revise` takes the next one, the previous number plus one, and replaces the opening of the main
+# `docs.py revise` takes the next one, the previous number plus one, and replaces the opening of the main
 # document with it; a delivery is handed in again with reply, its number plus one.
 VERSION = "版本"
 HEADER_KEYS = ["包类型", VERSION, "发出方", "接收方", "关联工作项", "需要接收方做的事", "回复期限", "上下文范围"]
@@ -585,7 +585,7 @@ HEADER_KEYS = ["包类型", VERSION, "发出方", "接收方", "关联工作项"
 # The session is one that answers for the matter (the researcher, 2026-11-16): a sequence's +2, the entry or
 # the router (EXECUTOR_RANKS); a +1, a +0 and the scribe are sent back, and what a lower rank is to do the +2
 # delegates with a request package. When one option needs the researcher's own hands the header says 研究员;
-# should the researcher pick an option that does not, `ledger.py confirm --executor` hands the decision to a
+# should the researcher pick an option that does not, `workitem.py confirm --executor` hands the decision to a
 # session, under the same check.
 EXECUTOR = "执行方"
 RESEARCHER = "研究员"
@@ -913,7 +913,7 @@ def read_executor(spec, value):
     compares names (the name comes back spelled with the sequence's abbreviation), and a sequence and rank
     written in front of it (算法 +2（Alg-p2-01）) are its own. The session is a sequence's +2, the entry
     (项目管理 +2) or the router (项目管理 +1): a +1, a +0 and the scribe are sent back with what to write
-    instead. `ledger.py confirm --executor` takes a session under the same check. A receipt that names
+    instead. `workitem.py confirm --executor` takes a session under the same check. A receipt that names
     another session from before 1.0.6 is read as it is: nothing here looks at receipts."""
     value = (value or "").strip().rstrip("。.")
     if value == RESEARCHER:

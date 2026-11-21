@@ -50,6 +50,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import orgspec  # noqa: E402
 import ledger  # noqa: E402
+import ledger_core  # noqa: E402
 import pool  # noqa: E402
 
 ID_RE = re.compile(r"#(\d{3,})|(?<![\d-])(\d{9,12})(?!\d)")
@@ -108,15 +109,15 @@ def classify_text(spec, root, text, offline):
         if m and m.group(1) not in ids:
             ids.append(m.group(1))
     if ids or sessions:
-        lg = None if offline else ledger.Ledger(root, "preview")
+        lg = None if offline else ledger_core.Ledger(root, "preview")
         for item_id in ids:
             if lg is None:
                 return result(spec, "R1", "带工作项 ID #%s（离线，没核对是否存在）" % item_id, work_item=item_id)
             try:
                 it = lg.item(item_id)
-            except ledger.LedgerError as e:
+            except ledger_core.LedgerError as e:
                 return result(spec, "R3", "#%s 查不到：%s" % (item_id, str(e)[:120]), work_item=item_id)
-            if it["state"] in ledger.closed_states(lg):
+            if it["state"] in ledger_core.closed_states(lg):
                 return result(spec, "R3", "#%s 已是“%s”，不能直接续上" % (item_id, it["state"]), work_item=item_id)
             seq_cn = lg.text_of(it, "sequence")
             seq = next((s for s, cn, _ in spec.sequences() if cn == seq_cn), None)
@@ -144,7 +145,7 @@ def classify_draft(spec, root, path, pool_run=True):
     errors, _ = orgspec.lint_text(spec, text)
     if errors:
         return {"row": None, "reason": "草稿没通过检查", "errors": errors, "action": "退回作者修改"}
-    d = ledger.Draft(spec, path)
+    d = ledger_core.Draft(spec, path)
     to_seq = d.receiver_seq
     notice = spec.term("msg", "notice")
     if d.pid == "decision":
@@ -799,7 +800,7 @@ def print_pool(root, policy, role=None, item=None):
 def queue_rows(root, policy, me, seq):
     """The 待开工 work items this claim dispatches: for the entry, cross-sequence requests waiting
     for a +2 and 下发 packages it wrote; for a +2 or +1, the packages of its sequence it wrote."""
-    lg = ledger.Ledger(root, "preview")
+    lg = ledger_core.Ledger(root, "preview")
     tag = "（%s）" % me["name"]
     rows = []
     with contextlib.redirect_stdout(io.StringIO()):
@@ -831,7 +832,7 @@ def queue_cmd(root, policy, name, offline=False):
         return 0
     try:
         items = queue_rows(root, policy, me, seq)
-    except ledger.LedgerError as e:
+    except ledger_core.LedgerError as e:
         print("台账没读到：%s" % str(e)[:120])
         return 1
     for row in items:
@@ -864,9 +865,9 @@ def recover_cmd(root, policy):
             else:
                 unfinished.append("%s（#%s，%s）" % (rec.get("draft"), rec.get("work_item_id"), rec.get("status")))
     if unfinished:
-        print("- 书记员先补完写到一半的登记，逐条运行 ledger.py register <草稿> --resume：%s" % "；".join(unfinished))
+        print("- 书记员先补完写到一半的登记，逐条运行 workitem.py register <草稿> --resume：%s" % "；".join(unfinished))
     if replies:
-        print("- 书记员补完写到一半的答复，逐条重跑 ledger.py reply <草稿>（会接着上次的回执做）：%s" % "；".join(replies))
+        print("- 书记员补完写到一半的答复，逐条重跑 workitem.py reply <草稿>（会接着上次的回执做）：%s" % "；".join(replies))
     for r in rows:
         st, before = r["status"], r.get("prev_status") or ""
         if before == "idle_bg":
@@ -932,13 +933,13 @@ def item_end(lg, item):
     that is gone and a ledger that does not answer are told apart by what the space says (WorkItemNotFound)."""
     try:
         it = lg.item(item)
-    except ledger.LedgerError as e:
+    except ledger_core.LedgerError as e:
         if "WorkItemNotFound" in str(e):
             return "已删除", ""
         raise
     if it is None:
-        raise ledger.LedgerError("读不到 #%s" % item)
-    return (it.get("state"), it.get("name") or "") if ledger.finished(lg, it.get("state"), it.get("type")) else None
+        raise ledger_core.LedgerError("读不到 #%s" % item)
+    return (it.get("state"), it.get("name") or "") if ledger_core.finished(lg, it.get("state"), it.get("type")) else None
 
 
 def todo_cmd(spec, root, action, n=None, text=None, item=None, done_when=None, note=None, kind=None):
@@ -966,7 +967,7 @@ def todo_cmd(spec, root, action, n=None, text=None, item=None, done_when=None, n
         title = link = None
         if kind:                                     # the item's name and link, read once, for the researcher to click
             try:
-                lg = ledger.Ledger(root, "preview")
+                lg = ledger_core.Ledger(root, "preview")
                 it = lg.item(item)
                 if it:
                     title, link = it.get("name"), lg.item_url(it.get("type"), item) if it.get("type") else None
@@ -1234,9 +1235,9 @@ def prune_cmd(root, apply=False):
     asked = [t for t in open_todos(pl) if t.get("kind") and t.get("item")]
     gone, struck, waiting = [], [], []
     try:
-        lg = ledger.Ledger(root, "preview")
+        lg = ledger_core.Ledger(root, "preview")
         ends = {item: item_end(lg, item) for item in sorted(set(owners) | {t["item"] for t in asked})}
-    except (ledger.LedgerError, orgspec.OrgSpecError) as e:
+    except (ledger_core.LedgerError, orgspec.OrgSpecError) as e:
         print("出错：台账读不到，认领表和研究员任务清单都没有动：%s" % str(e)[:300])
         return 1
     for item, name in sorted(owners.items()):
@@ -1394,7 +1395,7 @@ def main(argv=None):
                    help="lark-cli 收到这么多条事件就退出；别人发给机器人的私聊、群消息也算数，不只算收进收件箱的")
     args = ap.parse_args(argv)
     spec = orgspec.OrgSpec()
-    root = ledger.project_root()
+    root = ledger_core.project_root()
     codex = os.path.isfile(os.path.join(root, ".agent-org", "manifest.json"))
     if codex and args.cmd != "classify":
         print("Codex 的会话操作使用 codex_runtime.py；本入口只复用 classify 的业务路由")

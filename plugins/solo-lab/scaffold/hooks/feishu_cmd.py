@@ -474,9 +474,10 @@ def mentions_cli(text):
 
 
 def _scan_file(path, cwd):
-    """Does the script call lark-cli or meegle? Comment lines and file names like meegle.json do not count."""
+    """Does the script call lark-cli or meegle? Comment lines and file names like meegle.json do not count.
+    A script that imports the ledger modules does: they are what calls the two for the plugin's own scripts."""
     text = read_script(path, cwd)
-    return text is not None and "\0" not in text and mentions_cli(text)
+    return text is not None and "\0" not in text and (mentions_cli(text) or bool(IMPORTS_LEDGER.search(code_lines(text))))
 
 
 def _split_string(seg, i):
@@ -704,13 +705,17 @@ def find_clauses(argv):
     return out
 
 
+# The scripts that write the ledger. One file, ledger.py, until 1.1.0; since then its write commands are in
+# docs.py and workitem.py, and what the three share is ledger_core.py. The hooks read the three alike.
+LEDGER_SCRIPTS = ("ledger.py", "docs.py", "workitem.py")
+IMPORTS_LEDGER = re.compile(r"^\s*(?:import|from)\s+(?:ledger_core|ledger|workitem)\b", re.M)
+
+
 def glob_names_ledger(pattern):
-    """Does a shell glob that mentions ledger (ledger.p?, ledger*, */ledger.py) match ledger.py?"""
+    """Does a shell glob that mentions a ledger script (ledger.p?, ledger*, */workitem.py) match one?"""
     name = os.path.basename(pattern)
-    if "ledger" not in name:
-        return False
     try:
-        return fnmatch.fnmatch("ledger.py", name)
+        return any(script[:-3] in name and fnmatch.fnmatch(script, name) for script in LEDGER_SCRIPTS)
     except re.error:                                  # [2024-11-01]: a bad range is not a pattern
         return False
 
@@ -767,8 +772,8 @@ def change_dir(argv, cur, dirs, follow=_cd):
 
 
 def _is_ledger(path, cwd):
-    """The project's own ledger.py, the copy that still matches the manifest."""
-    return os.path.basename(path) == "ledger.py" and _full(path, cwd) in TRUSTED
+    """One of the project's own ledger scripts, the copy that still matches the manifest."""
+    return os.path.basename(path) in LEDGER_SCRIPTS and _full(path, cwd) in TRUSTED
 
 
 def parse(command, cwd=None, _depth=0, _result=None):

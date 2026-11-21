@@ -77,7 +77,7 @@ description: 在 Claude 桌面端把一个项目目录初始化成智能体组�
 
 第 3 步的 `init --apply` 把 hook 写进项目的 `.claude/settings.json`。hook 在本会话里什么时候开始生效，没有实测。生效以后会遇到两件事：
 
-- 项目里的脚本照规定的写法运行，不受影响。写台账的 `ledger.py` 命令只有书记员能运行，本会话不运行。
+- 项目里的脚本照规定的写法运行，不受影响。写台账的 `workitem.py` 和 `docs.py` 只有书记员能运行，本会话不运行。
 - 插件目录里的 `setup.py`、`space.py`、`onboarding.py`：`init --apply` 把它们的路径和内容校验值记进项目清单，hook 照这份记录放行本会话运行它们，bypass 模式下也一样；角色会话运行 `setup.py` 会被拒绝。命令里的插件路径就写初始化时用的那个绝对路径。插件升级或换了位置以后记录对不上，hook 会拦：默认权限模式下弹确认，请研究员点允许；bypass 和 dontAsk 模式下直接拒绝，这时把第 3 步 `init --apply` 那条完整命令交给研究员在终端里运行一次，记录更新后就恢复。不改写命令去绕开 hook。
 
 ### 计时
@@ -365,8 +365,8 @@ python3.12 -I "$PLUGIN/scripts/setup.py" pool --target <项目目录>
 
 书记员由路由开出。这个目录里还没登记过任何东西时，路由的认领输出里给书记员的 prompt 带着这一段。它认领以后接着做：
 
-1. `ledger.py ensure-node all --apply`：在知识空间里建 21 个节点。已经有同名节点的直接用，不再建。
-2. `ledger.py query tasks`：空间里已经有研究任务就跳过；没有就运行 `ledger.py register packages/drafts/pmo/研究任务单-首条.md --apply`，登记首条研究任务。
+1. `docs.py ensure-node all --apply`：在知识空间里建 21 个节点。已经有同名节点的直接用，不再建。
+2. `ledger.py query tasks`：空间里已经有研究任务就跳过；没有就运行 `workitem.py register packages/drafts/pmo/研究任务单-首条.md --apply`，登记首条研究任务。
 
 两件各用 `nodes`、`first_task` 打点。做完它回话，写明建了几个节点、沿用了几个，研究任务的工作项 ID 和主文档链接；哪条命令失败，原样贴出报错。
 
@@ -375,7 +375,7 @@ python3.12 -I "$PLUGIN/scripts/setup.py" pool --target <项目目录>
 | 书记员回话里的情况 | 怎么办 |
 | --- | --- |
 | “这个项目还没绑定飞书空间”或“ids.json 里没有知识空间 space_id” | 回第 5 步，做完给它发消息让它接着做 |
-| “上次已经建了工作项 #…，但没做完（停在：…）” | 让它运行 `ledger.py register packages/drafts/pmo/研究任务单-首条.md --resume --apply`，不重新登记 |
+| “上次已经建了工作项 #…，但没做完（停在：…）” | 让它运行 `workitem.py register packages/drafts/pmo/研究任务单-首条.md --resume --apply`，不重新登记 |
 | “…建主文档没有拿到确定的结果…”或“上次建文档没有拿到确定的结果…” | 照报错到网页上核对文档建出来没有，再让它带 `--resume --doc <文档链接>` 或 `--resume --doc new` 重跑 |
 | 登录过期、没有权限 | 做第 2 步，再让它接着做 |
 | 认领以后没做这两件 | 把 `.claude/solo-lab/pool-plan.json` 里 `scribe_first` 那一段话发给它 |
@@ -466,7 +466,7 @@ python3.12 -I "$PLUGIN/scripts/setup.py" check --target <项目目录> --live --
 | 层 | 核对什么 | 常见的问题和办法 |
 | --- | --- | --- |
 | 本地配置 | 项目文件和现在的插件、规则、绑定对得上 | “现在的插件、规则或 feishu/ids.json 生成的内容和初始化时不同…”：重跑第 3 步的 `init --apply`。“待合并：….new”：请用户合并 |
-| 飞书 | 绑定、知识空间、21 个节点、`.env` 的两行；`--live` 再回读空间结构和每个节点 | “知识库节点还缺…”：让书记员运行 `ledger.py ensure-node all --apply`。“项目目录的 .env 还没有…”：做第 7 步。“空间结构：…”：空间配置改过，用技能 `solo-lab:space-bind` 处理。“知识库节点读不到，或者不在这个知识空间里…”：知识空间被删了。这一版不支持恢复：停下告诉研究员，不要自己清 `feishu/ids.json`，也不要重建；要继续做，换一个新目录重新初始化 |
+| 飞书 | 绑定、知识空间、21 个节点、`.env` 的两行；`--live` 再回读空间结构和每个节点 | “知识库节点还缺…”：让书记员运行 `docs.py ensure-node all --apply`。“项目目录的 .env 还没有…”：做第 7 步。“空间结构：…”：空间配置改过，用技能 `solo-lab:space-bind` 处理。“知识库节点读不到，或者不在这个知识空间里…”：知识空间被删了。这一版不支持恢复：停下告诉研究员，不要自己清 `feishu/ids.json`，也不要重建；要继续做，换一个新目录重新初始化 |
 | 会话 | 清单里的会话都已认领，入口和书记员各一条，没有剩下的预登记，权限模式同一类，工作目录是项目目录；带 `--sessions` 再核对会话还在、没归档、都在分区里；带 `--readback` 再核对模型和清单在同一档、窗口不小于本会话 | “会话池还没开齐：…”：回第 6 步补开。“有 N 条预登记还没转正：…”：给那个会话发消息让它重新认领。“客户端的会话列表里没有这些认领的会话…”：先把 `limit` 写大重取一次列表。“不在侧栏分区…”：重做归入分区。“模型和开池清单不在一档的会话…”：请研究员照回读表在应用里切换那几个会话的模型；入口要用 fable 而本会话不是 fable 的，写进交接。“窗口小于本会话…”：查用户设置、项目设置、项目本地设置里的 `autoCompactWindow` 和环境变量 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，设置由研究员改，改完他退出并重开桌面应用，再回读一次 |
 | 首条研究任务 | 有登记回执、回执里有主文档地址、草稿的“关联工作项”是真实 ID；`--live` 再回读工作项、主文档和它的上一级节点 | “还没有登记过研究任务…”：让书记员做第 6 步的第二件写入 |
 
@@ -500,7 +500,7 @@ python3.12 -I .claude/solo-lab/bin/onboarding.py finish
 - 研究员在入口说“立项”。入口用技能 `solo-lab:charter` 访谈研究员，把修订稿另存成新的草稿，请书记员原位修订这条研究任务的主文档。书记员先预览，再加 `--apply`：
 
   ```bash
-  python3.12 -I .claude/solo-lab/bin/ledger.py revise <研究任务的工作项 ID> <修订稿> --note '<改了什么>'
+  python3.12 -I .claude/solo-lab/bin/docs.py revise <研究任务的工作项 ID> <修订稿> --note '<改了什么>'
   ```
 
   工作项和文档链接都不变。入口把主文档的飞书链接给研究员，他在文档上批注。

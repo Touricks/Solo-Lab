@@ -1,6 +1,6 @@
-# ledger.py 命令
+# 台账脚本的命令
 
-脚本在项目的 `.claude/solo-lab/bin/ledger.py`，插件里的原件在 `scripts/ledger.py`。在项目目录里运行，照 `python3.12 -I .claude/solo-lab/bin/ledger.py <子命令> …` 的写法，项目权限只放行这种写法。
+脚本在项目的 `.claude/solo-lab/bin/` 下，插件里的原件在 `scripts/`：读台账的 `ledger.py`，写文档的 `docs.py`，写工作项的 `workitem.py`。在项目目录里运行，照 `python3.12 -I .claude/solo-lab/bin/<脚本> <子命令> …` 的写法，项目权限只放行这种写法。
 
 它读三样东西：
 
@@ -145,7 +145,7 @@ python3.12 -I .claude/solo-lab/bin/ledger.py status <工作项 ID>
 ### register：登记草稿，新建工作项
 
 ```bash
-python3.12 -I .claude/solo-lab/bin/ledger.py register <草稿路径> [--task <研究任务 ID>] [--source <来源工作项 ID>] [--set <字段>=<值>] [--resume] [--doc <文档链接>|new]
+python3.12 -I .claude/solo-lab/bin/workitem.py register <草稿路径> [--task <研究任务 ID>] [--source <来源工作项 ID>] [--set <字段>=<值>] [--resume] [--doc <文档链接>|new]
 ```
 
 | 草稿 | 脚本怎么认 | 建成 |
@@ -214,12 +214,12 @@ python3.12 -I .claude/solo-lab/bin/ledger.py register <草稿路径> [--task <�
 | “跳过字段 …（之后可以用 update 补）：…” | 选填字段的值转换不了，照后面的原因改好，用 `update` 补。决策没有截止时间字段，决策包的回复期限只留在包头里 |
 | “读不到 #… 的角色人员，没法确认各节点有没有负责人；请在网页上核对。” | 请研究员在网页上看这条工作项的角色人员 |
 | “建工作项时带的角色人员没全生效，已用 --role-operate 把研究员补进：…。” | 已经补好，不用处理 |
-| “登记好了，第一步没能确认：…。接着运行 ledger.py confirm … --by … --apply” | 照它给的命令确认 |
+| “登记好了，第一步没能确认：…。接着运行 workitem.py confirm … --by … --apply” | 照它给的命令确认 |
 
 ### revise：修订已经登记的包
 
 ```bash
-python3.12 -I .claude/solo-lab/bin/ledger.py revise <工作项 ID> <新草稿路径> --note '<改了什么>'
+python3.12 -I .claude/solo-lab/bin/docs.py revise <工作项 ID> <新草稿路径> --note '<改了什么>'
 ```
 
 - 新草稿是需求包或决策包的下一版：主文档开头到“状态包”之前那部分改好的样子，包头“版本”写上一版加 1，“关联工作项”写这条工作项的 ID 或“待建”。`--note` 必填，进交接记录。
@@ -238,7 +238,7 @@ python3.12 -I .claude/solo-lab/bin/ledger.py revise <工作项 ID> <新草稿路
 ### reply：登记交付包
 
 ```bash
-python3.12 -I .claude/solo-lab/bin/ledger.py reply <草稿路径> [--doc <文档链接>|new]
+python3.12 -I .claude/solo-lab/bin/workitem.py reply <草稿路径> [--doc <文档链接>|new]
 ```
 
 - 只收交付包。包头的“关联工作项”写它答复的那条需求的 ID，比如 `#2103`；这条需求要是同序列需求或跨序列需求。
@@ -251,8 +251,8 @@ python3.12 -I .claude/solo-lab/bin/ledger.py reply <草稿路径> [--doc <文档
 ### confirm：确认当前这一步
 
 ```bash
-python3.12 -I .claude/solo-lab/bin/ledger.py confirm <工作项 ID> --by <会话名> [--set <字段>=<值>] [--option <选项>] [--executor <会话名>] [--node <节点>] [--decision <决策工作项 ID>] [--type <类型槽位>]
-python3.12 -I .claude/solo-lab/bin/ledger.py confirm <决策 ID> --by 到期默认
+python3.12 -I .claude/solo-lab/bin/workitem.py confirm <工作项 ID> --by <会话名> [--set <字段>=<值>] [--option <选项>] [--executor <会话名>] [--node <节点>] [--decision <决策工作项 ID>] [--type <类型槽位>]
+python3.12 -I .claude/solo-lab/bin/workitem.py confirm <决策 ID> --by 到期默认
 ```
 
 | 参数 | 用途 |
@@ -278,7 +278,7 @@ python3.12 -I .claude/solo-lab/bin/ledger.py confirm <决策 ID> --by 到期默�
 - 1.0.4 以前登记、没记选项表的决策，`--option` 写了选项名会停下（写 `无` 或者不写可以）：研究员定的内容写进 `--set 决定内容`。
 - `--executor <会话名>` 把执行方改成一个会话，包头“执行方”写的是研究员、研究员选的选项却不用他动手时用。会话名过和包头一样的检查：只收各序列的 +2、入口和路由。生效时回执的 `executor` 改成会话名、`researcher_action` 记 null，`as_packaged` 留下包头原来的两项；空间里有“执行方”“研究员要做的事”两个字段的，随这一步的字段写入写成会话名和“无”，没有就跳过；评论里多一句“执行方改成 <会话名>（包头写的是研究员），“研究员要做的事”记“无””。之后照执行方是会话的规矩走：书记员通知它，它执行完马上请书记员归档，`query queue` 不再把这条列成等研究员执行。写的会话就是包头的执行方时，什么都不记。
 - `--executor` 不收“研究员”：要把执行方改成研究员，请发出方写下一版（包头“执行方”写“研究员”，“研究员要做的事”写清楚要他做什么），`revise` 以后再确认。执行方和研究员要做的事也不能同时用 `--set` 传。
-- 研究员在网页上确认了“决定”以后，这两个参数都用不上了：选的选项用 `ledger.py comment` 记一条评论；要改执行方，先 `rollback <ID> --to 决定 --reason '<原因>' --by 研究员`，再带 `--executor` 确认。
+- 研究员在网页上确认了“决定”以后，这两个参数都用不上了：选的选项用 `workitem.py comment` 记一条评论；要改执行方，先 `rollback <ID> --to 决定 --reason '<原因>' --by 研究员`，再带 `--executor` 确认。
 
 **到期默认。** `confirm <决策 ID> --by 到期默认`：可逆的决策登记满到期时长还没定，按包头的到期默认动作记成决定。脚本要下面几条都满足才写，有一条不满足就停下，什么都不写：
 
@@ -307,8 +307,8 @@ python3.12 -I .claude/solo-lab/bin/ledger.py confirm <决策 ID> --by 到期默�
 ### rollback：退回到已完成的一步
 
 ```bash
-python3.12 -I .claude/solo-lab/bin/ledger.py rollback <工作项 ID> --to <节点> --reason '<原因>' --by <会话名> [--type <类型槽位>]
-python3.12 -I .claude/solo-lab/bin/ledger.py rollback <工作项 ID> --to <节点> --reason '<原因>' --decision <决策工作项 ID>
+python3.12 -I .claude/solo-lab/bin/workitem.py rollback <工作项 ID> --to <节点> --reason '<原因>' --by <会话名> [--type <类型槽位>]
+python3.12 -I .claude/solo-lab/bin/workitem.py rollback <工作项 ID> --to <节点> --reason '<原因>' --decision <决策工作项 ID>
 ```
 
 | 参数 | 用途 |
@@ -347,7 +347,7 @@ python3.12 -I .claude/solo-lab/bin/ledger.py rollback <工作项 ID> --to <节�
 ### archive：归档
 
 ```bash
-python3.12 -I .claude/solo-lab/bin/ledger.py archive <工作项 ID> [--moved]
+python3.12 -I .claude/solo-lab/bin/workitem.py archive <工作项 ID> [--moved]
 ```
 
 1. 核对工作项已经走到最后一步；已经是“归档”的直接返回。决策是“已终止”的不用归档，移出本地决策状态里的待定决策就返回。
@@ -362,7 +362,7 @@ python3.12 -I .claude/solo-lab/bin/ledger.py archive <工作项 ID> [--moved]
 ### update：改字段
 
 ```bash
-python3.12 -I .claude/solo-lab/bin/ledger.py update <工作项 ID> --set <字段>=<值> [--type <类型槽位>]
+python3.12 -I .claude/solo-lab/bin/workitem.py update <工作项 ID> --set <字段>=<值> [--type <类型槽位>]
 ```
 
 - 写了阻塞原因，同时把阻塞开始日期写成当天，除非这条命令里另外传了日期。阻塞原因清空时，阻塞开始日期一起清空。
@@ -371,7 +371,7 @@ python3.12 -I .claude/solo-lab/bin/ledger.py update <工作项 ID> --set <字段
 ### comment：加评论
 
 ```bash
-python3.12 -I .claude/solo-lab/bin/ledger.py comment <工作项 ID> --text '<内容>'
+python3.12 -I .claude/solo-lab/bin/workitem.py comment <工作项 ID> --text '<内容>'
 ```
 
 开头没有会话标签的，脚本自动补上。
@@ -379,7 +379,7 @@ python3.12 -I .claude/solo-lab/bin/ledger.py comment <工作项 ID> --text '<内
 ### relink：修正主文档里的“关联工作项”
 
 ```bash
-python3.12 -I .claude/solo-lab/bin/ledger.py relink <工作项 ID>
+python3.12 -I .claude/solo-lab/bin/docs.py relink <工作项 ID>
 ```
 
 主文档是带着占位（“待建”这一类）建出来的时候用。脚本找到主文档开头“关联工作项”那一行，原位换成工作项 ID，文档身份和链接不变。那一行已经写着这个 ID 的，不改。
@@ -387,7 +387,7 @@ python3.12 -I .claude/solo-lab/bin/ledger.py relink <工作项 ID>
 ### status-block：替换状态包
 
 ```bash
-python3.12 -I .claude/solo-lab/bin/ledger.py status-block <工作项 ID> --file <状态包文件>
+python3.12 -I .claude/solo-lab/bin/docs.py status-block <工作项 ID> --file <状态包文件>
 ```
 
 把主文档里从“状态包”标题到“交接记录”标题之前的内容，整段换成文件的内容。文件不是以 `## 状态包` 开头的，脚本补上这个标题。
@@ -395,7 +395,7 @@ python3.12 -I .claude/solo-lab/bin/ledger.py status-block <工作项 ID> --file 
 ### append：追加交接记录
 
 ```bash
-python3.12 -I .claude/solo-lab/bin/ledger.py append <工作项 ID> --file <交接记录文件>
+python3.12 -I .claude/solo-lab/bin/docs.py append <工作项 ID> --file <交接记录文件>
 ```
 
 文件第一行要带会话标签，比如 `[Alg+1]`。内容追加到主文档末尾，“交接记录”是主文档的最后一节。
@@ -403,8 +403,8 @@ python3.12 -I .claude/solo-lab/bin/ledger.py append <工作项 ID> --file <交�
 ### ensure-node：建知识库节点
 
 ```bash
-python3.12 -I .claude/solo-lab/bin/ledger.py ensure-node <键>
-python3.12 -I .claude/solo-lab/bin/ledger.py ensure-node all
+python3.12 -I .claude/solo-lab/bin/docs.py ensure-node <键>
+python3.12 -I .claude/solo-lab/bin/docs.py ensure-node all
 ```
 
 - 键是节点树里的位置，比如 `feedback`、`same_seq/alg`、`archive/alg`，全部的键见 `structure.md` 的节点树。
@@ -437,7 +437,7 @@ SELECT `work_item_id`, `name`, `work_item_status` FROM `<project_key>`.`<type_ke
 | 读工作项 | `meegle workitem get --work-item-id <ID> --fields '["_all"]'` | 没填值的字段不出现；人员字段读不回来 |
 | 读节点 | `meegle workflow get-node --work-item-id <ID> --page-num <页>` | 每页 20 个节点 |
 | 问节点还缺什么 | `meegle workflow list-state-required --work-item-id <ID> --state-key <节点 ID> --mode unfinished` | 只列没填的必填项 |
-| 确认、回滚节点 | `meegle workflow` 的节点操作，带 `--node-id <节点 ID> --action confirm`，回滚是 `--action rollback --rollback-reason <原因>` | 项目权限不放行直接运行，只能经 `ledger.py` |
+| 确认、回滚节点 | `meegle workflow` 的节点操作，带 `--node-id <节点 ID> --action confirm`，回滚是 `--action rollback --rollback-reason <原因>` | 项目权限不放行直接运行，只能经 `workitem.py` |
 | 读操作记录 | `meegle workitem list-op-records --work-item-id <ID> --op-record-module field_mod` | 每页 20 条 |
 | 查 | `meegle workitem query --mql '<MQL>'` | 见上一节 |
 | 评论 | `meegle comment add --work-item-id <ID> --content '<文本>'` | |
@@ -447,7 +447,7 @@ SELECT `work_item_id`, `name`, `work_item_status` FROM `<project_key>`.`<type_ke
 | 移动子树 | `lark-cli wiki +move --node-token <节点> --target-parent-token <新父节点>` | 节点和原链接都不变 |
 | 建节点 | 先 `lark-cli wiki +node-list --space-id <ID> --page-all` 查同名节点，没有才 `lark-cli wiki +node-create --space-id <ID> --obj-type docx --node-type origin --title <标题>` | 序列的节点另带 `--parent-node-token <上一级节点>` |
 
-lark-cli 只读当前目录、`/tmp`、`~/files` 下的 `@文件`，所以 `ledger.py` 不落临时文件，正文都从标准输入传。每条命令最多等 120 秒。
+lark-cli 只读当前目录、`/tmp`、`~/files` 下的 `@文件`，所以台账脚本不落临时文件，正文都从标准输入传。每条命令最多等 120 秒。
 
 ## 出错时
 
@@ -514,7 +514,7 @@ lark-cli 只读当前目录、`/tmp`、`~/files` 下的 `@文件`，所以 `ledg
 | 上次已经建了工作项 #…，但没做完（停在：…）。… | 登记中途失败 | 修好原因后跑 `register <草稿> --resume` |
 | 没有这份草稿的登记回执，不用 --resume | 这份草稿没登记过 | 去掉 `--resume` |
 | #… 走的是“…”流程，修订稿写的是“…”：流程在新建时选定，改不了；要换流程，另开一条研究任务 | 修订研究任务单，修订稿“流程”一行和工作项走的流程不同 | 退回作者把“流程”改回原来的；真要换流程，另开一条研究任务 |
-| register --existing 停用了：研究任务单和包一样原位修订，文档链接不变。运行 ledger.py revise … | 用了 1.0.9 及以前的 `register --existing` | 照提示改用 `revise <工作项 ID> <修订稿> --note '<改了什么>'` |
+| register --existing 停用了：研究任务单和包一样原位修订，文档链接不变。运行 docs.py revise … | 用了 1.0.9 及以前的 `register --existing` | 照提示改用 `revise <工作项 ID> <修订稿> --note '<改了什么>'` |
 | 反馈的主文档没有状态包，不用 revise：… | 拿反馈去修订 | 要补充的写成新的反馈，或者在工作项下加评论 |
 | 回执里的工作项 #… 读不到了（…）。… | 工作项可能被删了 | 请研究员确认。确实删了的，删掉提示里的回执再重新登记 |
 | 工作项 #… 已经建了，主文档字段暂时指着空间首页；… | 建完工作项以后的某一步失败 | 修好原因后跑 `register <草稿> --resume` |
@@ -542,7 +542,7 @@ lark-cli 只读当前目录、`/tmp`、`~/files` 下的 `@文件`，所以 `ledg
 | 节点“…”的负责角色（…）不在约定里，判断不了谁能推进这一步：先跑 space.py check | 这个节点的角色没绑到约定里，或者节点不止一个负责角色 | 跑 `python3.12 -I .claude/solo-lab/bin/space.py check --target .` 看问题，报给研究员 |
 | #… 的“…”…要先填：…（用 --set <字段名>=<值> 传） | 这一步的必填字段没填全 | 向请求方要这些字段的值，用 `--set` 传 |
 | …空间还要求别的东西（…），命令行填不了：… | 节点要的东西在字段以外 | 请研究员在网页上看这个节点 |
-| “…”是最后一步，要先把主文档移到归档节点：用 ledger.py archive … | 拿 `confirm` 确认归档节点 | 改用 `archive` |
+| “…”是最后一步，要先把主文档移到归档节点：用 workitem.py archive … | 拿 `confirm` 确认归档节点 | 改用 `archive` |
 | #… 没有进行中的节点：流程已经走完，或者工作项已终止 | 工作项已归档或已终止 | 用 `get` 看状态，告诉请求方 |
 | #… 有 … 个节点同时在进行（…）：用 --node 指明确认哪一个 | 流程里有并行的节点 | 加 `--node <节点>` |
 | #… 的流程里没有节点“…”；有：… | `--node` 或 `--to` 写的节点这个流程里没有 | 照列出的节点名或节点 ID 写 |
@@ -585,4 +585,4 @@ lark-cli 只读当前目录、`/tmp`、`~/files` 下的 `@文件`，所以 `ledg
 | ids.json 里的上一级节点 … 没有 node_token；先跑 ensure-node … | 序列的节点要等上一级建好 | 先建上一级，或者直接跑 `ensure-node all` |
 | 知识空间里已经有 … 个“…”节点（…）；… | 同名节点不止一个 | 请研究员定用哪一个，写进 `feishu/ids.json` 的 `wiki.nodes` |
 | wiki +node-list 的输出读不懂，… / 节点建了，但输出里没有 node_token：… | lark-cli 的返回读不出节点 | 到网页上核对，不重跑；把输出报给研究员 |
-| invalid file path … outside the built-in allowlist | 手工跑 lark-cli 时 `@文件` 不在当前目录、`/tmp`、`~/files` 下 | 用 `ledger.py`；手工跑时用 heredoc 传 `--content -` |
+| invalid file path … outside the built-in allowlist | 手工跑 lark-cli 时 `@文件` 不在当前目录、`/tmp`、`~/files` 下 | 用 `docs.py`；手工跑时用 heredoc 传 `--content -` |

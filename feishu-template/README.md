@@ -48,7 +48,7 @@ Solo-Lab 插件把飞书项目空间当任务台账用。空间里有哪些工�
 python3.12 -I .claude/solo-lab/bin/space.py check --target .
 ```
 
-状态改了名、还没重新绑定时，它报“空间里现在是 “待执行”，绑定记的是 “已决定””。升级前登记、还没归档的决策，这两个字段是空的；要补的，书记员照回执用 `ledger.py update` 补，做法见插件的 `skills/setup/references/mechanisms.md`“升到 1.0.5”一条。
+状态改了名、还没重新绑定时，它报“空间里现在是 “待执行”，绑定记的是 “已决定””。升级前登记、还没归档的决策，这两个字段是空的；要补的，书记员照回执用 `workitem.py update` 补，做法见插件的 `skills/setup/references/mechanisms.md`“升到 1.0.5”一条。
 
 ## 模板和插件怎么对接
 

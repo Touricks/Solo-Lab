@@ -208,9 +208,9 @@ def check_lark(inv, c, who, policy, data, soft, rewritable):
     if key == "docs +update" and fc.last(c["flags"], "--command") == "append":
         text = content_of(inv, c["flags"])
         if text is None:
-            soft.append("看不到要追加的正文（比如从文件重定向传入），没法核对第一行的会话标签 %s；书记员用 ledger.py append。" % pol["tag"])
+            soft.append("看不到要追加的正文（比如从文件重定向传入），没法核对第一行的会话标签 %s；书记员用 docs.py append。" % pol["tag"])
         elif pol["tag"] not in first_line(text):
-            soft.append("追加的交接记录第一行要带会话标签 %s；书记员用 ledger.py append。" % pol["tag"])
+            soft.append("追加的交接记录第一行要带会话标签 %s；书记员用 docs.py append。" % pol["tag"])
     if key in pol.get("lark_write", ()):
         return Verdict("allow", "%s 在 %s 的写入白名单里" % (key, name)), new_args
     if not c["pos"]:
@@ -251,11 +251,18 @@ LEDGER_READS = {"", "get", "next", "query", "mql", "trace", "status", "-h", "--h
 LEDGER_WRITE_WORDS = {"register", "revise", "reply", "confirm", "rollback", "update", "comment", "status-block", "append",
                       "archive", "relink", "ensure-node"}
 _WORDS = "|".join(re.escape(w) for w in sorted(LEDGER_WRITE_WORDS, key=len, reverse=True))
-CODE_WRITE = re.compile(r"(?<![\w-])['\"](?:%s)['\"](?!\s*:)|ledger\.py['\"]?\s+(?:-\S+\s+)*(?:%s)\b" % (_WORDS, _WORDS))
-CODE_RUNS_LEDGER = re.compile(r"run_(?:path|module)\([^)]*ledger")
-CODE_IMPORTS_LEDGER = re.compile(r"\bimport\s+ledger\b|\bfrom\s+ledger\s+import\b|import_module\(\s*['\"]ledger['\"]")
+# ledger.py was one script until 1.1.0. Its write commands are in docs.py and workitem.py now, over ledger_core.py;
+# the hook reads the three scripts alike, and code that imports any of the four modules counts as a write.
+LEDGER_SCRIPTS = fc.LEDGER_SCRIPTS
+LEDGER_DOC_WORDS = {"revise", "status-block", "append", "relink", "ensure-node"}      # the write commands of docs.py; the rest are workitem.py's
+LEDGER_MODULES = ("ledger", "ledger_core", "docs", "workitem")
+_SCRIPT = "(?:%s)" % "|".join(re.escape(s) for s in LEDGER_SCRIPTS)
+_MODULE = "(?:%s)" % "|".join(LEDGER_MODULES)
+CODE_WRITE = re.compile(r"(?<![\w-])['\"](?:%s)['\"](?!\s*:)|%s['\"]?\s+(?:-\S+\s+)*(?:%s)\b" % (_WORDS, _SCRIPT, _WORDS))
+CODE_RUNS_LEDGER = re.compile(r"run_(?:path|module)\([^)]*(?:ledger|workitem|(?<![\w/])docs(?:\.py)?['\"])")
+CODE_IMPORTS_LEDGER = re.compile(r"\bimport\s+%s\b|\bfrom\s+%s\s+import\b|import_module\(\s*['\"]%s['\"]" % (_MODULE, _MODULE, _MODULE))
 STRING_LITERAL = re.compile(r"""(['"])((?:\\.|(?!\1)[^\\\n])*)\1""")
-LITERAL_AFTER = re.compile(r"(?:\}|ledger\.py)\s+(?:-\S+\s+)*(?:%s)\s+(?:\{|#?\d|--apply)" % _WORDS)   # f"{L} archive {i}"
+LITERAL_AFTER = re.compile(r"(?:\}|%s)\s+(?:-\S+\s+)*(?:%s)\s+(?:\{|#?\d|--apply)" % (_SCRIPT, _WORDS))   # f"{L} archive {i}"
 LITERAL_LEAD = re.compile(r"\s*(?:%s)\s+(?:#?\d{3,}|\{[^}]*\}|.*\s--apply\b)" % _WORDS)               # "archive 2106 --apply".split()
 SHELL_SCRIPT = re.compile(r"^#!.*\b(?:sh|bash|zsh|dash|ksh)\b")
 # Code can only start ledger.py through one of these (imports and runpy are checked separately).
@@ -268,12 +275,12 @@ INLINE_CODE = {"perl", "ruby", "node", "php", "bun", "deno"}
 SCRIPT_MODULES = {"cProfile", "profile", "pdb", "trace", "runpy"}
 RUN_WRAPPERS = {"sudo", "doas", "chrt", "ionice", "taskset", "nohup", "time", "command", "exec", "caffeinate",
                 "arch", "nice", "timeout", "env", "stdbuf", "xargs"} | fc.RUNNERS
-GLOB_QUALIFIER = re.compile(r"(ledger[^\s;&|()<>'\"]*)\([^()\s]*\)")    # zsh: ledger.py(.)
+GLOB_QUALIFIER = re.compile(r"((?:ledger|workitem)[^\s;&|()<>'\"]*)\([^()\s]*\)")    # zsh: ledger.py(.)
 
 
 def _is_ledger_script(tok):
     name = os.path.basename(tok)
-    if name == "ledger.py":
+    if name in LEDGER_SCRIPTS:
         return True
     return any(ch in name for ch in "*?[") and fc.glob_names_ledger(name)
 
@@ -282,7 +289,7 @@ def _ledger_named(tok, rest):
     """tok runs ledger.py: the script itself, or a renamed copy (my_ledger.py) given a write subcommand."""
     if _is_ledger_script(tok):
         return True
-    return os.path.basename(tok).endswith("ledger.py") and _subcommand(rest) in LEDGER_WRITE_WORDS
+    return os.path.basename(tok).endswith(LEDGER_SCRIPTS) and _subcommand(rest) in LEDGER_WRITE_WORDS
 
 
 def _may_apply(args):
@@ -321,7 +328,7 @@ def _writes_in_code(code):
     code = fc.code_lines(code)
     if CODE_IMPORTS_LEDGER.search(code):
         return True
-    if "ledger.py" not in code or not CODE_EXECUTES.search(code):  # text about ledger.py written to a file
+    if not any(s in code for s in LEDGER_SCRIPTS) or not CODE_EXECUTES.search(code):  # text about ledger.py written to a file
         return False
     if CODE_WRITE.search(code):
         return True
@@ -378,15 +385,15 @@ def _python_run(argv, ctx, stdin, via_xargs=False):
             found = _code_verdict(text, rest)
             if found:
                 return found
-        known = stdin.texts and not any(m in t for t in stdin.texts for m in ("$(", "`", "ledger", "$__SUB"))
-        if not known and "ledger.py" in ctx.text and _subcommand(rest) in LEDGER_WRITE_WORDS:
+        known = stdin.texts and not any(m in t for t in stdin.texts for m in ("$(", "`", "ledger", "workitem", "docs.py", "$__SUB"))
+        if not known and _names_ledger(ctx.text) and _subcommand(rest) in LEDGER_WRITE_WORDS:
             return _subcommand(rest)                   # python3 - archive 1 <<< "$(cat ledger.py)"
         return None
     if _ledger_named(script, rest):
         sub = _subcommand(rest)
         return "（xargs 传入的子命令）" if not sub and via_xargs else _verdict(sub)
     name = script.rsplit("/", 1)[-1]
-    if ("$" in name or "`" in name) and "ledger.py" in ctx.text and _subcommand(rest) in LEDGER_WRITE_WORDS:
+    if ("$" in name or "`" in name) and _names_ledger(ctx.text) and _subcommand(rest) in LEDGER_WRITE_WORDS:
         return _subcommand(rest)                       # for f in .../ledger.py; do python3 $f archive ...
     text = _script_text(script, ctx)
     if text and _writes_in_code(text):
@@ -394,16 +401,24 @@ def _python_run(argv, ctx, stdin, via_xargs=False):
     return None
 
 
+def _ledger_module(name):
+    return name.rsplit(".", 1)[-1] in LEDGER_MODULES
+
+
+def _names_ledger(text):
+    return any(s in text for s in LEDGER_SCRIPTS)
+
+
 def _module_verdict(module, rest):
-    if module == "ledger" or module.endswith(".ledger"):
+    if _ledger_module(module):
         return _verdict(_subcommand(rest))
     if module in SCRIPT_MODULES:
         for j, a in enumerate(rest):
             if _is_ledger_script(a):
                 return _verdict(_subcommand(rest[j + 1:]))
-            if a == "-m" and j + 1 < len(rest) and (rest[j + 1] == "ledger" or rest[j + 1].endswith(".ledger")):
+            if a == "-m" and j + 1 < len(rest) and _ledger_module(rest[j + 1]):
                 return _verdict(_subcommand(rest[j + 2:]))
-            if module == "runpy" and (a == "ledger" or a.endswith(".ledger")):
+            if module == "runpy" and _ledger_module(a):
                 return _verdict(_subcommand(rest[j + 1:]))
     return None
 
@@ -493,7 +508,7 @@ def ledger_write(command, cwd=None):
 
 def _ledger_write(command, cwd, depth, bodies=None):
     if depth > 4:
-        return "（嵌套太深）" if "ledger" in command else None
+        return "（嵌套太深）" if "ledger" in command or _names_ledger(command) else None
     text, new = fc.split_heredocs(command)
     ctx = _Ctx(dict(bodies or {}), cwd, depth)
     ctx.bodies.update(new)
@@ -511,7 +526,7 @@ def _ledger_write(command, cwd, depth, bodies=None):
     try:
         tokens = fc.tokenize(text)
     except ValueError:
-        return "（看不清的命令）" if "ledger" in text else None
+        return "（看不清的命令）" if "ledger" in text or _names_ledger(text) else None
     segs, piped = fc._segments(tokens)
     prev_out, prev_ledger = None, False
     for raw, is_piped in zip(segs, piped):
@@ -632,7 +647,7 @@ def _segment_write(argv, wrappers, ctx, stdin):
         s = next((k for k, w in enumerate(argv) if _is_ledger_script(w)), None)
         if s is not None:
             return run_verdict(argv[s + 1:])
-        if "ledger" in ctx.text:
+        if "ledger" in ctx.text or _names_ledger(ctx.text):
             return next((w for w in argv[1:] if w in LEDGER_WRITE_WORDS), None)
         return None
     return _direct_script(argv, ctx)
@@ -1027,7 +1042,7 @@ def check_setup(data, who, root, command):
 def check_identity_vars(data, who, command):
     """A command that unsets, clears or sets the session's identity variables would speak
     for another session to route.py and ledger.py."""
-    if IDENTITY_VARS.search(command) or (CLEAR_ENV.search(command) and re.search(r"route|ledger", command)):
+    if IDENTITY_VARS.search(command) or (CLEAR_ENV.search(command) and re.search(r"route|ledger|workitem|docs\.py", command)):
         return Verdict("deny", "不要改或清掉 CLAUDE_CODE_SESSION_ID、CLAUDE_CODE_HOST_SESSION_ID（unset、env -u、env -i、export -n 都算）："
                                "认领和台账写权按它们认会话。")
     return None
@@ -1120,8 +1135,9 @@ def check_ledger(data, who, policy, root, sub):
         if pool.scribe_ok(pl, policy, who.claim):
             return Verdict("allow", "唯一认领的书记员 %s 写台账" % who.name)
         return Verdict("deny", "这条书记员认领已经失效；请研究员用 route.py pool 核对。")
-    return refuse(who, data, "（%s）不能运行 ledger.py %s：工作项、字段、状态和文档只由书记员 %s 写。写成草稿，给它发【%s】。" % (
-        who.label, sub, fixed, (policy.get("msg") or {}).get("register_request", "登记请求")))
+    script = "docs.py " if sub in LEDGER_DOC_WORDS else "workitem.py " if sub in LEDGER_WRITE_WORDS else "台账脚本"
+    return refuse(who, data, "（%s）不能运行 %s%s：工作项、字段、状态和文档只由书记员 %s 写。写成草稿，给它发【%s】。" % (
+        who.label, script, sub, fixed, (policy.get("msg") or {}).get("register_request", "登记请求")))
 
 
 NOT_WHOLE = "命令里除了飞书和台账调用还有别的，hook 不替整条命令答允许，权限照 Claude Code 自己的检查（其中的飞书或台账调用：%s）"

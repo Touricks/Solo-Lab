@@ -8,7 +8,7 @@ the defect, not for the one place it showed: the next of its kind is to stop her
 rule finds something, and also when a rule finds nothing to look at (then the rule is what broke).
 
     long-line      1.0.4 to 1.0.6   setup.py did not start under Python 3.9
-    range-read     1.0.4 to 1.0.7   ledger.py revise read nothing of the main document's opening
+    range-read     1.0.4 to 1.0.7   docs.py revise read nothing of the main document's opening
     project-file   up to 1.0.7      runs/README.md got a .new at every init
     template-line  up to 1.0.9      a draft that copied the template's 关联工作项 line was sent back
     two-gates      1.0.10           the scribe's wiki +node-delete passed the hook and was refused by the settings
@@ -151,6 +151,7 @@ def template_line(root):
     scripts = os.path.join(root, PLUGIN, "scripts")
     sys.path.insert(0, scripts)
     import ledger
+    import ledger_core
     findings, lines = [], 0
     for folder, dirs, names in os.walk(os.path.join(root, PLUGIN, "skills")):
         dirs[:] = sorted(dirs)
@@ -162,8 +163,8 @@ def template_line(root):
                         continue
                     lines += 1
                     try:
-                        ledger.link_line(line + "\n", "#1", "1")
-                    except ledger.LedgerError:
+                        ledger_core.link_line(line + "\n", "#1", "1")
+                    except ledger_core.LedgerError:
                         findings.append((path, n, "模板的这一行照抄进草稿，登记脚本不认（它读到的是“%s”）：这一行只写“待建”，"
                                                   "说明写到模板外面" % line.split("：", 1)[-1].strip()))
     return findings, "%d 行写着“待建”的模板包头" % lines, lines

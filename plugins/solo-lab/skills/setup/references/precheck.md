@@ -17,7 +17,7 @@
 | meegle 诊断上报 | `meegle telemetry status` | 开着时提醒研究员决定是否关闭；`meegle telemetry disable` 由研究员本人执行 |
 | 飞书私聊事件订阅 | `lark-cli event consume im.message.receive_v1 --as bot --dry-run`：凭证、开发者后台已发布事件订阅、权限 `im:message.p2p_msg:readonly` | 只是提醒：没就绪时入口收不到飞书私聊，研究员转述也行。要用的话请应用管理员在开发者后台开事件订阅和权限 |
 | Python | 3.12，命令行里有 `python3.12`（`setup.py precheck` 的第一行）。脚本只用标准库 | 装一个，比如 `brew install python@3.12`；不用改系统自带的 `python3` |
-| 技能 lark-doc、lark-wiki、meegle | `~/.claude/skills` 或 `~/.agents/skills` 下有没有 | 只是提醒：书记员用 `ledger.py`，不依赖它们，人工排查时有用 |
+| 技能 lark-doc、lark-wiki、meegle | `~/.claude/skills` 或 `~/.agents/skills` 下有没有 | 只是提醒：书记员用台账脚本，不依赖它们，人工排查时有用 |
 
 三个版本下限写在 `setup.py` 的 `MIN_VERSIONS` 里，以它为准。
 

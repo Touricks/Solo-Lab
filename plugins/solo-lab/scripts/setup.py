@@ -81,6 +81,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import orgspec  # noqa: E402
 import ledger  # noqa: E402
+import ledger_core  # noqa: E402
 import pool as pool_state  # noqa: E402
 import space  # noqa: E402
 import project_paths  # noqa: E402
@@ -91,7 +92,7 @@ TEMPLATES = os.path.join(PLUGIN_ROOT, "skills", "packages", "assets")
 MIN_VERSIONS = {"lark-cli": "1.0.96", "meegle": "1.0.23", "claude": "2.1.219"}
 DEFAULT_MODELS = {"p2": "opus", "p1": "opus", "p0": "opus", "pmo-p2": "fable"}
 REQUIRED_SEQUENCES = ("pmo", "quality")
-BIN_SCRIPTS = ("orgspec.py", "ledger.py", "route.py", "space.py", "pool.py", "project_paths.py", "onboarding.py")
+BIN_SCRIPTS = ("orgspec.py", "ledger_core.py", "ledger.py", "docs.py", "workitem.py", "route.py", "space.py", "pool.py", "project_paths.py", "onboarding.py")
 HOOK_SCRIPTS = ("guard.py", "audit.py", "instances.py", "inbox.py", "feishu_cmd.py")
 SHARED_HOOK_SCRIPTS = ("pool.py",)         # kept in scripts/, copied into the hooks too
 # liaison writes for readers other than the researcher: its +1 and +0 are opened when the first piece is due
@@ -108,7 +109,7 @@ SCRIBE_LARK = ["docs +create", "docs +update", "wiki +node-create", "wiki +move"
 # The one high-risk command a session runs (1.0.10): the scribe deletes a document in the knowledge space, one
 # that a later version replaced or a copy uploaded twice. Until then nobody but the researcher could, and the
 # copies stayed. What is deleted goes to the space's recycle bin. Everything else that is high-risk stays the
-# researcher's, and a document is changed through ledger.py only.
+# researcher's, and a document is changed through docs.py and workitem.py only.
 SCRIBE_HIGH_RISK = ["wiki +node-delete"]
 SCRIBE_MEEGLE = ["workitem create", "workitem update", "comment add", "attachment +upload", "attachment prepare-upload"]
 READ_ALLOW = [
@@ -499,9 +500,9 @@ MIN_PYTHON = (3, 12)
 ROUTE = "%s -I .claude/solo-lab/bin/route.py" % PYTHON
 POOL_ALLOW = ["Bash(python3.12 -I .claude/solo-lab/bin/onboarding.py *)"] + ["Bash(%s %s)" % (ROUTE, c) for c in ("pool", "audit", "cross")] + [
     "Bash(%s %s *)" % (ROUTE, c) for c in ("claim", "expect", "pool", "refill", "todo", "audit", "cross", "notify", "focus")]
-SCRIBE_ALLOW = ["Bash(python3.12 -I .claude/solo-lab/bin/ledger.py %s *)" % w
-                for w in ("register", "revise", "reply", "confirm", "rollback", "update", "comment", "status-block", "append",
-                          "archive", "relink", "ensure-node")]
+SCRIBE_ALLOW = ["Bash(python3.12 -I .claude/solo-lab/bin/%s.py %s *)" % (script, w) for script, words in (
+    ("workitem", ("register", "reply", "confirm", "rollback", "update", "comment", "archive")),
+    ("docs", ("revise", "status-block", "append", "relink", "ensure-node"))) for w in words]
 POOL_HOOK_EVENTS = ("Stop", "StopFailure", "Notification", "PermissionRequest", "PermissionDenied", "PostCompact")
 # The desktop app's terminal panel tool runs shell commands outside the Bash tool. A matcher with
 # regex characters is an unanchored regex, so it gets its own anchored group.
@@ -584,14 +585,14 @@ def naming_lines(spec):
         "会话标签写作 `%s`，飞书评论和交接记录的开头都带上它。" % n["tag"],
         "工作项名称写作 `%s`；主文档标题写作 `%s`；挂在下面的答复写作 `%s`。" % (n["work_item"], n["main_doc"], n["reply_doc"]),
         "草稿路径写作 `%s`，序列用 product、alg、rnd、infra、quality、pmo、liaison。" % n["draft"],
-        "日期字段写目标日期的 UTC 中午。meegle 的 workitem 命令里工作项类型写 api_name；MQL 的表名认 type_key 或类型现名，不认 api_name。ledger.py 已经处理好，手写时注意。",
+        "日期字段写目标日期的 UTC 中午。meegle 的 workitem 命令里工作项类型写 api_name；MQL 的表名认 type_key 或类型现名，不认 api_name。台账脚本已经处理好，手写时注意。",
     ]
 
 
 def describe_writes(pol):
     parts = []
     if pol["ledger_write"]:
-        parts.append("`ledger.py` 的全部写命令")
+        parts.append("`workitem.py` 和 `docs.py` 的全部写命令")
     parts += ["`lark-cli %s`" % k for k in pol["lark_write"]]
     parts += ["`meegle %s`" % k for k in pol["meegle_write"]]
     return "、".join(parts) or "无"
@@ -688,7 +689,7 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
                      scribe, reg, receipt, msg_head(spec, "report", receiver="<委托方会话名>"),
                      "别的序列发来的跨序列需求，委托方就是发起它的那个 +2：交付直接发给它，不经入口。" if rank == 2 else ""))
     dispatch = ("再跑 `python3.12 -I .claude/solo-lab/bin/route.py pool --role %s` 找空闲的会话。有空闲的：登记请求写“开工：是”，拿到【%s #ID】后发 "
-                "`%s：<包名> <包路径>`%s。没有空闲的：登记请求写“开工：否”，工作项留在“待开工”排队；等有会话空出来，先请书记员确认“开工”这一步（`ledger.py confirm <工作项 ID> --by <承接方的会话名>`），再委托。")
+                "`%s：<包名> <包路径>`%s。没有空闲的：登记请求写“开工：否”，工作项留在“待开工”排队；等有会话空出来，先请书记员确认“开工”这一步（`workitem.py confirm <工作项 ID> --by <承接方的会话名>`），再委托。")
     closed = "要派的活是不是封闭任务，和在途的 +0 有没有改同一批文件；有重叠的排在它后面做，不并行"
     if rank == 2:
         lines.append(("- 委托 +1：先写下发关系的需求包，给 `%s` 发【%s】（写草稿路径）。" % (scribe, reg))
@@ -736,7 +737,7 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
         lines.append("- 研究任务走到你们序列负责的那一步时，这一步归你推进；书记员确认上一步以后会用【%s】告诉你。先用 `python3.12 -I .claude/solo-lab/bin/ledger.py next <研究任务 ID>` 看这一步必填什么，"
                      "序列内的事委托 +1，要别的序列配合就发跨序列的需求包。要填链接的产出有两条路。你自己写的（和研究员谈出来的规格、需求文档这一类）：写在本地，"
                      "登记请求里把字段写成 `<字段>=@<本地文件>`，书记员上传到研究任务单下面并填上链接；研究员签字前要看的，先请书记员用 "
-                     "`ledger.py update <任务 ID> --set <字段>=@<本地文件>` 传上去，把链接写进决策包。委托下去做的（要查、要跑、要整理的上下文文档、实验方案、试探记录这一类）："
+                     "`workitem.py update <任务 ID> --set <字段>=@<本地文件>` 传上去，把链接写进决策包。委托下去做的（要查、要跑、要整理的上下文文档、实验方案、试探记录这一类）："
                      "走本序列的一条同序列需求，验收通过以后用承接方那份交付包文档的链接，它在那条需求的“交付包”字段里。产出齐了，给 `%s` 发【%s】请它确认节点，写明各必填字段的值。"
                      "正式分数只认质量序列在冻结的 Eval Set 上跑出的。" % (spec.term("msg", "notice"), scribe, reg))
     else:
@@ -758,7 +759,7 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
             "被决策卡住的工作项，登记以后请书记员把阻塞原因写成“等研究员：决策 #<ID>”，这条决策归档以后再请它清掉。"
             "研究员定了，书记员确认“决定”，决策到“待执行”，并通知执行方。执行方是研究员的，他做完了，入口请书记员归档，再通知你；"
             "执行方是你的，书记员把决定内容发给你，你照决定执行完，马上请书记员归档，不在待执行里停留。",
-            "- 决策登记以后、研究员定之前要改，复制主文档开头到“状态包”之前的部分改成新草稿，“版本”写上一版加 1，请书记员用 `ledger.py revise` 原位换掉，"
+            "- 决策登记以后、研究员定之前要改，复制主文档开头到“状态包”之前的部分改成新草稿，“版本”写上一版加 1，请书记员用 `docs.py revise` 原位换掉，"
             "不另登记；修订不推给研究员。决策待定期间，包里“冻结的动作”谁都不做，选项中立的准备照常做。不可逆事项清单（`org/org.md`）里的事，"
             "要等研究员定了、所选选项里列了它才做。hook 不拦这些命令，也不按待定决策冻结，权限照 Claude Code 自己的检查。"
             "上面两条规矩不变，靠你照规则办、每轮的冻结提示和包检查。一件事可逆不可逆，你按判据判断，清单是必须写不可逆的下限。"
@@ -843,7 +844,7 @@ def entry_values(spec, policy):
         "entry_status": "**状态包由你维护。** 研究任务主文档末尾的“状态包”记这条任务现在的状态：上游卡在哪条决策、哪些实验条件已经定死、哪些工作暂停了。"
                         "工作项状态变化、研究员定下新决策、暂停或恢复某类工作时，你改写它："
                         "先 `ledger.py status <研究任务 ID>` 读现在的，把整段（简介、当前状态、近期变化、风险）改好存成 `packages/drafts/pmo/` 下的文件，"
-                        "请书记员 `ledger.py status-block <研究任务 ID> --file <文件>` 整段替换。",
+                        "请书记员 `docs.py status-block <研究任务 ID> --file <文件>` 整段替换。",
     }
 
 
@@ -893,7 +894,7 @@ def pmo_file(spec, rank, task, policy):
                        "routing_table": spec.routing_table(), "router_scribe": router_scribe, "router_report": router_report,
                        "router_cross": router_cross, "after_compaction": after_compaction("入口")})
         return render(scaffold("agents/router.md.tmpl"), common)
-    intake = "\n\n会话池里各会话直接给你发【%s】。一次处理一条；你在忙时，后来的消息会自动排队。写完给请求方回 `%s：<写了什么>`，下面列出异常。写台账前先不加 `--apply` 预览，确认后再加；`ledger.py` 自己会加文件锁，同一时间只有一个写入。" % (
+    intake = "\n\n会话池里各会话直接给你发【%s】。一次处理一条；你在忙时，后来的消息会自动排队。写完给请求方回 `%s：<写了什么>`，下面列出异常。写台账前先不加 `--apply` 预览，确认后再加；脚本自己会加文件锁，同一时间只有一个写入。" % (
         spec.term("msg", "register_request"), msg_head(spec, "register_receipt", sender=scribe, receiver="<请求方会话名>"))
     common.update({"description_json": yaml_str(prefix + "项目管理 +0（书记员）。台账和文档唯一的写入方：按登记请求和需求包建工作项、上传文档、写字段、确认和回滚节点、归档。"),
                    "docs_tree": spec.docs_tree(), "scribe_intake": intake, "after_compaction": after_compaction("入口")})
@@ -1157,9 +1158,9 @@ def pool_entry(spec, task, policy, role, name, label):
 SCRIBE_FIRST = (
     "。认领以后接着做初始化的两件写入，做完再回话。命令都在项目目录里运行，前缀是 python3.12 -I .claude/solo-lab/bin/；"
     "onboarding.py 只管计时，它报错就跳过，不影响写入："
-    "1. onboarding.py start nodes；ledger.py ensure-node all --apply；onboarding.py end nodes。"
+    "1. onboarding.py start nodes；docs.py ensure-node all --apply；onboarding.py end nodes。"
     "2. ledger.py query tasks，空间里已经有研究任务就跳过这一件；没有的话 onboarding.py start first_task；"
-    "ledger.py register %s --apply；onboarding.py end first_task。"
+    "workitem.py register %s --apply；onboarding.py end first_task。"
     "回话写明：建了几个节点、沿用了几个，研究任务的工作项 ID 和主文档链接；哪一条命令失败，原样贴出报错，不要重试两次以上。" % FIRST_TASK)
 
 
@@ -1260,7 +1261,7 @@ def first_task_sheet(task):
         "## 已知的上下文", "待定", "",
         "## 风险和未决事项",
         "这份研究任务单是初始化时照项目名和一句话描述生成的。入口用技能 `solo-lab:charter` 访谈研究员，写出修订稿，"
-        "再请书记员运行 `ledger.py revise <这条研究任务的工作项 ID> <修订稿> --note '<改了什么>'` 原位换掉主文档开头；工作项和文档链接都不变。", ""])
+        "再请书记员运行 `docs.py revise <这条研究任务的工作项 ID> <修订稿> --note '<改了什么>'` 原位换掉主文档开头；工作项和文档链接都不变。", ""])
 
 
 def registered_tasks(target):
@@ -1271,7 +1272,7 @@ def registered_tasks(target):
         rec = load_json_file(os.path.join(sent, name)) if name.endswith(".json") and not name.startswith("reply-") else None
         if isinstance(rec, dict) and rec.get("status") == "registered" and rec.get("draft"):
             draft = os.path.join(target, rec["draft"])
-            if os.path.isfile(draft) and ledger.sheet_kind(draft) == "research_task":
+            if os.path.isfile(draft) and ledger_core.sheet_kind(draft) == "research_task":
                 out.append((rec, draft))
     return sorted(out, key=lambda x: str(x[0].get("updated_at") or ""), reverse=True)   # a revised sheet before the one it replaced
 
@@ -1348,6 +1349,7 @@ PLUGIN_SECTIONS = {
     "c80f58059cf5cb10a43cc52da992aeb7b420f68618042de373c679496a383233": "1.0.10",
     "27f611c7282725b164819e37100fac25b86d8252a113c36b8a0a7fda75df2cc1": "1.0.11",
     "477a750ca960f939523f71466a9bd67391ecb9ae4f0afeeae5d691676d5fd753": "1.0.12",
+    "fb84ffdb5e5fabfc56102e409c2ccd6d73c15a4d8b3f0bb73cd7fbb1d27d0a45": "1.1.0",
 }
 
 
@@ -1826,7 +1828,7 @@ def precheck():
     add("Python", "通过" if sys.version_info[:2] >= (3, 9) else "失败", sys.version.split()[0])
     for name in ("lark-doc", "lark-wiki", "meegle"):
         here = any(os.path.isdir(os.path.expanduser(os.path.join(b, name))) for b in ("~/.claude/skills", "~/.agents/skills"))
-        add("技能 %s" % name, "通过" if here else "提醒", "已安装" if here else "没找到；书记员用 ledger.py，不依赖它，但人工排查时有用")
+        add("技能 %s" % name, "通过" if here else "提醒", "已安装" if here else "没找到；书记员用台账脚本，不依赖它，但人工排查时有用")
     width = max(len(r[0]) for r in rows)
     for item, status, detail in rows:
         print("%s  %s  %s" % (item.ljust(width), status, detail))
@@ -1923,7 +1925,7 @@ def live_feishu(target, seqs):
             doc = json.loads(out) if code == 0 else None
         except ValueError:
             doc = None
-        where = ledger._find(doc or {}, ("space_id",))
+        where = ledger_core._find(doc or {}, ("space_id",))
         return not doc or bool(where) and str(where) != str(wiki.get("space_id"))
     keys = spec.node_keys(seqs)
     with ThreadPoolExecutor(max_workers=4) as workers:          # independent read-only requests
@@ -1954,8 +1956,8 @@ def first_task_layer(target, live):
     if not tasks and live:
         try:
             with contextlib.redirect_stdout(io.StringIO()):
-                rows = ledger.query(ledger.Ledger(target, "preview"), "tasks")
-        except (ledger.LedgerError, orgspec.OrgSpecError, space.SpaceError, KeyError) as e:
+                rows = ledger.query(ledger_core.Ledger(target, "preview"), "tasks")
+        except (ledger_core.LedgerError, orgspec.OrgSpecError, space.SpaceError, KeyError) as e:
             return ["查不了空间里的研究任务：%s" % str(e)[:200]], []
         if rows:
             return [], ["空间里已有 %d 条研究任务，这个目录里没有它们的登记回执（是从别处登记的）" % len(rows)]
@@ -1968,26 +1970,26 @@ def first_task_layer(target, live):
     if not doc.startswith("http"):
         problems.append("研究任务 #%s 的回执里没有主文档的地址" % item_id)
     try:
-        line = ledger.header_of(read_text(draft)).get("关联工作项", "")
+        line = ledger_core.header_of(read_text(draft)).get("关联工作项", "")
     except (OSError, UnicodeDecodeError):
         line = ""
     if item_id not in re.findall(r"#(\d+)", line):
         problems.append("草稿 %s 的“关联工作项”一行不是 #%s" % (rec["draft"], item_id))
     if live and not problems:
         try:
-            lg = ledger.Ledger(target, "preview")
+            lg = ledger_core.Ledger(target, "preview")
             main = lg.contract.main_line()
             it = lg.item(item_id)
             if not it or it.get("type") != main:
                 return ["工作项 #%s 读不到，或者不是研究任务" % item_id], []
-            link = ledger.plain(it["fields"].get(lg.field(main, "main_doc")["field_key"]))
+            link = ledger_core.plain(it["fields"].get(lg.field(main, "main_doc")["field_key"]))
             if link != doc:
                 problems.append("研究任务 #%s 的主文档字段是 %s，回执记的是 %s" % (item_id, link or "空的", doc))
             node = lg.lark("wiki", "+node-get", "--node-token", doc.rstrip("/").rsplit("/", 1)[-1])
-            above, want = ledger._find(node or {}, ("parent_node_token",)), (lg.nodes.get(main) or {}).get("node_token")
+            above, want = ledger_core._find(node or {}, ("parent_node_token",)), (lg.nodes.get(main) or {}).get("node_token")
             if it["state"] != lg.state(main, "archived") and want and above != want:
                 problems.append("研究任务 #%s 的主文档不在“%s”节点下" % (item_id, lg.spec.term("node", main)))
-        except (ledger.LedgerError, orgspec.OrgSpecError, space.SpaceError, KeyError) as e:
+        except (ledger_core.LedgerError, orgspec.OrgSpecError, space.SpaceError, KeyError) as e:
             problems.append("回读研究任务 #%s 没读成：%s" % (item_id, str(e)[:200]))
     return problems, []
 
@@ -2423,7 +2425,7 @@ def feishu_gaps(target, seqs):
     nodes = wiki.get("nodes") or {}
     missing = [k for k in orgspec.OrgSpec().node_keys(seqs) if not (nodes.get(k) or {}).get("node_token")]
     if missing:
-        return ["知识库节点还缺 %d 个（%s）：书记员用 ledger.py ensure-node all 建齐" % (
+        return ["知识库节点还缺 %d 个（%s）：书记员用 docs.py ensure-node all 建齐" % (
             len(missing), "、".join(missing[:6]) + ("等" if len(missing) > 6 else ""))]
     return []
 
@@ -2476,7 +2478,7 @@ def binding_doc(spec, contract, ids, snap, problems=None, notes=(), changes=(), 
         title = spec.term("node", head) + ("/" + spec.term("seq", seq) if seq else "")
         n = nodes.get(key)
         if not n:
-            rows.append([title, "没有", "书记员建节点：`ledger.py ensure-node %s`" % key])
+            rows.append([title, "没有", "书记员建节点：`docs.py ensure-node %s`" % key])
         elif seq and n.get("title", "").split("/")[-1] != spec.term("seq", seq):
             renames = True
             rows.append([title, "现名“%s”" % n.get("title"), "改名为“%s”" % spec.term("seq", seq)])
@@ -2485,7 +2487,7 @@ def binding_doc(spec, contract, ids, snap, problems=None, notes=(), changes=(), 
             rows.append([title, "现名“%s”" % n.get("title"), "改名为“%s”" % spec.term("node", head)])
     lines += ["## 知识库节点", "", orgspec.md_table(["节点", "现状", "要做的"], rows) if rows else "无差异。", ""]
     if any(r[1] == "没有" for r in rows):
-        lines += ["缺的节点可以一次建齐：`ledger.py ensure-node all`，先预览，再加 `--apply`。它先建一级节点，再建各序列的节点；"
+        lines += ["缺的节点可以一次建齐：`docs.py ensure-node all`，先预览，再加 `--apply`。它先建一级节点，再建各序列的节点；"
                   "知识空间里已经有同名节点的直接用，不再建。要先有知识空间：`setup.py feishu --live --apply` 找不到同名的知识空间就新建一个。", ""]
     if renames:
         lines += ["命令行没有给知识库节点改名的子命令；节点标题跟着节点文档的一级标题走。先读一遍节点文档：是空的，书记员可以写入只有新标题的正文："
@@ -2518,7 +2520,7 @@ def search_hits(data, wanted):
     project_key equals wanted."""
     projects = data.get("projects") if isinstance(data, dict) else data
     if not isinstance(projects, list):
-        projects = [d for d in ledger._walk(data) if isinstance(d, dict) and d.get("project_key")]
+        projects = [d for d in ledger_core._walk(data) if isinstance(d, dict) and d.get("project_key")]
     projects = [p for p in projects if isinstance(p, dict)]
     return projects, [p for p in projects if wanted in (p.get("name"), p.get("simple_name"), p.get("project_key"))]
 
@@ -2560,7 +2562,7 @@ def old_space_items(spec, project_key, old):
     """What a space the project is leaving still holds, for the types its binding had: (types
     with any work item, open work items as lines, types that could not be checked)."""
     held, open_items, unchecked = [], [], []
-    stop = ledger.system_states(spec)
+    stop = ledger_core.system_states(spec)
     for wid, t in (old.get("types") or {}).items():
         tkey = t.get("type_key")
         if not tkey:
@@ -2569,13 +2571,13 @@ def old_space_items(spec, project_key, old):
         done = [s["name"] for slot, s in ((old.get("states") or {}).get(wid) or {}).items() if slot == "archived" and s.get("name")]
 
         def query(mql):
-            return ledger.query_rows(cli_json(["meegle", "workitem", "query", "--project-key", project_key,
+            return ledger_core.query_rows(cli_json(["meegle", "workitem", "query", "--project-key", project_key,
                                                "--mql", mql, "--format", "json"]))
         try:
             rows = query("SELECT `work_item_id`, `name`, `work_item_status` FROM `%s`.`%s` WHERE %s LIMIT 20" % (
-                project_key, tkey, ledger._not_in(done + stop)))
+                project_key, tkey, ledger_core._not_in(done + stop)))
             anything = rows or query("SELECT `work_item_id` FROM `%s`.`%s` LIMIT 1" % (project_key, tkey))
-        except (SetupError, ledger.LedgerError) as e:
+        except (SetupError, ledger_core.LedgerError) as e:
             print("提醒：没能查旧空间里的%s：%s" % (name, e))
             unchecked.append(name)
             continue
@@ -2652,7 +2654,7 @@ def read_back(spec, contract, ids, task_feishu, maps, switch=None, old_snap=None
         if str(wiki.get("space_id") or "") != want_id or not wiki.get("space_name"):
             data = optional_read("知识空间", lambda: cli_json(
                 ["lark-cli", "wiki", "+space-list", "--as", "user", "--page-all", "--page-limit", "0"], 120))
-            hit = next((d for d in ledger._walk(data or {}) if str(d.get("space_id") or "") == want_id), None)
+            hit = next((d for d in ledger_core._walk(data or {}) if str(d.get("space_id") or "") == want_id), None)
             if hit:
                 if wiki.get("space_id") and str(wiki["space_id"]) != want_id:
                     print("提醒：知识空间换成了“%s”（space_id %s），原来记下的节点作废，书记员在新空间里重建" % (hit.get("name") or "", want_id))
@@ -2663,7 +2665,7 @@ def read_back(spec, contract, ids, task_feishu, maps, switch=None, old_snap=None
     elif want_wiki and (not wiki.get("space_id") or wiki.get("space_name", want_wiki) != want_wiki):
         data = optional_read("知识空间", lambda: cli_json(
             ["lark-cli", "wiki", "+space-list", "--as", "user", "--page-all", "--page-limit", "0"], 120))
-        hits = list({d["space_id"]: d for d in ledger._walk(data or {})
+        hits = list({d["space_id"]: d for d in ledger_core._walk(data or {})
                      if d.get("name") == want_wiki and d.get("space_id")}.values())
         if len(hits) == 1:
             if wiki.get("space_id") and hits[0]["space_id"] != wiki["space_id"]:
@@ -2673,7 +2675,7 @@ def read_back(spec, contract, ids, task_feishu, maps, switch=None, old_snap=None
         elif data is not None and not hits and create:
             made = optional_read("新建知识空间", lambda: cli_json(
                 ["lark-cli", "wiki", "+space-create", "--name", want_wiki, "--as", "user"], 120))
-            new = [d for d in ledger._walk(made or {}) if d.get("space_id")]
+            new = [d for d in ledger_core._walk(made or {}) if d.get("space_id")]
             if new:
                 wiki.pop("nodes", None)
                 wiki.update({"space_id": new[0]["space_id"], "space_name": want_wiki})
@@ -2689,7 +2691,7 @@ def read_back(spec, contract, ids, task_feishu, maps, switch=None, old_snap=None
         if n.get("node_token"):
             got = optional_read("节点 %s 的标题" % key,
                                 lambda tok=n["node_token"]: cli_json(["lark-cli", "wiki", "+node-get", "--node-token", tok, "--as", "user"]))
-            title = ledger._find(got or {}, ("title",))
+            title = ledger_core._find(got or {}, ("title",))
             if title:
                 n["title"] = title
     return snap, problems, notes, changes
@@ -2753,7 +2755,7 @@ def feishu(target, maps, live, apply, leave_old=False):
             raise SetupError(why + "，什么都没写。插件搬不了工作项，换空间以后它们留在旧空间，台账不再读写。先去掉 --apply 预览，"
                              "看 binding.md 的“换空间”一节；研究员确认这些工作项可以留在旧空间以后，再加 --leave-old-items 写入")
     else:
-        moved = ledger.other_space({"feishu": task}, ids.get("meegle") or {})
+        moved = ledger_core.other_space({"feishu": task}, ids.get("meegle") or {})
         if moved:
             raise SetupError("任务文件里的飞书项目空间是“%s”，上次绑定的是“%s”：加 --live 从空间读一遍再绑定" % (
                 moved, ids["meegle"]["space_name"]))
@@ -2847,9 +2849,9 @@ def check_template(target, name):
     for wid, slot in binding["types"].items():
         mql = "SELECT `work_item_id` FROM `%s`.`%s` LIMIT 1" % (hit.get("project_key"), slot["type_key"])
         try:
-            rows = ledger.query_rows(cli_json(["meegle", "workitem", "query", "--project-key", hit.get("project_key"),
+            rows = ledger_core.query_rows(cli_json(["meegle", "workitem", "query", "--project-key", hit.get("project_key"),
                                                "--mql", mql, "--format", "json"]))
-        except (SetupError, ledger.LedgerError) as e:
+        except (SetupError, ledger_core.LedgerError) as e:
             print("提醒：没能查%s里有没有工作项：%s" % (spec.term("wi", wid), e))
             continue
         if rows:

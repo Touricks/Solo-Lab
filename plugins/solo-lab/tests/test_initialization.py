@@ -16,6 +16,8 @@ import codex_onboarding
 import onboarding
 import space
 import ledger
+import docs
+import ledger_core
 import setup
 
 
@@ -94,7 +96,7 @@ class InitializationTest(unittest.TestCase):
             path = Path(root) / "feishu/ids.json"
             path.parent.mkdir()
             path.write_text(json.dumps({"wiki": {"space_id": "wiki"}}))
-            lg = ledger.Ledger(root, "apply")
+            lg = ledger_core.Ledger(root, "apply")
             calls, created = [], []
             def lark(*args, **kw):
                 calls.append(args)
@@ -103,8 +105,8 @@ class InitializationTest(unittest.TestCase):
                 created.append(args)
                 return {"data": {"node_token": "node-" + str(len(created)), "obj_token": "doc-" + str(len(created))}}
             with mock.patch.object(lg, "lark", side_effect=lark), contextlib.redirect_stdout(io.StringIO()):
-                ledger.ensure_all_nodes(lg)
-                ledger.ensure_all_nodes(lg)
+                docs.ensure_all_nodes(lg)
+                docs.ensure_all_nodes(lg)
             self.assertEqual(len(created), 21)                         # 7 top-level nodes, 7 sequences under two of them
             self.assertEqual(sum(c[1] == "+node-list" for c in calls), 3)
             self.assertEqual(len(json.loads(path.read_text())["wiki"]["nodes"]), 21)

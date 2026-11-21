@@ -24,6 +24,8 @@ import pool as pool_lib  # noqa: E402
 from test_plugin import PoolProjectCase, example_blocks  # noqa: E402
 import fake_space  # noqa: E402
 import ledger  # noqa: E402
+import ledger_core  # noqa: E402
+import workitem  # noqa: E402
 import setup  # noqa: E402
 
 WRAPUP = "mcp__ccd_turn__wrap_up"
@@ -543,7 +545,7 @@ DELIVERED = wrap("【交付 #2101】Alg-p2-01 → PMO-p2-01：交付包 y.md", "
 
 
 def default_due(item, option, executor="RnD-p2-01"):
-    return "#%s 已到期：请书记员按到期默认确认（ledger.py confirm %s --by 到期默认），书记员确认后通知执行方 %s 照到期默认动作办（%s）；已经请过的不再请。" % (
+    return "#%s 已到期：请书记员按到期默认确认（workitem.py confirm %s --by 到期默认），书记员确认后通知执行方 %s 照到期默认动作办（%s）；已经请过的不再请。" % (
         item, item, executor, option)
 
 
@@ -699,7 +701,7 @@ class ExpiryTest(DeliveryCase):
     def setUp(self):
         super().setUp()
         self.fake = fake_space.FakeSpace()
-        self.quiet(ledger.register, self.lg(), os.path.join(self.tmp, setup.FIRST_TASK))
+        self.quiet(workitem.register, self.lg(), os.path.join(self.tmp, setup.FIRST_TASK))
 
     def lg(self):
         return fake_space.SimLedger(self.tmp, "apply", self.fake, ())
@@ -713,12 +715,12 @@ class ExpiryTest(DeliveryCase):
         path = os.path.join(self.tmp, "packages", "drafts", "pmo", name)
         with open(path, "w", encoding="utf-8") as f:
             f.write(re.sub(r"^- 所属研究任务：.*\n", "", text, flags=re.M))
-        return self.quiet(ledger.register, self.lg(), path)
+        return self.quiet(workitem.register, self.lg(), path)
 
     def age(self, item, hours):
         """The decision as if it had been registered that many hours ago, in the local state and in its receipt."""
-        since = (ledger.now_at() - datetime.timedelta(hours=hours)).isoformat(timespec="seconds")
-        for path, entry in ((ledger.gates_path(self.tmp), lambda data: data["pending"][item]),
+        since = (ledger_core.now_at() - datetime.timedelta(hours=hours)).isoformat(timespec="seconds")
+        for path, entry in ((ledger_core.gates_path(self.tmp), lambda data: data["pending"][item]),
                             (os.path.join(self.tmp, "packages", "sent", "%s.json" % item), lambda data: data)):
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
@@ -736,12 +738,12 @@ class ExpiryTest(DeliveryCase):
         self.assertIn(WAITS % perm, woken)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            ledger.confirm(self.lg(), rev, ledger.BY_DEFAULT)
+            workitem.confirm(self.lg(), rev, workitem.BY_DEFAULT)
         self.assertIn("到期默认：照选项“按轮次分目录”办，执行完请书记员归档。", out.getvalue())
         content = self.fake.item(rev)["fields"][self.lg().field("decision", "决定内容")["field_key"]]
         self.assertEqual(content, "到期默认：按轮次分目录：runs/rnd/<轮次>/<变体>/（登记后 24 小时内研究员没有决定）")
-        with self.assertRaises(ledger.LedgerError), contextlib.redirect_stdout(io.StringIO()):
-            ledger.confirm(self.lg(), perm, ledger.BY_DEFAULT)
+        with self.assertRaises(ledger_core.LedgerError), contextlib.redirect_stdout(io.StringIO()):
+            workitem.confirm(self.lg(), perm, workitem.BY_DEFAULT)
         woken = self.context("s-entry", DELIVERED)
         self.assertNotIn("#%s 已到期" % rev, woken)
         self.assertIn(WAITS % perm, woken)
@@ -764,8 +766,8 @@ class ExpiryTest(DeliveryCase):
 
         def refused():
             try:
-                self.quiet(ledger.confirm, self.lg(), rev, ledger.BY_DEFAULT)
-            except ledger.LedgerError as e:
+                self.quiet(workitem.confirm, self.lg(), rev, workitem.BY_DEFAULT)
+            except ledger_core.LedgerError as e:
                 return str(e)
             return None
         rev = self.register(11, "rev.md")
@@ -784,14 +786,14 @@ class ExpiryTest(DeliveryCase):
         it comes first when the researcher talks."""
         rev = self.register(11, "rev.md")
         self.age(rev, 30)
-        self.quiet(ledger.confirm, self.lg(), rev, "研究员", ["决定内容=按变体分目录", "决定人=研究员"], option="按变体分目录")
+        self.quiet(workitem.confirm, self.lg(), rev, "研究员", ["决定内容=按变体分目录", "决定人=研究员"], option="按变体分目录")
         self.assertNotIn("已到期", self.context("s-entry", DELIVERED))
-        self.quiet(ledger.rollback, self.lg(), rev, "决定", "研究员想再看看", by="研究员")
+        self.quiet(workitem.rollback, self.lg(), rev, "决定", "研究员想再看看", by="研究员")
         woken = self.context("s-entry", DELIVERED)
         self.assertIn(WAITS % rev, woken)
         self.assertNotIn("请书记员按到期默认确认", woken)
-        with self.assertRaises(ledger.LedgerError) as e, contextlib.redirect_stdout(io.StringIO()):
-            ledger.confirm(self.lg(), rev, ledger.BY_DEFAULT)
+        with self.assertRaises(ledger_core.LedgerError) as e, contextlib.redirect_stdout(io.StringIO()):
+            workitem.confirm(self.lg(), rev, workitem.BY_DEFAULT)
         self.assertIn("定过一次，又回滚到了待决定", str(e.exception))
         self.assertIn("已经到期、继续等研究员的决策（#%s）排在清单最前，不提截止。" % rev, self.context("s-entry", "早"))
         self.assertIn("#%s（运行记录按轮次还是按变体分目录）：“`python3 tools/relayout_runs.py`”" % rev, self.context("s-alg2", "继续"))   # frozen again

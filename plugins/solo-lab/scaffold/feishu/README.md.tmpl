@@ -7,6 +7,6 @@
 | `ids.json` | `setup.py feishu --apply` | project_key，约定里各槽位绑定到的类型、字段、角色和状态，知识库空间和节点的 token；键用约定文件里的英文标识 |
 | `space.json`、`space.md` | `setup.py feishu --live --apply` | 空间的结构：每种工作项类型的字段、角色、状态、新建时的必填字段，每个流程的节点、负责角色和必填项；空间配置一改就重读 |
 | `binding.md` | `setup.py feishu` | 约定里的每个槽位对到空间里的哪个对象，缺什么，还要建哪些知识库节点 |
-| `write-log.jsonl` | `ledger.py`、hook `audit.py` | 每条飞书写操作的时间、会话、命令、结果和返回的 ID |
+| `write-log.jsonl` | `workitem.py`、`docs.py`、hook `audit.py` | 每条飞书写操作的时间、会话、命令、结果和返回的 ID |
 
 空间：{{space_line}}

@@ -5,7 +5,7 @@ description: 读写智能体组织的台账（飞书项目）和任务包文档�
 
 # 台账
 
-飞书项目记一件事走到了哪一步，飞书文档记这件事的内容。读写都走项目里的 `.claude/solo-lab/bin/ledger.py`，在项目目录里运行。
+飞书项目记一件事走到了哪一步，飞书文档记这件事的内容。读台账用项目里 `.claude/solo-lab/bin/` 下的 `ledger.py`，写工作项用 `workitem.py`，写文档用 `docs.py`，都在项目目录里运行。
 
 五类工作项（研究任务、同序列需求、跨序列需求、决策、反馈）都是节点流程，每个流程以书记员确认的“归档”节点收尾。有哪些流程、节点怎么排、每一步谁负责、必填什么，以飞书空间为准，脚本运行时现读，规则文件里不写。所以推进一步之前先问空间，不照记忆里的流程做。
 
@@ -51,7 +51,7 @@ python3.12 -I .claude/solo-lab/bin/ledger.py next 2101
     待填 规格版本
     “假设签字”填一条研究员批准的决策工作项的 ID，确认前由脚本核对
   下一步：设计实验方案
-  书记员推进：ledger.py confirm 2101 --by <会话名>
+  书记员推进：workitem.py confirm 2101 --by <会话名>
 ```
 
 这是一条验证任务走到第 4 步时的输出，节点和字段以你的空间为准。
@@ -103,7 +103,7 @@ python3.12 -I .claude/solo-lab/bin/ledger.py next 2101
 ### 确认节点
 
 ```bash
-python3.12 -I .claude/solo-lab/bin/ledger.py confirm 2101 --by Alg-p2-01 --set 实验轮次=1 --set 实验方案=<文档链接>
+python3.12 -I .claude/solo-lab/bin/workitem.py confirm 2101 --by Alg-p2-01 --set 实验轮次=1 --set 实验方案=<文档链接>
 ```
 
 - `--by` 写提出请求的会话名，它要是这一步的负责方；研究员交代的写 `--by 研究员`；“开工”写承接方的会话名。
@@ -119,7 +119,7 @@ python3.12 -I .claude/solo-lab/bin/ledger.py confirm 2101 --by Alg-p2-01 --set �
 ### 修订
 
 ```bash
-python3.12 -I .claude/solo-lab/bin/ledger.py revise 2140 packages/drafts/infra/20261122-决策包-隔离方式-v2.md --note '去掉同账号沙箱：沙箱规则调不完'
+python3.12 -I .claude/solo-lab/bin/docs.py revise 2140 packages/drafts/infra/20261122-决策包-隔离方式-v2.md --note '去掉同账号沙箱：沙箱规则调不完'
 ```
 
 - 发出方写了已经登记的需求包或决策包的下一版：新草稿是主文档开头到“状态包”之前那部分改好的样子，包头“版本”比上一版大 1，“关联工作项”写这条工作项的 ID 或“待建”。研究任务单也用它：不写“版本”，脚本自己数；过了第一步也能修订，输出里提醒一句后面各步定下的文档不跟着变（`register --existing` 停用了）。交付包不用它（改好后包头“版本”加 1，用 `reply` 重新交）。修订稿没有“# <包名>：<事项>”标题行的，事项照旧。
@@ -130,13 +130,13 @@ python3.12 -I .claude/solo-lab/bin/ledger.py revise 2140 packages/drafts/infra/2
 
 ### 本地决策状态
 
-`.claude/state/gates.json` 只记决策队列来、还在待决定的决策：事项、紧急程度、登记时间、可逆性、到期默认动作、版本、选项表、冻结的动作，回滚过的另记回滚的时间。登记、修订时写进去，确认“决定”、归档、终止时移出；回滚到“待决定”的重新写进去，并记下它回滚过：定过一次的决策不再走到期默认，一直等研究员。只有书记员跑的 `ledger.py` 加 `--apply` 时写它。inbox hook 照它每轮给池会话一行冻结提示、给入口到期提示；guard hook 不读它，冻结的动作和不可逆事项清单里的命令 hook 都不拦，靠各会话照规则办。到期时间不存在文件里：每次用登记时间加 `org/decisions.md` 现写的到期时长算。1.0.4、1.0.5 写的文件里的放行记录读的时候忽略，下次写的时候丢掉。研究员主动发起的决策不进待定决策，补位请求也不进。
+`.claude/state/gates.json` 只记决策队列来、还在待决定的决策：事项、紧急程度、登记时间、可逆性、到期默认动作、版本、选项表、冻结的动作，回滚过的另记回滚的时间。登记、修订时写进去，确认“决定”、归档、终止时移出；回滚到“待决定”的重新写进去，并记下它回滚过：定过一次的决策不再走到期默认，一直等研究员。只有书记员跑的 `workitem.py` 和 `docs.py` 加 `--apply` 时写它。inbox hook 照它每轮给池会话一行冻结提示、给入口到期提示；guard hook 不读它，冻结的动作和不可逆事项清单里的命令 hook 都不拦，靠各会话照规则办。到期时间不存在文件里：每次用登记时间加 `org/decisions.md` 现写的到期时长算。1.0.4、1.0.5 写的文件里的放行记录读的时候忽略，下次写的时候丢掉。研究员主动发起的决策不进待定决策，补位请求也不进。
 
 ### 回滚
 
 ```bash
-python3.12 -I .claude/solo-lab/bin/ledger.py rollback 2103 --to 执行 --reason '第 2 条验收标准没有证据' --by Product-p2-01
-python3.12 -I .claude/solo-lab/bin/ledger.py rollback 2101 --to 设计实验方案 --reason '第 1 轮方案漏了对照组' --decision 2110
+python3.12 -I .claude/solo-lab/bin/workitem.py rollback 2103 --to 执行 --reason '第 2 条验收标准没有证据' --by Product-p2-01
+python3.12 -I .claude/solo-lab/bin/workitem.py rollback 2101 --to 设计实验方案 --reason '第 1 轮方案漏了对照组' --decision 2110
 ```
 
 - `--to` 写一个已完成的节点，名字或节点 ID 都行。`--reason` 必填，原因进操作记录。
@@ -150,7 +150,7 @@ python3.12 -I .claude/solo-lab/bin/ledger.py rollback 2101 --to 设计实验方�
 ### 归档
 
 ```bash
-python3.12 -I .claude/solo-lab/bin/ledger.py archive 2103
+python3.12 -I .claude/solo-lab/bin/workitem.py archive 2103
 ```
 
 - 工作项要已经走到最后一步：`next` 的“书记员推进”一行写着 `archive`。
@@ -200,8 +200,8 @@ python3.12 -I .claude/solo-lab/bin/ledger.py archive 2103
 走到哪一步和卡没卡住是两回事，所以阻塞记在工作项的两个字段里：阻塞原因、阻塞开始日期。没有“阻塞”这个状态。
 
 ```bash
-python3.12 -I .claude/solo-lab/bin/ledger.py update 2103 --set blocked_reason='等基础设施批 GPU 配额'  # 同时写阻塞开始日期
-python3.12 -I .claude/solo-lab/bin/ledger.py update 2103 --set blocked_reason=                       # 解除：两个字段一起清空
+python3.12 -I .claude/solo-lab/bin/workitem.py update 2103 --set blocked_reason='等基础设施批 GPU 配额'  # 同时写阻塞开始日期
+python3.12 -I .claude/solo-lab/bin/workitem.py update 2103 --set blocked_reason=                       # 解除：两个字段一起清空
 ```
 
 研究任务、同序列需求、跨序列需求有这两个字段。`query blocked` 列出阻塞原因非空的，`next` 的最后一行也会显示。阻塞原因用 `update` 写，不随 `confirm` 写。

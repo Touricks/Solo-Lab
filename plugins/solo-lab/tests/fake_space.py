@@ -19,6 +19,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 import ledger  # noqa: E402
+import ledger_core  # noqa: E402
 import orgspec  # noqa: E402
 import space  # noqa: E402
 
@@ -89,7 +90,7 @@ def install(root, snap=None, spec=None):
 
 def failed(code, message):
     """What Ledger.run raises for a command that exits with an error."""
-    return ledger.LedgerError("命令失败（退出码 1）：meegle ...\n" + json.dumps(
+    return ledger_core.LedgerError("命令失败（退出码 1）：meegle ...\n" + json.dumps(
         {"data": None, "error": {"code": "SERVER_CALL_FAILED", "message": "error=%s,message=%s,retriable=false" % (code, message)}},
         ensure_ascii=False))
 
@@ -444,7 +445,7 @@ class FakeSpace:
     def doc_of_link(self, link):
         doc = self.doc_by((link or "").rstrip("/").rsplit("/", 1)[-1])
         if not doc:
-            raise ledger.LedgerError("命令失败（退出码 1）：lark-cli docs\ndocument not found: %s" % link)
+            raise ledger_core.LedgerError("命令失败（退出码 1）：lark-cli docs\ndocument not found: %s" % link)
         return doc
 
     def fetch(self, flags):
@@ -471,9 +472,9 @@ class FakeSpace:
         if flags.get("--command") == "block_replace" and flags.get("--block-id") == doc["document_id"]:
             m = re.fullmatch(r"\s*<title>(.*)</title>\s*", stdin or "", re.S)       # the title block: a rename
             if not m or flags.get("--doc-format") != "xml":
-                raise ledger.LedgerError("命令失败（退出码 1）：lark-cli docs +update\nthe title block takes <title>…</title> as xml")
+                raise ledger_core.LedgerError("命令失败（退出码 1）：lark-cli docs +update\nthe title block takes <title>…</title> as xml")
             if self.title_fails:
-                raise ledger.LedgerError("命令失败（退出码 1）：lark-cli docs +update\npermission denied")
+                raise ledger_core.LedgerError("命令失败（退出码 1）：lark-cli docs +update\npermission denied")
             doc["title"] = html.unescape(m.group(1))
             return {"ok": True, "data": {"result": "success", "updated_blocks_count": 1}}
         blocks = self.blocks(doc)
@@ -484,7 +485,7 @@ class FakeSpace:
             ids = [b["id"] for b in blocks]
             start, end = ids.index(flags["--start-block-id"]), ids.index(flags["--end-block-id"])
             if end < start:
-                raise ledger.LedgerError("命令失败（退出码 1）：lark-cli docs +update\nreverse range")
+                raise ledger_core.LedgerError("命令失败（退出码 1）：lark-cli docs +update\nreverse range")
             blocks[start:end + 1] = new
         else:
             raise AssertionError("假空间不认识这条文档命令：%s" % flags.get("--command"))
@@ -494,7 +495,7 @@ class FakeSpace:
     def node_get(self, token):
         doc = self.doc_by(token)
         if not doc:
-            raise ledger.LedgerError("命令失败（退出码 1）：lark-cli wiki +node-get\nnode not found")
+            raise ledger_core.LedgerError("命令失败（退出码 1）：lark-cli wiki +node-get\nnode not found")
         return {"ok": True, "data": {"node_token": doc["node_token"], "obj_token": doc["document_id"], "obj_type": "docx",
                                      "parent_node_token": doc["parent"], "title": doc["title"]}}
 
@@ -554,7 +555,7 @@ class FakeSpace:
         raise AssertionError("假空间不认识这条命令：%s" % " ".join(argv[:4]))
 
 
-class SimLedger(ledger.Ledger):
+class SimLedger(ledger_core.Ledger):
     """A Ledger that talks to a FakeSpace. `replies` are answered first: [(words, value,
     exception or function of the command line)], the first whose words are all in it."""
 

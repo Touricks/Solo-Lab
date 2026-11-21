@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 import orgspec  # noqa: E402
 import setup  # noqa: E402
+import ledger_core  # noqa: E402
 import space  # noqa: E402
 from test_space import Replay, fixture  # noqa: E402
 
@@ -104,7 +105,7 @@ class FeishuTest(BindingCase):
         self.assertIn("| 4 | 确定假设条件 | 算法 | ", self.read("feishu/space.md"))
         doc = self.read("feishu/binding.md")
         self.assertIn("## 要处理的问题\n\n无。", doc)
-        self.assertIn("ledger.py ensure-node all", doc)                # the knowledge base is still to be built
+        self.assertIn("docs.py ensure-node all", doc)                # the knowledge base is still to be built
         phases = self.read("org/phases.md")
         self.assertIn("### 研究任务：验证", phases)
         self.assertIn("### 研究任务：试探", phases)
@@ -326,10 +327,10 @@ class FeishuTest(BindingCase):
 
         def seen():
             """(the decided state's name in the binding, the two fields' keys as the ledger finds them, what `query queue` asks for)"""
-            lg = setup.ledger.Ledger(self.tmp, "offline")
+            lg = ledger_core.Ledger(self.tmp, "offline")
             return (json.loads(self.read("feishu/ids.json"))["meegle"]["states"]["decision"]["decided"]["name"],
                     (lg.key_of("decision", "执行方"), lg.key_of("decision", "研究员要做的事")),
-                    "'已决定'" in setup.ledger.mql_text(lg, "queue")[0], "'待执行'" in setup.ledger.mql_text(lg, "queue")[0])
+                    "'已决定'" in ledger_core.mql_text(lg, "queue")[0], "'待执行'" in ledger_core.mql_text(lg, "queue")[0])
 
         self.feishu([], True, True)
         old = ("已决定", (None, None), True, False)
@@ -366,7 +367,7 @@ class FeishuTest(BindingCase):
         code, text = self.feishu([], True, True, edit=by_hand)
         self.assertEqual(code, 0)
         self.assertIn("变化：决策：状态改名 已决定→待执行", text)
-        lg = setup.ledger.Ledger(self.tmp, "offline")
+        lg = ledger_core.Ledger(self.tmp, "offline")
         self.assertEqual((lg.state("decision", "decided"), lg.key_of("decision", "执行方")), ("待执行", "field_d22001"))
 
     def test_without_a_snapshot_there_is_nothing_to_bind(self):

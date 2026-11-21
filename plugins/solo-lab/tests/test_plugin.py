@@ -25,6 +25,8 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 import orgspec  # noqa: E402
 import setup  # noqa: E402
 import ledger  # noqa: E402
+import ledger_core  # noqa: E402
+import workitem  # noqa: E402
 import route  # noqa: E402
 import pool as pool_lib  # noqa: E402
 sys.path.insert(0, os.path.join(ROOT, "tests"))
@@ -406,7 +408,7 @@ class DecisionsFileTest(ProjectCase):
         start, end = setup.section_span(before, setup.PLUGIN_SECTION)
         new_start, new_end = setup.section_span(after, setup.PLUGIN_SECTION)
         self.assertEqual((after[:new_start], after[new_end:]), (before[:start], before[end:]))
-        self.assertEqual(ledger.expiry_hours(self.tmp), (24, "org/decisions.md", None))
+        self.assertEqual(ledger_core.expiry_hours(self.tmp), (24, "org/decisions.md", None))
 
     def test_the_section_1_0_4_wrote_is_refreshed_in_place(self):
         """1.0.5 names the decision's decided state 待执行 (template 2.2.0) and says what spaces made from 2.1.0 or
@@ -431,7 +433,7 @@ class DecisionsFileTest(ProjectCase):
         time kept."""
         old = setup.render(setup.scaffold("org/decisions.md.tmpl"), {"deviations": setup.bullets(self.V105)})
         self.assertEqual(setup.PLUGIN_SECTIONS.get(setup.sha256(setup.squeeze(self.section(old)))), "1.0.5")
-        self.assertEqual(setup.PLUGIN_SECTIONS.get(setup.sha256(setup.squeeze(self.current_section()))), "1.0.12")
+        self.assertEqual(setup.PLUGIN_SECTIONS.get(setup.sha256(setup.squeeze(self.current_section()))), "1.1.0")
         before = self.write(self.V105)
         kind, out = self.init()
         self.assertEqual(kind, "update")
@@ -444,7 +446,7 @@ class DecisionsFileTest(ProjectCase):
             self.assertNotIn(gone, after)
         for part in ("hook 不拦清单里的命令，也不按待定决策冻结：命令的权限照会话自己的权限检查",
                      "执行方写会话的，只收各序列的 +2、入口和路由；要下级干的活，由 +2 用需求包委托。",
-                     "书记员确认“决定”时用 `ledger.py confirm --executor <会话名>` 把执行方改成那个会话。",
+                     "书记员确认“决定”时用 `workitem.py confirm --executor <会话名>` 把执行方改成那个会话。",
                      "研究员定过一次、又回滚到待决定的决策也一直等研究员，不再走到期默认。",
                      "- 可逆决策的到期时长：登记后 24 小时。研究员可以改这一行的数字"):
             self.assertIn(part, after)
@@ -452,7 +454,7 @@ class DecisionsFileTest(ProjectCase):
         new_start, new_end = setup.section_span(after, setup.PLUGIN_SECTION)
         self.assertEqual((after[:new_start], after[new_end:]), (before[:start], before[end:]))
         self.assertIn("## 补充决定\n\n" + self.MINE, after)
-        self.assertEqual(ledger.expiry_hours(self.tmp), (24, "org/decisions.md", None))
+        self.assertEqual(ledger_core.expiry_hours(self.tmp), (24, "org/decisions.md", None))
         self.assertEqual(self.init()[0], "same")
 
     def test_the_section_an_earlier_init_wrote_is_refreshed_in_place(self):
@@ -555,7 +557,7 @@ class DecisionsFileTest(ProjectCase):
 class HookTest(ProjectCase):
 
     def test_only_scribe_writes_ledger(self):
-        cmd = {"command": "python3.12 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"}
+        cmd = {"command": "python3.12 -I .claude/solo-lab/bin/workitem.py register packages/drafts/alg/x.md --apply"}
         _, out = self.guard("alg-p2", "Bash", cmd)
         self.assertEqual(out.get("permissionDecision"), "deny")
         _, out = self.scribe("Bash", cmd)
@@ -695,7 +697,7 @@ class SecondRoundTest(ProjectCase):
     def test_guard_sees_every_ledger_write(self):
         for cmd in ("python3.12 -I .claude/solo-lab/bin/ledger.py \\\n  confirm 1 执行中 --apply",
                     "python3.12 -I .claude/solo-lab/bin/ledger.py 'register' --apply x.md",
-                    "bash -c 'python3 .claude/solo-lab/bin/ledger.py update --apply 1 --set a=b'"):
+                    "bash -c 'python3 .claude/solo-lab/bin/workitem.py update --apply 1 --set a=b'"):
             _, out = self.guard("alg-p2", "Bash", {"command": cmd})
             self.assertEqual(out.get("permissionDecision"), "deny", cmd)
         _, out = self.guard("alg-p2", "Bash", {"command": "python3.12 -I .claude/solo-lab/bin/ledger.py mql queue"})
@@ -713,31 +715,31 @@ class ThirdRoundTest(ProjectCase):
         reads = [
             "python3.12 -I .claude/solo-lab/bin/ledger.py query open",
             "python3.12 -I .claude/solo-lab/bin/ledger.py --offline get 1",
-            "python3.12 -I .claude/solo-lab/bin/ledger.py confirm --help",
+            "python3.12 -I .claude/solo-lab/bin/workitem.py confirm --help",
             "cat .claude/solo-lab/bin/ledger.py",
             'grep -rn "ledger.py:" org',
             "ls -la .claude/solo-lab/bin/ledger.py*",
             "diff .claude/solo-lab/bin/ledger.py .claude/solo-lab/bin/ledger.py.new",
             'git commit -m "ledger.py: fix confirm"',
-            'echo "ledger.py register 由书记员跑"',
+            'echo "workitem.py register 由书记员跑"',
             "python3.12 -I -c \"import ast; ast.parse(open('.claude/solo-lab/bin/ledger.py').read())\"",
-            "python3.12 -I .claude/solo-lab/bin/route.py classify --text 'ledger.py confirm 2030 要改'",
-            "cat > packages/drafts/alg/x.md <<'EOF'\nrun python3 .claude/solo-lab/bin/ledger.py register x.md\nit's fine\nEOF",
+            "python3.12 -I .claude/solo-lab/bin/route.py classify --text 'workitem.py confirm 2030 要改'",
+            "cat > packages/drafts/alg/x.md <<'EOF'\nrun python3 .claude/solo-lab/bin/workitem.py register x.md\nit's fine\nEOF",
         ]
         writes = [
             "python3.12 -I .claude/solo-lab/bin/ledger.py \\\n  confirm 7151870875 执行中 --apply",
-            "python3 -X utf8 .claude/solo-lab/bin/ledger.py confirm 1 执行中 --apply",
-            "python3.12 -I -W ignore .claude/solo-lab/bin/ledger.py update 1 --set a=b --apply",
-            "python3 -m cProfile -o /dev/null .claude/solo-lab/bin/ledger.py confirm --apply 1 x",
+            "python3 -X utf8 .claude/solo-lab/bin/workitem.py confirm 1 执行中 --apply",
+            "python3.12 -I -W ignore .claude/solo-lab/bin/workitem.py update 1 --set a=b --apply",
+            "python3 -m cProfile -o /dev/null .claude/solo-lab/bin/workitem.py confirm --apply 1 x",
             "cd .claude/solo-lab/bin && python3 - confirm --apply 1 x < ledger.py",
             "cat .claude/solo-lab/bin/ledger.py | python3 - confirm --apply 1 x",
             "PYTHONPATH=.claude/solo-lab/bin python3 -m ledger confirm --apply 1 x",
             'python3.12 -I .claude/solo-lab/bin/"ledger".py archive --apply 1',
             "python3 $(echo .claude/solo-lab/bin/ledger.py) confirm --apply 1 x",
             "sub=confirm; python3 .claude/solo-lab/bin/ledger.py $sub 1 x",
-            "bash -c 'python3 .claude/solo-lab/bin/ledger.py update --apply 1 --set a=b'",
-            "timeout 60 python3 .claude/solo-lab/bin/ledger.py append --apply 1 --file r.md",
-            "python3.12 -I .claude/solo-lab/bin/ledger.py query open | head -5 && python3 .claude/solo-lab/bin/ledger.py archive --apply 3",
+            "bash -c 'python3 .claude/solo-lab/bin/workitem.py update --apply 1 --set a=b'",
+            "timeout 60 python3 .claude/solo-lab/bin/docs.py append --apply 1 --file r.md",
+            "python3.12 -I .claude/solo-lab/bin/ledger.py query open | head -5 && python3 .claude/solo-lab/bin/workitem.py archive --apply 3",
         ]
         for cmd in reads:
             self.assertIsNone(guard.ledger_write(cmd, self.tmp), cmd)
@@ -872,10 +874,10 @@ class FifthRoundTest(ProjectCase):
     def test_words_in_code_and_text_are_not_commands(self):
         L = self.L
         self.check([f"python3 - <<'PY'\nimport subprocess\nout=subprocess.run(['python3','-I','{L}','query','open'],capture_output=True)\nids=[1]\nids.append(2)\nPY",
-                    f"cat > packages/drafts/alg/x.md <<'EOF'\n- 请书记员 ledger.py register 后 ledger.py update 2106\nEOF\npython3 - <<'PY'\nprint(1)\nPY",
+                    f"cat > packages/drafts/alg/x.md <<'EOF'\n- 请书记员 workitem.py register 后 workitem.py update 2106\nEOF\npython3 - <<'PY'\nprint(1)\nPY",
                     'git commit -m "ledger.py: fix confirm"', f"python3.12 -I {L} query open 2>/dev/null || echo 'ledger.py: 查询失败'",
-                    "python3.12 -I .claude/solo-lab/bin/route.py classify --text 'ledger.py confirm 2030 要改'"], [])
-        cmd = "python3.12 -I .claude/solo-lab/bin/route.py classify --text 'ledger.py confirm 2030 要改'"
+                    "python3.12 -I .claude/solo-lab/bin/route.py classify --text 'workitem.py confirm 2030 要改'"], [])
+        cmd = "python3.12 -I .claude/solo-lab/bin/route.py classify --text 'workitem.py confirm 2030 要改'"
         _, out = self.guard("alg-p2", "Bash", {"command": cmd})
         self.assertNotEqual(out.get("permissionDecision"), "deny")
 
@@ -1161,14 +1163,14 @@ class SeventhRoundTest(ProjectCase):
             f.write("#!/usr/bin/env node\n/*\n * Copyright (c) 2026\n * Redistributions of source code must retain this notice.\n */\nconsole.log('hi')\n")
         os.chmod(os.path.join(tools, "hello.js"), 0o755)
         draft_writer = ("python3 - <<'PY'\nfrom pathlib import Path\nPath('packages/drafts/alg/req.md').write_text("
-                        "'# 执行请求\\n请书记员运行 ledger.py register packages/drafts/alg/req.md\\n')\nPY")
+                        "'# 执行请求\\n请书记员运行 workitem.py register packages/drafts/alg/req.md\\n')\nPY")
         self.check([("alg-p2", c, False) for c in (
             'cat "runs/alg/notes [2024-11-01].md"', 'tail -n 100 "runs/alg/train [lr=3e-4].log"',
             '"$PY" -m pytest "tests/test_math.py::test_sub[5-3-2]"', "./tools/hello.js world",
             "python3 - <<'PY'\nrows = [1,2]\nprint(f\"{len(rows)} update(s) pending in ledger\")\nPY",
             "python3 - <<'PY'\nimport json\nd = json.load(open('/tmp/ledger-open.json'))\nstates = {'register': 0, 'update': 0}\nPY",
             "python3 -c \"import json; d=json.load(open('/tmp/ledger-open.json')); print([r for r in d if r['type']=='reply'])\"",
-            "python3 - <<'PY'\n# summarise; the scribe runs ledger.py update afterwards\nimport json\nprint(1)\nPY",
+            "python3 - <<'PY'\n# summarise; the scribe runs workitem.py update afterwards\nimport json\nprint(1)\nPY",
             draft_writer,
         )])
 
@@ -1271,10 +1273,10 @@ class SpecAndRoutingTest(ProjectCase):
         old = os.environ.get("CLAUDE_PROJECT_DIR")
         os.environ["CLAUDE_PROJECT_DIR"] = self.tmp
         try:
-            code, out = self.run_quiet(ledger.main, ["update", "2003", "--set", "运行 ID=r-1", "--apply"])
+            code, out = self.run_quiet(workitem.main, ["update", "2003", "--set", "运行 ID=r-1", "--apply"])
             self.assertEqual(code, 1)
             self.assertIn("还没绑定飞书空间", out)
-            code, _ = self.run_quiet(ledger.main, ["--offline", "update", "2003", "--set", "运行 ID=r-1", "--type", "same_seq"])
+            code, _ = self.run_quiet(workitem.main, ["--offline", "update", "2003", "--set", "运行 ID=r-1", "--type", "same_seq"])
             self.assertEqual(code, 0)
         finally:
             if old is None:
@@ -1292,7 +1294,7 @@ class SpecAndRoutingTest(ProjectCase):
         old = os.environ.get("CLAUDE_PROJECT_DIR")
         os.environ["CLAUDE_PROJECT_DIR"] = self.tmp
         try:
-            code, out = self.run_quiet(ledger.main, ["update", "2003", "--set", "run_ids=r-1", "--apply"])
+            code, out = self.run_quiet(workitem.main, ["update", "2003", "--set", "run_ids=r-1", "--apply"])
             self.assertEqual(code, 1)
             self.assertIn("绑定的是“旧空间”", out)
             with self.assertRaises(setup.SetupError):          # the local dictionary belongs to the old space
@@ -1330,7 +1332,7 @@ class SpecAndRoutingTest(ProjectCase):
         self.assertNotEqual(out.get("permissionDecision"), "deny")
         fake = fake_space.FakeSpace()
         lg = fake_space.SimLedger(self.tmp, "apply", fake)
-        item = str(fake.create("decision", [{"field_key": "name", "field_value": "x"}, ledger.flow_entry(lg, "decision"),
+        item = str(fake.create("decision", [{"field_key": "name", "field_value": "x"}, workitem.flow_entry(lg, "decision"),
                                             lg.entry("decision", "sequence", "算法"), lg.entry("decision", "sender", "Alg-p2-01"),
                                             lg.entry("decision", "urgency", "今天"),
                                             lg.entry("decision", "main_doc", "https://example.feishu.cn/wiki/wikMain")])["work_item_id"])
@@ -1341,16 +1343,16 @@ class SpecAndRoutingTest(ProjectCase):
         self.assertIn("访谈提纲", printed)
         argv = next(c[0] for c in lg.calls if "section" in c[0])
         self.assertEqual(argv[argv.index("--start-block-id") + 1], "doxcnnyQfTdXSmSuMyN3ajvOmgh")
-        self.assertIn("status", ledger.READ_COMMANDS)
-        self.assertIn("next", ledger.READ_COMMANDS)
-        self.assertNotIn("index", ledger.READ_COMMANDS)
+        self.assertIn("status", ledger_core.READ_COMMANDS)
+        self.assertIn("next", ledger_core.READ_COMMANDS)
+        self.assertNotIn("index", ledger_core.READ_COMMANDS)
 
     def test_new_status_block_starts_with_the_cognitive_layer(self):
         body = "## 认知层\n\n这个阶段整理访谈，涉及 Product-p1-01 和需求文档 v1。\n\n## 目标\n\n写提纲。\n"
-        out = ledger.with_status_sections(body)
+        out = workitem.with_status_sections(body)
         self.assertIn("### 简介\n\n这个阶段整理访谈，涉及 Product-p1-01 和需求文档 v1。\n\n### 当前状态", out)
         self.assertLess(out.index("## 状态包"), out.index("## 交接记录"))
-        self.assertIn("### 简介\n\n### 当前状态", ledger.with_status_sections("## 方法\n\n写提纲。\n"))
+        self.assertIn("### 简介\n\n### 当前状态", workitem.with_status_sections("## 方法\n\n写提纲。\n"))
 
     def test_plugin_cites_nothing_outside_itself(self):
         """Nothing in the repository, docs included, points to material outside the plugin."""
@@ -1665,7 +1667,7 @@ class PoolSetupTest(PoolProjectCase):
         self.assertIn("Monitor", settings["hooks"]["PreToolUse"][0]["matcher"])
         allow = settings["permissions"]["allow"]
         self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/route.py claim *)", allow)
-        self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/ledger.py register *)", allow)
+        self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/workitem.py register *)", allow)
         self.assertNotIn("Bash(python3.12 -I .claude/solo-lab/bin/route.py release *)", allow)
         self.assertIn("Edit(/.claude/state/**)", settings["permissions"]["ask"])
         policy = json.loads(self.read(".claude/hooks/policy.json"))
@@ -1833,7 +1835,7 @@ class PoolSetupTest(PoolProjectCase):
 
     def test_the_first_task_sheet_is_written_once(self):
         path = os.path.join(self.tmp, setup.FIRST_TASK)
-        self.assertEqual(ledger.sheet_kind(path), "research_task")
+        self.assertEqual(ledger_core.sheet_kind(path), "research_task")
         with open(path, "a", encoding="utf-8") as f:
             f.write("研究员补了一句。\n")
         with contextlib.redirect_stdout(io.StringIO()):
@@ -2124,7 +2126,7 @@ class CheckLayersTest(PoolProjectCase):
         self.claim_all()
         lg = fake_space.SimLedger(self.tmp, "apply", self.fake, ())
         with contextlib.redirect_stdout(io.StringIO()):
-            task = ledger.register(lg, os.path.join(self.tmp, setup.FIRST_TASK))
+            task = workitem.register(lg, os.path.join(self.tmp, setup.FIRST_TASK))
             setup.env_cmd(self.tmp, True)
         return task
 
@@ -2209,7 +2211,7 @@ class CheckLayersTest(PoolProjectCase):
         self.assertIn("桌面会话 local_PMO-p0-01", text)
         lg = fake_space.SimLedger(self.tmp, "apply", self.fake, ())
         with contextlib.redirect_stdout(io.StringIO()):
-            task = ledger.register(lg, os.path.join(self.tmp, setup.FIRST_TASK))
+            task = workitem.register(lg, os.path.join(self.tmp, setup.FIRST_TASK))
         code, text = self.wait()
         self.assertEqual(code, 0, text)
         self.assertIn("知识库节点都在，首条研究任务已登记（#%s）" % task, text)
@@ -2299,7 +2301,7 @@ class CheckLayersTest(PoolProjectCase):
         sheet = os.path.join(self.tmp, "packages", "drafts", "pmo", "elsewhere.md")
         shutil.copyfile(os.path.join(self.tmp, setup.FIRST_TASK), sheet)
         with contextlib.redirect_stdout(io.StringIO()):
-            ledger.register(other, sheet)
+            workitem.register(other, sheet)
         sent = os.path.join(self.tmp, "packages", "sent")
         for name in os.listdir(sent):                                        # as if registered from another directory
             if name.endswith(".json"):
@@ -2311,7 +2313,7 @@ class CheckLayersTest(PoolProjectCase):
             if "--node-token" in cmd and cmd[cmd.index("--node-token") + 1] in tokens else (1, "", "not found")
         with mock.patch.object(setup, "run", node), \
                 mock.patch.object(setup, "read_space", lambda *a, **k: (snap, setup.space.binding_of(ids), [], [])), \
-                mock.patch.object(setup.ledger, "Ledger", lambda root, mode: fake_space.SimLedger(root, mode, self.fake, ())):
+                mock.patch.object(ledger_core, "Ledger", lambda root, mode: fake_space.SimLedger(root, mode, self.fake, ())):
             code, text = self.check("--live")
         self.assertEqual(code, 0, text)
         self.assertIn("空间里已有 1 条研究任务，这个目录里没有它们的登记回执", text)
@@ -2426,7 +2428,7 @@ class CheckLayersTest(PoolProjectCase):
             binding = setup.space.binding_of(ids)
             with mock.patch.object(setup, "run", tools), \
                     mock.patch.object(setup, "read_space", lambda *a, **k: (snap, binding, [], [])), \
-                    mock.patch.object(setup.ledger, "Ledger", lambda root, mode: fake_space.SimLedger(root, mode, self.fake, ())):
+                    mock.patch.object(ledger_core, "Ledger", lambda root, mode: fake_space.SimLedger(root, mode, self.fake, ())):
                 return self.check("--live")
         code, text = live()
         self.assertEqual(code, 0, text)
@@ -2633,7 +2635,7 @@ class PoolOpenedByTheResearcherTest(PoolProjectCase):
         self.route("expect", "PMO-p1-01", "--role", "pmo-router", "--desk", "d-router", sid="s-entry")
         _, out = self.claim("pmo-router", "PMO-p1-01", "s-router", desk="d-router")
         row = out[out.index("- PMO-p0-01："):]
-        self.assertIn("ledger.py ensure-node all --apply", row)                # nothing is registered yet
+        self.assertIn("docs.py ensure-node all --apply", row)                # nothing is registered yet
         self.assertNotIn("就结束本轮，等委托消息", row.split("background：")[0])
         self.assertEqual(self.route("expect", "PMO-p0-01", "--role", "pmo-scribe", "--desk", "d-scribe", sid="s-router")[0], 0)
         with open(os.path.join(self.tmp, "packages", "sent", "7160000001.json"), "w", encoding="utf-8") as f:
@@ -2835,7 +2837,7 @@ class PoolWithoutP1Test(PoolProjectCase):
 
 
 class PoolGuardTest(PoolProjectCase):
-    W = "python3.12 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"
+    W = "python3.12 -I .claude/solo-lab/bin/workitem.py register packages/drafts/alg/x.md --apply"
 
     def setUp(self):
         super().setUp()
@@ -2855,7 +2857,7 @@ class PoolGuardTest(PoolProjectCase):
         self.assertIn("[Alg+2]", out.get("updatedInput", {}).get("command", ""))
 
     def test_the_scribe_uploads_a_local_file_for_a_link_field(self):
-        L = "python3.12 -I .claude/solo-lab/bin/ledger.py"
+        L = "python3.12 -I .claude/solo-lab/bin/workitem.py"
         update = L + " update 2101 --set 需求文档=@packages/drafts/product/prd.md --apply"
         confirm = L + " confirm 2101 --by Alg-p2-01 --set 上下文文档=@packages/drafts/alg/context.md --apply"
         for command in (update, confirm):
@@ -2956,7 +2958,7 @@ class AskAndIdentityFlagTest(ProjectCase):
     """A session nobody claimed is the researcher's: asked before a ledger write. lark-cli calls get the identity flag."""
 
     def test_researcher_session_asks_and_bypass_denies(self):
-        cmd = {"command": "python3.12 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"}
+        cmd = {"command": "python3.12 -I .claude/solo-lab/bin/workitem.py register packages/drafts/alg/x.md --apply"}
         _, out = self.guard("", "Bash", cmd, agent_id=None)
         self.assertEqual(out.get("permissionDecision"), "ask")
         data = {"tool_name": "Bash", "tool_input": cmd, "cwd": self.tmp, "session_id": "s1", "permission_mode": "bypassPermissions"}
@@ -3181,7 +3183,7 @@ class PoolRouteTest(PoolProjectCase):
         states = {"2101": "归档", "2103": "已终止"}                       # the rest are still worked on
 
         def run(*args, item=None):
-            with mock.patch.object(ledger, "Ledger") as bound:
+            with mock.patch.object(ledger_core, "Ledger") as bound:
                 lg = bound.return_value
                 lg.spec, lg.states = orgspec.OrgSpec(), {"same_seq": {"archived": {"name": "归档"}}}
                 lg.item.side_effect = item or (lambda i: {"state": states.get(i, "执行中"), "type": "same_seq", "name": "需求包 %s" % i})
@@ -3198,7 +3200,7 @@ class PoolRouteTest(PoolProjectCase):
         self.assertNotIn("#2102", text)
         self.assertIn("这是预览，认领表和研究员任务清单都没有动。加 --apply 才写。", text)
         self.assertEqual(self.pool(), before)
-        code, text = run(True, item=mock.Mock(side_effect=ledger.LedgerError("命令失败（退出码 1）：meegle workitem get\n502")))
+        code, text = run(True, item=mock.Mock(side_effect=ledger_core.LedgerError("命令失败（退出码 1）：meegle workitem get\n502")))
         self.assertEqual(code, 1)
         self.assertIn("出错：台账读不到，认领表和研究员任务清单都没有动", text)
         self.assertEqual(self.pool(), before)
@@ -3260,11 +3262,11 @@ class PoolRouteTest(PoolProjectCase):
 
         def item(i):
             if state[i] == "删了":
-                raise ledger.LedgerError("命令失败（退出码 1）：meegle workitem get\nerror=WorkItemNotFound,message=work item %s was not found." % i)
+                raise ledger_core.LedgerError("命令失败（退出码 1）：meegle workitem get\nerror=WorkItemNotFound,message=work item %s was not found." % i)
             return {"state": state[i], "type": "same_seq", "name": "需求包 %s" % i}
 
         def bound():
-            patch = mock.patch.object(ledger, "Ledger")
+            patch = mock.patch.object(ledger_core, "Ledger")
             lg = patch.start().return_value
             self.addCleanup(patch.stop)
             lg.spec, lg.states = orgspec.OrgSpec(), {"same_seq": {"archived": {"name": "归档"}}}
@@ -3381,27 +3383,27 @@ class LedgerLockTest(ProjectCase):
         path = os.path.join(self.tmp, "feishu", ".ledger.lock")
         with open(path, "a+") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
-            old = ledger.LOCK_WAIT
-            ledger.LOCK_WAIT = 0
+            old = ledger_core.LOCK_WAIT
+            ledger_core.LOCK_WAIT = 0
             try:
                 with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": self.tmp}):
-                    code, out = self.run_quiet(ledger.main, ["comment", "2101", "--text", "x", "--apply"])
+                    code, out = self.run_quiet(workitem.main, ["comment", "2101", "--text", "x", "--apply"])
             finally:
-                ledger.LOCK_WAIT = old
+                ledger_core.LOCK_WAIT = old
                 fcntl.flock(f, fcntl.LOCK_UN)
         self.assertEqual(code, 1)
         self.assertIn("台账正在被别的写入占用", out)
 
     def test_previews_take_no_lock(self):
-        with mock.patch.object(ledger, "write_lock", side_effect=AssertionError("locked")):
+        with mock.patch.object(ledger_core, "write_lock", side_effect=AssertionError("locked")):
             with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": self.tmp}):
-                code, _ = self.run_quiet(ledger.main, ["--offline", "comment", "2101", "--text", "x"])
+                code, _ = self.run_quiet(workitem.main, ["--offline", "comment", "2101", "--text", "x"])
         self.assertEqual(code, 0)
 
     def test_ids_are_replaced_whole(self):
         path = os.path.join(self.tmp, "feishu", "ids.json")
-        with mock.patch.object(ledger.os, "replace", wraps=os.replace) as rep:
-            ledger.save_json(path, {"schema": "x"})
+        with mock.patch.object(ledger_core.os, "replace", wraps=os.replace) as rep:
+            ledger_core.save_json(path, {"schema": "x"})
         rep.assert_called_once()
         self.assertEqual(json.loads(open(path, encoding="utf-8").read()), {"schema": "x"})
         self.assertEqual([n for n in os.listdir(os.path.dirname(path)) if n.endswith(".tmp")], [])
@@ -3571,7 +3573,7 @@ class PythonVersionTest(unittest.TestCase):
 
 class PoolReviewIdentityTest(PoolProjectCase):
     """Fixes from the adversarial review of 0.5.0: identity and hard rules."""
-    W = "python3.12 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"
+    W = "python3.12 -I .claude/solo-lab/bin/workitem.py register packages/drafts/alg/x.md --apply"
 
     def setUp(self):
         super().setUp()
@@ -3938,7 +3940,7 @@ class PoolReviewStateTest(PoolProjectCase):
                          {"work_item_id": "2202", "work_item_status": "待开工", "name": "需求包（Alg-p2-01）：阶段二"}],
                 "cross": [{"work_item_id": "2301", "work_item_status": "待接单", "name": "需求包（Alg-p2-01）：要数据"}]}
         names = {"waiting": "待接单", "queued": "待开工"}
-        with mock.patch.object(ledger, "Ledger") as bound, \
+        with mock.patch.object(ledger_core, "Ledger") as bound, \
                 mock.patch.object(ledger, "query", side_effect=lambda lg, name, seq=None, as_json=False: rows[name]):
             bound.return_value.state.side_effect = lambda wid, slot: names[slot]
             mine = route.queue_rows(self.tmp, json.loads(self.read(".claude/hooks/policy.json")),
@@ -4000,7 +4002,7 @@ class FirstReviewTest(ProjectCase):
 
 class PoolSecondReviewTest(PoolProjectCase):
     """Fixes from the second adversarial review of 0.5.0."""
-    W = "python3.12 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"
+    W = "python3.12 -I .claude/solo-lab/bin/workitem.py register packages/drafts/alg/x.md --apply"
 
     def setUp(self):
         super().setUp()
@@ -4118,7 +4120,7 @@ class PoolSecondReviewTest(PoolProjectCase):
         rows = {"open": [], "cross": [{"work_item_id": "2301", "work_item_status": "待接单", "name": "需求包（Product-p2-01）：要数据"},
                                       {"work_item_id": "2302", "work_item_status": "待接单", "name": "需求包（Product-p2-01）：要标注"}]}
         names = {"waiting": "待接单", "queued": "待开工"}
-        with mock.patch.object(ledger, "Ledger") as bound, \
+        with mock.patch.object(ledger_core, "Ledger") as bound, \
                 mock.patch.object(ledger, "query", side_effect=lambda lg, name, seq=None, as_json=False: rows[name]):
             bound.return_value.state.side_effect = lambda wid, slot: names[slot]
             entry = route.queue_rows(self.tmp, json.loads(self.read(".claude/hooks/policy.json")),
@@ -4196,7 +4198,7 @@ class SecondReviewSetupTest(ProjectCase):
 
 class PoolThirdReviewTest(PoolProjectCase):
     """Fixes from the third, narrow review of 0.5.0."""
-    W = "python3.12 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"
+    W = "python3.12 -I .claude/solo-lab/bin/workitem.py register packages/drafts/alg/x.md --apply"
 
     def setUp(self):
         super().setUp()
@@ -4618,7 +4620,7 @@ class DeliveryTextTest(PoolProjectCase):
                       "照决定执行，执行完马上请书记员归档`", scribe)
         self.assertIn("执行方是研究员的（包头“研究员要做的事”写着要他亲手做什么），不另发，入口按清单列给研究员；他做完了才归档", scribe)
         self.assertIn("归档的登记请求要写“由 研究员 提出”，带研究员说做完了的原话", scribe)
-        self.assertIn("归档前先用 `ledger.py comment` 记下研究员做了什么", scribe)
+        self.assertIn("归档前先用 `workitem.py comment` 记下研究员做了什么", scribe)
         decisions = texts["org/decisions.md"]
         self.assertIn("每条决策走三步：待决定、待执行（用 2.1.0 及以前的模板建的空间里叫“已决定”）、归档（已执行）。研究员定了，书记员就确认“决定”这一步，并通知执行方", decisions)
         self.assertIn("决策包包头“执行方”写这条决策定下以后由谁执行，“研究员”或者执行它的会话名，多半是发出方", decisions)
@@ -4717,7 +4719,7 @@ class HookScopeTest(PoolProjectCase):
     OWNED = ("rm .claude/state/gates.json", "echo '{}' > .claude/state/gates.json", "cp /tmp/forged.json .claude/state/gates.json",
              "mv .claude/state/gates.json /tmp/g.json", "rm .claude/state/pool.json", "echo x > .claude/hooks/policy.json",
              "sed -i '' 's/x/y/' .claude/settings.json", "cat > .claude/hooks/guard.py <<'EOF'\nimport sys\nEOF", "rm -rf .claude")
-    LEDGER = "python3.12 -I .claude/solo-lab/bin/ledger.py archive 2101 --apply"
+    LEDGER = "python3.12 -I .claude/solo-lab/bin/workitem.py archive 2101 --apply"
     DOCS = "lark-cli docs +update --doc x --command append --content hi --as user"
     MEEGLE = "meegle workitem update --params '{}'"
     WRAPS = ("%s", "function f { %s; }; f", "function f\n{\n  %s\n}\nf", "f() { %s; }; f", "command %s", "command -p %s", "command -- %s",
@@ -4789,7 +4791,7 @@ class HookScopeTest(PoolProjectCase):
         for cat in listed["categories"]:
             self.assertFalse({"match", "paths", "how"} & set(cat), cat["name"])
         allow = json.loads(self.read(".claude/settings.json"))["permissions"]["allow"]
-        self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/ledger.py revise *)", allow)
+        self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/docs.py revise *)", allow)
 
     def test_the_commands_1_0_4_stopped_get_no_answer(self):
         for cmd in self.LISTED + self.PROTECTED + self.OWNED:
@@ -4828,7 +4830,7 @@ class HookScopeTest(PoolProjectCase):
         """A ledger.py write, a lark-cli write and a meegle write, each plain and wrapped (a function written either
         way, command -p, exec -a, time -p, env -S, sshpass, sudo, a shell, eval, after cd -- or pushd): denied in
         every session but the scribe's, asked in the researcher's own."""
-        for write, why in ((self.LEDGER, "不能运行 ledger.py archive"), (self.DOCS, "不能执行写命令 docs +update"),
+        for write, why in ((self.LEDGER, "不能运行 workitem.py archive"), (self.DOCS, "不能执行写命令 docs +update"),
                            (self.MEEGLE, "不能执行写命令 workitem update")):
             for cmd in self.wrapped(write):
                 out = self.bash("s-alg1", cmd)[1]
@@ -4908,7 +4910,7 @@ class HookScopeTest(PoolProjectCase):
                  ("s-scribe", ledger_write + " && sudo ls"), ("s-scribe", ledger_write + " && rm -rf repo/eval"),
                  ("s-scribe", scribe_doc + " && rm -rf repo/eval"), ("s-scribe", "sudo " + ledger_write),
                  ("s-scribe", ledger_write + " > /tmp/out.txt"), ("s-scribe", "function f { %s; }; f" % ledger_write),
-                 ("s-scribe", "sh -c %s" % shlex.quote(ledger_write)), ("s-scribe", "python3 tools/ledger.py archive 2101 --apply"),
+                 ("s-scribe", "sh -c %s" % shlex.quote(ledger_write)), ("s-scribe", "python3 tools/workitem.py archive 2101 --apply"),
                  ("s-researcher", read + " && sudo rm -rf /usr/local/lib/x"), ("s-researcher", "sudo " + read)]
         for sid, cmd in cases:
             self.left_to_claude_code(sid, cmd)
@@ -4955,7 +4957,7 @@ class HookScopeTest(PoolProjectCase):
         for inner, why in (("meegle workitem update --work-item-id 2101 --fields '[]'", "不能执行写命令 workitem update"),
                            ("meegle workitem create --work-item-type decision --fields '[]'", "不能执行写命令 workitem create"),
                            ("meegle workflow transition --work-item-id 2101 --node-id started --action confirm", "不能执行写命令 workflow transition"),
-                           (self.DOCS, "不能执行写命令 docs +update"), (self.LEDGER, "不能运行 ledger.py archive")):
+                           (self.DOCS, "不能执行写命令 docs +update"), (self.LEDGER, "不能运行 workitem.py archive")):
             for cmd in ("echo `%s`", "X=`%s`", "`%s`", "OUT=`%s`; echo $OUT", "echo $(%s)", "echo \"`%s`\"", "cat <<EOF\n`%s`\nEOF"):
                 out = self.bash("s-alg1", cmd % inner)[1]
                 self.assertEqual(out.get("permissionDecision"), "deny", cmd % inner)
@@ -5054,7 +5056,7 @@ class HookScopeTest(PoolProjectCase):
                       self.read("CLAUDE.md"))
 
     def test_revise_is_the_scribes(self):
-        cmd = "python3.12 -I .claude/solo-lab/bin/ledger.py revise 2140 packages/drafts/infra/v2.md --note '去掉沙箱' --apply"
+        cmd = "python3.12 -I .claude/solo-lab/bin/docs.py revise 2140 packages/drafts/infra/v2.md --note '去掉沙箱' --apply"
         self.assertEqual(self.bash("s-scribe", cmd)[1].get("permissionDecision"), "allow")      # revise is the scribe's, like every write
         self.assertEqual(self.bash("s-alg2", cmd)[1].get("permissionDecision"), "deny")
         self.assertEqual(self.bash("s-researcher", cmd)[1].get("permissionDecision"), "ask")
@@ -5064,8 +5066,8 @@ class HookScopeTest(PoolProjectCase):
         self.assertEqual(guard.ledger_write("python3 tools/my_ledger.py revise 2140 v2.md --note x --apply", self.tmp), "revise")
         self.assertEqual(guard.ledger_write("python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['python3', '.claude/solo-lab/bin/ledger.py', "
                                             "'revise', '2140', 'v2.md'])\nEOF", self.tmp), "（代码里调用了 ledger.py 的写命令）")
-        self.assertEqual(guard.ledger_write("function f { python3 .claude/solo-lab/bin/ledger.py revise 2140 v2.md --apply; }; f", self.tmp), "revise")
-        self.assertEqual(guard.ledger_write("\"/opt/My Tools/python3\" .claude/solo-lab/bin/ledger.py archive 2140 --apply", self.tmp), "archive")
+        self.assertEqual(guard.ledger_write("function f { python3 .claude/solo-lab/bin/docs.py revise 2140 v2.md --apply; }; f", self.tmp), "revise")
+        self.assertEqual(guard.ledger_write("\"/opt/My Tools/python3\" .claude/solo-lab/bin/workitem.py archive 2140 --apply", self.tmp), "archive")
         self.assertEqual(guard.command_runs("function g { git stash; }; cd -- repo && command -p git pull", self.tmp, self.tmp),
                          [(["git", "stash"], self.tmp), (["git", "pull"], os.path.join(self.tmp, "repo"))])
 
@@ -5105,7 +5107,7 @@ class FreezePromptTest(PoolProjectCase):
         super().setUp()
         self.started_pool()
         self.fake = fake_space.FakeSpace()
-        self.quiet(ledger.register, self.lg(), os.path.join(self.tmp, setup.FIRST_TASK))
+        self.quiet(workitem.register, self.lg(), os.path.join(self.tmp, setup.FIRST_TASK))
 
     def lg(self):
         return fake_space.SimLedger(self.tmp, "apply", self.fake, ())
@@ -5120,7 +5122,7 @@ class FreezePromptTest(PoolProjectCase):
         path = os.path.join(self.tmp, "packages", "drafts", "infra", name)
         with open(path, "w", encoding="utf-8") as f:
             f.write(text)
-        return self.quiet(ledger.register, self.lg(), path)
+        return self.quiet(workitem.register, self.lg(), path)
 
     def context(self, sid, text):
         return self.prompt(sid, text)[1].get("additionalContext", "")
@@ -5136,7 +5138,7 @@ class FreezePromptTest(PoolProjectCase):
         for sid in ("s-alg2", "s-alg1", "s-alg0", "s-q1", "s-entry", "s-scribe", "s-researcher"):
             for cmd in ("open -a Docker", "docker build -t cand:1 .", "scp jobs.tar campus-hpc:~/"):
                 self.assertEqual(self.bash(sid, cmd), (0, {}), (sid, cmd))
-        self.quiet(ledger.confirm, self.lg(), first, "研究员", ["决定内容=本机 Docker", "决定人=研究员"], option="本机 Docker")
+        self.quiet(workitem.confirm, self.lg(), first, "研究员", ["决定内容=本机 Docker", "决定人=研究员"], option="本机 Docker")
         self.assertNotIn("冻结", self.context("s-alg1", "继续"))
         self.assertEqual(self.bash("s-alg1", "open -a Docker"), (0, {}))
 
@@ -5189,7 +5191,7 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
         self.assertIn("找出没归档的研究任务（`ledger.py query tasks`），和手上工作项所属的研究任务", entry)
         for part in ("**状态包由你维护。** 研究任务主文档末尾的“状态包”记这条任务现在的状态：上游卡在哪条决策、哪些实验条件已经定死、哪些工作暂停了。",
                      "工作项状态变化、研究员定下新决策、暂停或恢复某类工作时，你改写它：先 `ledger.py status <研究任务 ID>` 读现在的",
-                     "请书记员 `ledger.py status-block <研究任务 ID> --file <文件>` 整段替换。"):
+                     "请书记员 `docs.py status-block <研究任务 ID> --file <文件>` 整段替换。"):
             self.assertIn(part, entry)
         for other in ("alg-p2", "pmo-router", "pmo-scribe"):
             self.assertNotIn("状态包由你维护", self.read(".claude/agents/%s.md" % other), other)
@@ -5201,7 +5203,7 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
         with open(os.path.join(ROOT, "skills", "entry", "SKILL.md"), encoding="utf-8") as f:
             skill = f.read()
         self.assertIn("研究任务的状态包由你维护", skill)
-        self.assertIn("`ledger.py status-block <研究任务 ID> --file <文件>` 整段替换", skill)
+        self.assertIn("`docs.py status-block <研究任务 ID> --file <文件>` 整段替换", skill)
         self.assertIn("压缩上下文以后、接着干活之前，先读研究任务的状态包", skill)
 
     def test_the_role_text_still_fits_with_the_line_after_a_compaction(self):
@@ -5590,20 +5592,20 @@ class TextsAfterTheGatesTest(PoolProjectCase):
                 ("skills/packages/references/principles.md", "只要有一个选项要研究员亲手做，就写“研究员”，研究员选了不用他动手的选项，书记员确认“决定”时用 `--executor` 改成会话。"),
                 ("skills/packages/references/examples.md", "书记员确认“决定”时加 `--executor Infra-p2-01`，把执行方改成会话。"),
                 ("pmo-scribe.md", "确认“决定”时加 `--executor <会话名>`，只收各序列的 +2、入口和路由。"),
-                ("pmo-scribe.md", "要把执行方改成研究员的，脚本会拒绝：请发出方写下一版，用 `ledger.py revise`。"),
-                ("pmo-scribe.md", "先 `ledger.py rollback <ID> --to 决定 --reason '<原因>' --by 研究员`，再带 `--executor` 确认。"),
+                ("pmo-scribe.md", "要把执行方改成研究员的，脚本会拒绝：请发出方写下一版，用 `docs.py revise`。"),
+                ("pmo-scribe.md", "先 `workitem.py rollback <ID> --to 决定 --reason '<原因>' --by 研究员`，再带 `--executor` 确认。"),
                 ("pmo-p2.md", "包头执行方是研究员、他选的选项却不用他动手的，请求里写明改由哪个会话执行（各序列的 +2、入口或路由），书记员确认时加 `--executor <会话名>`。"),
                 ("alg-p2.md", "执行方写会话的只收各序列的 +2、入口和路由，要下级干的活由你用需求包委托。"),
                 ("alg-p2.md", "入口请书记员确认“决定”时用 `--executor` 把执行方改成会话。"),
                 ("CLAUDE.md", "执行方写会话的只收各序列的 +2、入口和路由；只要有一个选项要研究员亲手做就写“研究员”，"
                               "他选了不用他动手的选项，书记员确认“决定”时用 `--executor` 把执行方改成会话。"),
-                ("org/decisions.md", "书记员确认“决定”时用 `ledger.py confirm --executor <会话名>` 把执行方改成那个会话。"),
+                ("org/decisions.md", "书记员确认“决定”时用 `workitem.py confirm --executor <会话名>` 把执行方改成那个会话。"),
                 ("skills/ledger/SKILL.md", "可以加 `--executor <会话名>` 改执行方：包头“执行方”写的是研究员、研究员选的选项却不用他动手时用。"),
                 ("skills/ledger/SKILL.md", "`query queue` 不再把它列成等研究员执行。这条决策回滚到“待决定”时，执行方改回包头写的。"),
                 ("skills/ledger/references/commands.md", "| `--executor <会话名>` | 只用在决策的“决定”这一步，可以不加：把执行方改成这个会话 |"),
                 ("skills/ledger/references/commands.md", "`--executor` 不收“研究员”：要把执行方改成研究员，请发出方写下一版"),
                 ("skills/entry/SKILL.md", "- 执行方：<包头写的是研究员、他选的选项却不用他动手时，写改由哪个会话执行；别的情况不写这一行>"),
-                ("docs/使用说明.md", "书记员确认“决定”时把执行方改成它（`ledger.py confirm --executor`），这条决策就不再列成等你执行。")):
+                ("docs/使用说明.md", "书记员确认“决定”时把执行方改成它（`workitem.py confirm --executor`），这条决策就不再列成等你执行。")):
             self.assertIn(part, texts[name], name)
 
     def test_the_side_that_runs_the_experiment_has_its_own_word(self):
