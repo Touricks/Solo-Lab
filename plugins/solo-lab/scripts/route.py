@@ -32,8 +32,8 @@ import ledger  # noqa: E402
 import ledger_core  # noqa: E402
 import pool  # noqa: E402
 
-ID_RE = re.compile(r"#(\d{3,})|(?<![\d-])(\d{9,12})(?!\d)")
-SESSION_RE = re.compile(r"(?<![\w-])([A-Za-z]+-[pP][0-2]-\d+)(?![\w-])")
+ID_RE = re.compile(r"#(\d{3,}(?:-\d{1,2}(?![\d-]))?)|(?<![\d-])(\d{9,12})(?!\d)")      # #2101; #2101-3, a task without a work item
+SESSION_RE = re.compile(r"(?<![\w-])([A-Za-z]+-[pP][0-2]-\d+(?:-\d{1,2})?)(?![\w-])")
 # guard.jsonl's agent_turn_gate: what guard.py did to a question in a turn another session woke
 AGENT_TURN_GATES = ("stripped", "denied", "allowed_urgent")
 
@@ -57,7 +57,7 @@ def classify_text(spec, root, text, offline):
     ids = [a or b for a, b in ID_RE.findall(text)]
     sessions = SESSION_RE.findall(text)
     for s in sessions:
-        m = re.match(r"[A-Za-z]+-[pP]0-(\d{3,})$", s)        # Alg-p0-2101 names work item 2101; Alg-p0-01 is a pool slot
+        m = re.match(r"[A-Za-z]+-[pP]0-(\d{3,}(?:-\d{1,2})?)$", s)   # Alg-p0-2101 names work item 2101; Alg-p0-01 is a pool slot
         if m and m.group(1) not in ids:
             ids.append(m.group(1))
     if ids or sessions:
@@ -65,6 +65,16 @@ def classify_text(spec, root, text, offline):
         for item_id in ids:
             if lg is None:
                 return result(spec, "R1", "带工作项 ID #%s（离线，没核对是否存在）" % item_id, work_item=item_id)
+            if ledger_core.is_local(item_id):          # a task a +1 handed to a +0: no work item, a local receipt
+                try:
+                    rec = ledger_core.local_task(lg, item_id)[1]
+                except ledger_core.LedgerError as e:
+                    return result(spec, "R3", "#%s 查不到：%s" % (item_id, str(e)[:120]), work_item=item_id)
+                if rec.get("state") == ledger_core.LOCAL_ACCEPTED:
+                    return result(spec, "R3", "#%s 已经验收，不能直接续上" % item_id, work_item=item_id)
+                owner = rec.get("receiver") or rec.get("by")
+                return result(spec, "R1", "#%s 是没建工作项的任务，状态“%s”" % (item_id, rec.get("state") or ledger_core.LOCAL_OPEN),
+                              work_item=item_id, session=owner, pool=pool_info(root, owner, item_id))
             try:
                 it = lg.item(item_id)
             except ledger_core.LedgerError as e:

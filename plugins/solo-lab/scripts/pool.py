@@ -52,8 +52,10 @@ import os
 import re
 
 OPENING_RE = re.compile(r"^\s*认领\s*([a-z]+-p2)\s*[（(]\s*会话名\s*[：:]?\s*([A-Za-z]+-p2-\d+)\s*[)）]")
-NAME_RE = re.compile(r"^([A-Za-z]+)-p([0-2])-(\d+)$")
-NAME_IN_TEXT = r"[A-Za-z]+-[pP][0-2]-\d+"
+NAME_RE = re.compile(r"^([A-Za-z]+)-p([0-2])-(\d+(?:-\d{1,2})?)$")     # a +0's work name may end in a task number: Alg-p0-2101-3
+NAME_IN_TEXT = r"[A-Za-z]+-[pP][0-2]-\d+(?:-\d{1,2}(?!\d))?"
+# A work item ID, or the number of a task without a work item (1.1.0: what a +1 hands to a +0), <ID>-<n>.
+ITEM_IN_TEXT = r"\d{3,}(?:-\d{1,2}(?![\d-]))?"
 HEADER_LINES = 5                      # a message header starts one of the first non-empty lines
 REATTACH_WINDOW = datetime.timedelta(seconds=60)
 STALE_BUSY = datetime.timedelta(minutes=15)
@@ -404,7 +406,7 @@ def name_map(policy):
 
 def canonical(policy, name):
     """Alg-p1-01 for alg-p1-01 or ALG-P1-01; None when the name names no role."""
-    m = re.match(r"^([A-Za-z]+)-[pP]([0-2])-(\d+)$", (name or "").strip())
+    m = re.match(r"^([A-Za-z]+)-[pP]([0-2])-(\d+(?:-\d{1,2})?)$", (name or "").strip())
     if not m:
         return None
     role = name_map(policy).get((m.group(1).lower(), int(m.group(2))))
@@ -423,15 +425,17 @@ def role_of(policy, name):
 
 def is_slot(name):
     """+1 and +2 names are pool slots; a +0 name is a slot with two digits (Alg-p0-01)
-    and a work name with three or more (Alg-p0-2101, after the work item ID)."""
+    and a work name with three or more (Alg-p0-2101, after the work item ID; Alg-p0-2101-3, after the number
+    of a task without a work item)."""
     m = NAME_RE.match(name or "")
-    return bool(m) and (m.group(2) != "0" or len(m.group(3)) == 2)
+    return bool(m) and "-" not in m.group(3) and (m.group(2) != "0" or len(m.group(3)) == 2)
 
 
 def work_item_of(name):
-    """The work item ID in a +0 work name (Alg-p0-2101 → 2101); None for any other name."""
+    """The work item ID in a +0 work name (Alg-p0-2101 → 2101), or the task number (Alg-p0-2101-3 → 2101-3);
+    None for any other name."""
     m = NAME_RE.match(name or "")
-    if m and m.group(2) == "0" and len(m.group(3)) >= 3:
+    if m and m.group(2) == "0" and ("-" in m.group(3) or len(m.group(3)) >= 3):
         return m.group(3)
     return None
 
@@ -761,8 +765,8 @@ def opening_permit(root, policy, sid, desk, prompt):
 # -------------------------------------------------------------- messages
 def header_re(policy):
     names = sorted((policy.get("msg") or {}).values(), key=len, reverse=True)
-    return re.compile(r"^\s*(?:\*\*)?(?:[（(【]重发[^）)】]*[）)】]\s*)?【(%s)(?:\s*#(\d{3,}))?[^】]*】\s*(?:(%s)\s*(?:→|->)\s*(%s))?" % (
-        "|".join(re.escape(n) for n in names), NAME_IN_TEXT, NAME_IN_TEXT))
+    return re.compile(r"^\s*(?:\*\*)?(?:[（(【]重发[^）)】]*[）)】]\s*)?【(%s)(?:\s*#(%s))?[^】]*】\s*(?:(%s)\s*(?:→|->)\s*(%s))?" % (
+        "|".join(re.escape(n) for n in names), ITEM_IN_TEXT, NAME_IN_TEXT, NAME_IN_TEXT))
 
 
 def parse_message(policy, text):
@@ -780,7 +784,7 @@ def parse_message(policy, text):
             continue
         p0 = re.search(r"会话名[：:]\s*(%s)" % NAME_IN_TEXT, text)
         named = re.search(r"【%s[^】]*】" % re.escape(m.group(1)), line)       # 【登记回执 #2140 / #2141】: one answer for several items
-        return {"kind": kinds[m.group(1)], "id": m.group(2), "ids": re.findall(r"#(\d{3,})", named.group(0)) if named else [],
+        return {"kind": kinds[m.group(1)], "id": m.group(2), "ids": re.findall(r"#(%s)" % ITEM_IN_TEXT, named.group(0)) if named else [],
                 "from": canonical(policy, m.group(3)) or m.group(3), "to": canonical(policy, m.group(4)) or m.group(4),
                 "p0_name": canonical(policy, p0.group(1)) if p0 else None, "line": line.strip()[:200]}
     return None
@@ -920,7 +924,8 @@ def receive_checks(policy, root, pool, msg, me):
             sender, sender_claim["role"], me["name"], me["role"], names.get(kind, kind)))
     routing = sender_claim and sender_claim["role"] == policy.get("entry_role") and me["role"] == policy.get("router_role")
     if kind == "assign" and item and not receipt_exists(root, item):
-        out.append("#%s 在 packages/sent/ 里没有登记回执；委托要先登记，先跟委托方确认" % item)
+        out.append(("#%s 在 packages/sent/ 里没有回执；这是没建工作项的任务，派活的会话要先运行 docs.py upload 取得编号，先跟委托方确认" if "-" in item else
+                    "#%s 在 packages/sent/ 里没有登记回执；委托要先登记，先跟委托方确认") % item)
     if kind == "assign" and not item and not routing:
         out.append("委托消息没写工作项 ID；先跟委托方确认是否已登记")
     if kind == "assign" and (policy["agents"].get(me["role"]) or {}).get("rank") == 0 and not msg.get("p0_name"):
@@ -1011,7 +1016,8 @@ ENTRY_NOTHING = ENTRY_COMPACTED + "用 ledger.py query tasks 列出没归档的�
 HINT_FAILED = "上下文刚压缩过。没能从本地回执查出手上工作项所属的研究任务（%s）：照角色说明里“压缩上下文以后”那一条自己找，找不到就说一句“跳过”再继续。"
 
 
-RECEIPT_NAME = re.compile(r"(\d+)(?:-.*)?\.json$")       # <ID>.json, <ID>-<draft file>.json; not reply-<ID>-….json
+# <ID>.json, <ID>-<draft file>.json; <ID>-<n>.json is a task without a work item (its own number); not reply-<ID>-….json
+RECEIPT_NAME = re.compile(r"(\d+(?:-\d{1,2})?)(?:-.*)?\.json$")
 
 
 def receipt_files(root):
@@ -1058,7 +1064,7 @@ def research_task_of(root, item_id, files=None, seen=None):
     item, walked = str(item_id or "").lstrip("#"), set()
     files = receipt_files(root) if files is None else files
     for _ in range(TASK_HOPS):
-        if not item.isdigit() or item in walked:
+        if not re.fullmatch(r"\d+(?:-\d{1,2})?", item) or item in walked:      # an ID, or the number of a task without a work item
             return None
         walked.add(item)
         rec = registration_receipt(root, item, files, seen)
@@ -1089,7 +1095,7 @@ def status_hint(root, items, entry=False):
         ids = []
         for i in items or []:
             i = str(i or "").lstrip("#")
-            if i.isdigit() and i not in ids:
+            if re.fullmatch(r"\d+(?:-\d{1,2})?", i) and i not in ids:      # an ID, or the number of a task without a work item
                 ids.append(i)
         tasks, unknown, files, seen = {}, [], receipt_files(root) if ids else {}, {}       # the folder is listed once
         for i in ids:

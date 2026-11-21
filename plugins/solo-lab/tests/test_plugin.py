@@ -3136,6 +3136,52 @@ class PoolRouteTest(PoolProjectCase):
         _, text = self.route("pool", "--role", "pmo-scribe", sid="s-alg2")
         self.assertIn("已到上限 1", text)
 
+    def test_a_task_without_a_work_item_goes_by_its_number(self):
+        """1.1.0: what a +1 hands to a +0 has no work item. It goes by <the item it belongs to>-<n> wherever a work
+        item's ID goes: the header of a message, the +0's work name, the receipt, the table of who holds what."""
+        policy = json.loads(self.read(".claude/hooks/policy.json"))
+        msg = pool_lib.parse_message(policy, "【委托 #2101-3】Alg-p1-01 → Alg-p0-01：需求包 x.md\n会话名：Alg-p0-2101-3")
+        self.assertEqual((msg["kind"], msg["id"], msg["p0_name"]), ("assign", "2101-3", "Alg-p0-2101-3"))
+        self.assertEqual(pool_lib.parse_message(policy, "【交付 #2101-2103】Alg-p1-01 → Alg-p2-01")["id"], "2101")   # a range of items, not a number
+        self.assertEqual(pool_lib.parse_message(policy, "【登记回执 #2140 / #2101-3】")["ids"], ["2140", "2101-3"])
+        self.assertEqual([pool_lib.work_item_of(n) for n in ("Alg-p0-2101-3", "Alg-p0-2101", "Alg-p0-01", "Alg-p1-01")],
+                         ["2101-3", "2101", None, None])
+        self.assertEqual([pool_lib.is_slot(n) for n in ("Alg-p0-2101-3", "Alg-p0-2101", "Alg-p0-01", "Alg-p1-01")], [False, False, True, True])
+        self.assertEqual(pool_lib.canonical(policy, "alg-p0-2101-3"), "Alg-p0-2101-3")
+        rx = orgspec.OrgSpec().message_header_re()
+        self.assertEqual(rx.search("【委托 #2101-3】Alg-p1-01 → Alg-p0-2101-3").groups(), ("委托", "2101-3", "Alg-p1-01", "Alg-p0-2101-3"))
+        out = route.classify_text(orgspec.OrgSpec(), self.tmp, "【进展 #2101-3】重评跑完了", True)
+        self.assertEqual((out["row"], out["work_item"]), ("R1", "2101-3"))
+        # its receipt, among the registration receipts
+        sent = os.path.join(self.tmp, "packages", "sent")
+        os.makedirs(sent, exist_ok=True)
+        for name, rec in (("2101.json", {"work_item_id": "2101", "status": "registered", "type": "same_seq", "task": "3000"}),
+                          ("2101-d.md.json", {"work_item_id": "2101", "status": "registered", "type": "same_seq", "task": "3000"}),
+                          ("2101-3.json", {"work_item_id": "2101-3", "status": "registered", "local": True, "type": "same_seq",
+                                           "source": "2101", "state": "执行中", "title": "重评节点", "by": "Alg-p1-01"}),
+                          ("2101-4.json", {"work_item_id": "2101-4", "status": "registered", "local": True, "type": "same_seq",
+                                           "source": "2101", "state": "执行中", "title": "补一组对照", "by": "Alg-p1-01"}),
+                          ("2101-5.json", {"work_item_id": "2101-5", "status": "registered", "local": True, "type": "same_seq",
+                                           "source": "2101", "state": "已验收", "title": "跑冒烟", "by": "Alg-p1-01"})):
+            with open(os.path.join(sent, name), "w", encoding="utf-8") as f:
+                json.dump(rec, f, ensure_ascii=False)
+        self.assertEqual(pool_lib.registration_receipt(self.tmp, "2101-3")["source"], "2101")
+        self.assertEqual(pool_lib.registration_receipt(self.tmp, "2101")["task"], "3000")
+        self.assertEqual(pool_lib.research_task_of(self.tmp, "2101-3"), "3000")          # through the item it belongs to
+        self.assertTrue(pool_lib.receipt_exists(self.tmp, "2101-3"))
+        # the +0 that takes it holds it under the number; one that was never uploaded is asked about
+        _, out = self.prompt("s-alg0", "【委托 #2101-3】Alg-p1-01 → Alg-p0-01：需求包 x.md\n会话名：Alg-p0-2101-3")
+        self.assertNotIn("没有回执", out.get("additionalContext", ""))
+        self.assertEqual(pool_lib.load(self.tmp)[0]["owners"].get("2101-3"), "Alg-p0-01")
+        _, out = self.prompt("s-alg0", "【委托 #2101-9】Alg-p1-01 → Alg-p0-01：需求包 y.md\n会话名：Alg-p0-2101-9")
+        self.assertIn("#2101-9 在 packages/sent/ 里没有回执；这是没建工作项的任务，派活的会话要先运行 docs.py upload 取得编号", out.get("additionalContext", ""))
+        # what the +1 has still to hand out: from the receipts and the dispatch log alone, offline too
+        code, text = self.route("--offline", "pool", "--queue", "Alg-p1-01", sid="s-alg1")
+        self.assertEqual(code, 0, text)
+        self.assertIn("- 还没派出去 #2101-4 补一组对照（没建工作项的任务：直接给 +0 发【委托 #2101-4】）", text)
+        self.assertNotIn("#2101-3 ", text)                                              # held by the +0
+        self.assertNotIn("#2101-5 ", text)                                              # accepted: over
+
     def test_owner_first_and_focus_skipped(self):
         self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p1-01：需求包 x.md")
         self.set_status("s-alg1", "idle")

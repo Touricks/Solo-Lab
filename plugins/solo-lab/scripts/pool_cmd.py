@@ -465,6 +465,19 @@ def queue_rows(root, policy, me, seq):
     return rows
 
 
+def local_waiting(root, pl, me):
+    """The tasks without a work item this claim handed out that nobody holds yet (1.1.0: what a +1 hands to a +0),
+    from the receipts packages/sent/<ID>-<n>.json and the dispatch log alone: nothing here asks Feishu."""
+    held = set(pl.get("owners") or {}) | set(pool.all_open_items(root, pl.get("owners")).get(me["name"], ({}, {}))[0])
+    out = []
+    for path in pool.files_in(os.path.join(root, "packages", "sent"), "*.json"):
+        rec = pool.load_json(path, {}) or {}
+        if isinstance(rec, dict) and rec.get("local") and rec.get("status") == "registered" and rec.get("by") == me["name"] \
+                and rec.get("state") == ledger_core.LOCAL_OPEN and str(rec.get("work_item_id")) not in held:
+            out.append(rec)
+    return out
+
+
 def queue_cmd(root, policy, name, offline=False):
     pl, _ = pool.load(root)
     me = pl["claims"].get(pool.canonical(policy, name) or name)
@@ -476,6 +489,10 @@ def queue_cmd(root, policy, name, offline=False):
     free = [r["name"] for r in rows if r["status"] in ("idle", "idle_bg") and not r["focus"] and r["name"] != me["name"]
             and pool.kind_allowed(policy, "assign", me["role"], r["role"])]
     print("能委托的空闲会话：%s" % ("、".join(free) or "无"))
+    handed = local_waiting(root, pl, me)
+    for rec in handed:
+        print("- 还没派出去 #%s %s（没建工作项的任务：直接给 +0 发【%s #%s】）" % (
+            rec.get("work_item_id"), rec.get("title") or "", (policy.get("msg") or {}).get("assign", "委托"), rec.get("work_item_id")))
     if offline:
         print("（离线，没查台账里待开工的工作项）")
         return 0
@@ -486,7 +503,7 @@ def queue_cmd(root, policy, name, offline=False):
         return 1
     for row in items:
         print("- %s #%s %s" % (row.get("work_item_status"), row.get("work_item_id"), row.get("name", "")))
-    if not items:
+    if not items and not handed:
         print("没有等你委托的工作项。没事就一句话结束本轮。")
     elif free:
         print("有等你委托的事、又有空闲会话：先请书记员确认“开工”这一步（跨序列需求是请对方 +2 接单），再委托出去。")
@@ -586,6 +603,12 @@ def item_end(lg, item):
     """What became of a work item: (state name, its name) when it is archived or terminated, ("已删除", "") when
     the space no longer has it, None while it is open. A ledger that cannot be read is LedgerError: an item
     that is gone and a ledger that does not answer are told apart by what the space says (WorkItemNotFound)."""
+    if ledger_core.is_local(item):                    # a task without a work item: over once it is accepted
+        try:
+            rec = ledger_core.local_task(lg, item)[1]
+        except ledger_core.LedgerError:
+            return "已删除", ""
+        return (rec.get("state"), rec.get("title") or "") if rec.get("state") == ledger_core.LOCAL_ACCEPTED else None
     try:
         it = lg.item(item)
     except ledger_core.LedgerError as e:

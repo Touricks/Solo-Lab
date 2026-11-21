@@ -12,6 +12,11 @@ printed as the request to send to the scribe.
     docs.py upload <交付包 draft>            a delivery: hung under the main document of the request it answers;
                                             the scribe's `workitem.py reply` fills the request's 交付包 field
     docs.py attach <ID> <field> <file>      a step's output document for one of the item's link fields
+    docs.py upload <执行关系的需求包>          what a +1 hands to a +0 has no work item (1.1.0): the package hangs
+                                            under the main document of the item it belongs to (--source) and
+                                            takes a number of its own, <source>-<n>; the +0's delivery hangs
+                                            under the package
+    docs.py accept <number> --result R      the +1's verdict on such a task, a line at the end of the package
     docs.py revise <ID> <draft> --note N    the next version of a 需求包 or 决策包: the main document's
                                             opening up to 状态包 replaced in place, a line in 交接记录
     docs.py status-block <ID> --file F      replace the 状态包 section (block_replace)
@@ -65,6 +70,8 @@ def upload(lg, path, source=None, doc=None):
         return upload_delivery(lg, d, path, doc)
     wid = kind or core.work_item_type(d)
     core.check_new(d, kind)
+    if wid == "same_seq" and d.rel == "execute":
+        return upload_local(lg, d, path, source, doc)
     names, owner_seq, owner = core.doc_owner(lg, None, d)
     rel = os.path.relpath(path, lg.root)
     core.must_be(lg, "上传这份文档", names=names, roles=first_sheet_roles(rel), seq=owner_seq, why="这份草稿的发出方是 %s，请它来上传" % owner)
@@ -137,6 +144,7 @@ def upload_delivery(lg, d, path, doc=None):
     core.must_be(lg, "上传这份交付包", names=[d.author], why="这份交付包的发出方是 %s，请它来上传" % d.author)
     parent_id = core.item_id_of(d.linked[0])
     rel = os.path.relpath(path, lg.root)
+    local = core.local_task(lg, parent_id) if core.is_local(parent_id) and lg.mode != "offline" else None
     rpath = core.receipt_file(lg, ["reply-%s-%s" % (parent_id, core.safe_name(path))], path)
     rec = (core.load_json(rpath, {}) or {}) if lg.mode != "offline" else {}
     rec = rec if isinstance(rec, dict) else {}
@@ -144,7 +152,13 @@ def upload_delivery(lg, d, path, doc=None):
     again = bool(earlier or rec.get("earlier"))        # not the first delivery of this request
     then = "接着给书记员发【%s】：请它运行 %sworkitem.py reply %s --apply 填“交付包”字段，再确认“执行”这一步。" % (
         spec.term("msg", "register_request"), RUN, rel)
+    if core.is_local(parent_id):                       # no work item: nothing for the scribe to fill in
+        then = "#%s 没有工作项，不用找书记员：接着给派活的会话 %s 发【%s #%s】，它验收后运行 docs.py accept %s。" % (
+            parent_id, (local[1].get("by") if local else None) or "<派活的会话>", spec.term("msg", "report"), parent_id, parent_id)
     if rec.get("status") == "uploaded" and rec.get("doc") and (rec.get("version") or 1) == d.version and not doc:
+        print("这份%s（第 %d 版）已经上传过，没有再传：%s\n%s" % (spec.pkg(d.pid), d.version, rec["doc"], then))
+        return rec["doc"]
+    if local and rec.get("status") == "registered" and rec.get("doc") and (rec.get("version") or 1) == d.version and not doc:
         print("这份%s（第 %d 版）已经上传过，没有再传：%s\n%s" % (spec.pkg(d.pid), d.version, rec["doc"], then))
         return rec["doc"]
     if earlier and rec.get("status") not in ("created", "uploaded"):     # handed in again; an unfinished run of this one just goes on
@@ -157,16 +171,22 @@ def upload_delivery(lg, d, path, doc=None):
         if not follows:
             raise core.LedgerError("#%s 已经收过第 %d 版%s（回执 %s），这一份写的是第 %d 版：%s" % (
                 parent_id, last, spec.pkg(d.pid), receipt, d.version, how))
-    it = lg.item(parent_id)
-    if it is not None and not it.get("type"):
-        raise core.LedgerError("认不出 #%s 的类型（type_key %s）；确认工作项 ID 没写错，或者先跑 space.py feishu --live --apply 重读类型" % (
-            parent_id, it.get("type_key")))
-    wid = (it and it.get("type")) or "same_seq"
-    if wid not in lg.contract.types_with("fields", "delivery_link"):
-        raise core.LedgerError("交付包答复的是同序列需求或跨序列需求，#%s 是%s" % (parent_id, spec.term("wi", wid)))
-    if again and it is not None and it["state"] in core.closed_states(lg):
-        raise core.LedgerError("#%s 已经是“%s”：工作项关闭以后不再重新交%s" % (parent_id, it["state"], spec.pkg(d.pid)))
-    node = lg.node_of(lg.doc_url(parent_id, it))
+    if core.is_local(parent_id):                       # under the package it answers; its state is the receipt's
+        task = local[1] if local else {}
+        if task.get("state") == core.LOCAL_ACCEPTED:
+            raise core.LedgerError("#%s 已经验收：验收以后不再重新交%s" % (parent_id, spec.pkg(d.pid)))
+        node = lg.node_of(task.get("doc")) if task.get("doc") else "<#%s 的需求包的节点>" % parent_id
+    else:
+        it = lg.item(parent_id)
+        if it is not None and not it.get("type"):
+            raise core.LedgerError("认不出 #%s 的类型（type_key %s）；确认工作项 ID 没写错，或者先跑 space.py feishu --live --apply 重读类型" % (
+                parent_id, it.get("type_key")))
+        wid = (it and it.get("type")) or "same_seq"
+        if wid not in lg.contract.types_with("fields", "delivery_link"):
+            raise core.LedgerError("交付包答复的是同序列需求或跨序列需求，#%s 是%s" % (parent_id, spec.term("wi", wid)))
+        if again and it is not None and it["state"] in core.closed_states(lg):
+            raise core.LedgerError("#%s 已经是“%s”：工作项关闭以后不再重新交%s" % (parent_id, it["state"], spec.pkg(d.pid)))
+        node = lg.node_of(lg.doc_url(parent_id, it))
     if not node:
         raise core.LedgerError("#%s 的主文档不是知识库文档，答复没处挂" % parent_id)
     title = spec.rules["naming"]["reply_doc"].replace("<答复包名>", spec.pkg(d.pid)) \
@@ -196,10 +216,114 @@ def upload_delivery(lg, d, path, doc=None):
         if rec.get("doc") or rec.get("docx"):
             raise core.LedgerError("%s\n文档已经建好，回执记在 %s；修好后重跑同一条命令，会接着用这份文档，不会再建一个" % (e, receipt))
         raise core.LedgerError("%s\n文档还没建，飞书里没有写入；修好后重跑同一条命令即可" % e)
-    remember(status="uploaded")
-    print(("上传：%s%s挂在 #%s 的主文档下：%s%s\n%s" if lg.mode == "apply" else "预览：会把%s%s挂在 #%s 的主文档下（%s）%s。\n%s") % (
-        spec.pkg(d.pid), "第 %d 版" % d.version if again else "", parent_id, link, "，上一版的文档留在原处" if again else "", then))
+    if local:                                          # the delivery is in: nothing else to write but the task's own state
+        remember(status="registered")
+        if lg.mode == "apply":
+            path_, task = local
+            task["deliveries"] = [x for x in task.get("deliveries") or [] if x.get("version") != d.version] + [
+                {"version": d.version, "doc": link, "by": d.author, "at": core.now(), "draft": rel}]
+            task.update(state=core.LOCAL_DELIVERED, updated_at=core.now())
+            core.save_json(path_, task)
+    else:
+        remember(status="uploaded")
+    where = "#%s 的需求包下面" % parent_id if core.is_local(parent_id) else "#%s 的主文档下" % parent_id
+    print(("上传：%s%s挂在 %s：%s%s\n%s" if lg.mode == "apply" else "预览：会把%s%s挂在 %s（%s）%s。\n%s") % (
+        spec.pkg(d.pid), "第 %d 版" % d.version if again else "", where, link, "，上一版的文档留在原处" if again else "", then))
     return link
+
+
+def upload_local(lg, d, path, source=None, doc=None):
+    """A 需求包 in the 执行 relation: what a +1 hands to a +0 (or a +2 where its sequence opened no +1). From 1.1.0
+    it has no work item and the scribe is not asked: the session that hands the task out uploads the package
+    under the main document of the work item it belongs to (--source, or the header's 来源工作项), and the
+    task takes the number <source>-<n>. The number goes into the document's title and 关联工作项 line, into the
+    draft, and into the receipt packages/sent/<number>.json, which keeps the task's state from then on
+    (执行中, 待验收 once a delivery is uploaded, 已验收). The messages about the task carry the number as they
+    carry a work item's ID, and the +0's work name ends in it. Run again on the same draft, nothing is created."""
+    spec = lg.spec
+    if not core.SESSION_NAME.match(d.author or ""):
+        raise core.LedgerError("发出方要带会话名，比如“算法 +1（Alg-p1-01）”")
+    core.must_be(lg, "上传这份需求包", names=[d.author], why="这份需求包的发出方是 %s，请它来上传" % d.author)
+    seq = core.new_item_sequence(lg, d, None, "same_seq")
+    rel = os.path.relpath(path, lg.root)
+    known = core.find_receipt(lg, path) if lg.mode != "offline" else None
+    if known and known.get("status") == "registered":
+        print("这份需求包已经上传过，编号 #%s，没有再传：%s" % (known.get("work_item_id"), known.get("doc")))
+        return known.get("doc")
+    source = core.item_id_of(source or d.source or (known or {}).get("source")) if (source or d.source or (known or {}).get("source")) else None
+    if not source or core.is_local(source):
+        raise core.LedgerError("执行关系的需求包要写它所属的下发需求包：--source <上级工作项 ID>，或者在包头的“关联工作项”一行后面写“；来源工作项 #<ID>”")
+    parent = core.parent_node(lg, "same_seq", seq, d.rel, source)
+    ref = (known or {}).get("work_item_id") or (core.next_local_ref(lg, source) if lg.mode == "apply" else "%s-<序号>" % source)
+    core.link_line(d.text, "#0", "0")                  # a 关联工作项 line that is no placeholder stops here
+    title = "%s｜%s" % (ref, core.ITEM_IN_TITLE.sub("", core.naming(spec, d, None)[1]))
+    body = core.with_status_sections(core.link_line(d.body_without_title(), "#%s（不建工作项，上级工作项 #%s）" % (ref, source), ref))
+    kinds = {"type": "same_seq", "relation": "execute", "local": True, "queue": False, "urgent": False, "version": d.version,
+             "title": d.task, "by": d.author, "receiver": d.receiver, "state": core.LOCAL_OPEN}
+    core.save_receipt(lg, path, ref, "created", kinds, source=source)
+    rec = dict(known or {})
+
+    def remember(**kw):
+        rec.update({k: v for k, v in kw.items() if v is not None})
+        core.save_receipt(lg, path, ref, "created", **kw)
+
+    def create():
+        return lg.create_doc(parent, title, body, created=lambda x: remember(docx=x, doc_unknown=False))
+
+    try:
+        url = core.main_document(lg, rec, doc, "#%s 的主文档下" % source, create, remember)
+    except core.WriteMaybeDone as e:
+        raise core.WriteMaybeDone("%s\n建文档没有拿到确定的结果：先在网页上 #%s 的主文档下核对。建好了的，运行 docs.py upload %s --doc <文档链接> --apply；"
+                                  "确认没建成的，运行 docs.py upload %s --doc new --apply" % (e, source, rel, rel))
+    if lg.mode == "apply":
+        drifted = core.write_back(path, d.text, ref)
+        core.save_receipt(lg, path, ref, "registered", doc=url, draft_changed=True if drifted else None)
+        if drifted:
+            print("提醒：" + drifted)
+    abbrev = spec.term("abbrev", d.sender_seq)
+    print(("上传：执行关系的需求包不建工作项，编号 #%s，文档挂在 #%s 的主文档下：%s\n接着给 +0 发【%s #%s】，消息里单独写一行“会话名：%s-p0-%s”；"
+           "它交付以后，验收用 %sdocs.py accept %s --result 通过|不通过 --note '<一句话>' --apply。" if lg.mode == "apply" else
+           "预览：执行关系的需求包不建工作项，会取编号 #%s，文档挂在 #%s 的主文档下（%s）。\n上传以后给 +0 发【%s #%s】，会话名 %s-p0-%s；验收用 %sdocs.py accept %s。") % (
+               ref, source, url, spec.term("msg", "assign"), ref, abbrev, ref, RUN, ref))
+    return url
+
+
+ACCEPT_WORDS = {"通过": True, "不通过": False}
+
+
+def accept(lg, ref, result, note=None):
+    """The verdict of the session that handed out a task without a work item: one line at the end of the
+    package (交接记录), and the task's state in its receipt: 已验收, or back to 执行中 when the delivery was
+    not accepted (the +0 hands in the next version). Nobody else is asked: there is no work item to move."""
+    ref = core.item_id_of(ref)
+    if not core.is_local(ref):
+        raise core.LedgerError("#%s 是工作项：验收由发出方请书记员确认“验收”这一步（workitem.py confirm %s --by <会话名>）。docs.py accept 只管没建工作项的任务，编号像 2101-3" % (ref, ref))
+    if result not in ACCEPT_WORDS:
+        raise core.LedgerError("--result 写 通过 或 不通过")
+    if not ACCEPT_WORDS[result] and not (note or "").strip():
+        raise core.LedgerError("验收不通过要写哪里不行：--note '<哪一条没有证据、要补什么>'")
+    path, task = core.local_task(lg, ref) if lg.mode != "offline" else (None, {})
+    core.must_be(lg, "验收 #%s" % ref, names=[task.get("by")] if task.get("by") else [], why="这件活是 %s 派的，由它验收" % (task.get("by") or "派活的会话"))
+    if lg.mode != "offline" and task.get("state") == core.LOCAL_ACCEPTED:
+        print("#%s 已经验收过了，没有再写。" % ref)
+        return
+    if lg.mode != "offline" and not task.get("deliveries"):
+        raise core.LedgerError("#%s 还没有交付包：承接的会话先运行 docs.py upload <交付包草稿> --apply" % ref)
+    last = (task.get("deliveries") or [{}])[-1]
+    line = "%s 验收（%s）：%s%s%s\n" % (lg.tag, datetime.date.today().isoformat(), result,
+                                     "，交付包第 %s 版" % last.get("version") if last.get("version") else "", "。" + note.strip() if (note or "").strip() else "")
+    lg.lark("docs", "+update", "--doc", task.get("doc") or "<#%s 的需求包链接>" % ref, "--command", "append", "--doc-format", "markdown",
+            "--content", "-", write=True, stdin=line)
+    if lg.mode == "apply":
+        task["acceptances"] = list(task.get("acceptances") or []) + [
+            {"result": result, "note": (note or "").strip() or None, "by": (lg.caller or {}).get("name") or core.RESEARCHER, "at": core.now(),
+             "version": last.get("version")}]
+        task.update(state=core.LOCAL_ACCEPTED if ACCEPT_WORDS[result] else core.LOCAL_OPEN, updated_at=core.now())
+        core.save_json(path, task)
+        print("验收：#%s %s，结论记在需求包末尾。%s" % (ref, result, "这件活了结了。" if ACCEPT_WORDS[result] else
+                                           "告诉承接的会话改好以后交付包写下一版，再运行 docs.py upload。"))
+    else:
+        print("预览：会在 #%s 的需求包末尾记一行验收结论（%s）。" % (ref, result))
 
 
 def attach(lg, item_id, field, path):
@@ -333,6 +457,9 @@ def last_block_before(xml, end_id):
 
 
 def status_block(lg, item_id, path):
+    if core.is_local(item_id):
+        raise core.LedgerError("#%s 没有工作项，也没有自己的状态包：进展记在它的需求包的交接记录里（docs.py append %s --file <文件>），"
+                               "要紧的写进上级工作项的状态包" % (item_id, item_id))
     it = lg.item(item_id)
     names, seq, owner = core.doc_owner(lg, it)
     core.must_be(lg, "换 #%s 的状态包" % item_id, names=names, roles=STATUS_ROLES, seq=seq, why="状态包归 %s、路由或入口写" % owner)
@@ -427,9 +554,16 @@ def revise(lg, item_id, path, note):
     value = m.group(2).strip() if m else ""
     if m and not core.is_placeholder(value) and not re.fullmatch(r"#?%s|\[#?%s\]\(\S+\)" % (item_id, item_id), value):
         raise core.LedgerError("修订稿的“关联工作项”写的是“%s”，要修订的是 #%s：写“#%s”，或者照新草稿写“待建”" % (value, item_id, item_id))
-    it = lg.item(item_id)
-    names, seq, owner = core.doc_owner(lg, it, d)
+    # a task without a work item (1.1.0: what a +1 hands to a +0): its package is revised by the session that
+    # handed it out, from its receipt alone; there is no work item to read and none to ask the scribe about
+    local = core.local_task(lg, item_id)[1] if core.is_local(item_id) and lg.mode != "offline" else None
+    if core.is_local(item_id) and (sheet or d.pid != "request" or d.rel != "execute"):
+        raise core.LedgerError("#%s 是执行关系的需求包（没建工作项的任务），修订稿也要是执行关系的需求包" % item_id)
+    it = None if core.is_local(item_id) else lg.item(item_id)
+    names, seq, owner = ([local.get("by")], None, local.get("by")) if local else core.doc_owner(lg, it, d)
     core.must_be(lg, "修订 #%s 的主文档" % item_id, names=names, seq=seq, why="这份文档归 %s 写，请它来修订" % owner)
+    if local and local.get("state") == core.LOCAL_ACCEPTED:
+        raise core.LedgerError("#%s 已经验收：验收以后不再修订" % item_id)
     rec = core.receipt_of(lg, item_id)
     if not core.title_of(d.text):                      # copied from the main document, which has no title line: the title stays
         d.task = rec.get("title") or re.split(r"[：:]", (it or {}).get("name") or "", 1)[-1].strip() or d.task
@@ -476,6 +610,8 @@ def revise(lg, item_id, path, note):
         date = orgspec.read_version(d.header.get(orgspec.VERSION))[1]
     name, title = core.naming(spec, d, sheet) if core.title_of(d.text) else (None, None)
     title = title.replace("<工作项 ID>", str(item_id)) if title else None
+    if title and core.is_local(item_id):               # as docs.py upload titled it: the number, not “工作项 <ID>”
+        title = "%s｜%s" % (item_id, core.ITEM_IN_TITLE.sub("", title))
     kinds = core.receipt_kind(spec, wid, d)
     asks = []                                     # (field name, value) for the scribe: what the item does not hold yet
 
@@ -508,8 +644,10 @@ def revise(lg, item_id, path, note):
         asks.append((lg.label(wid, "name"), name))                         # by the scribe, its document below
     if d.source and "source_item" in lg.contract.slots(wid, "fields"):   # the upstream item this version names
         ask("source_item", core.item_id_of(d.source))
-    body = revision_body(d, item_id, lg.item_url(wid, item_id))
-    url = lg.doc_url(item_id, it)
+    if core.is_local(item_id):
+        asks = []                                 # no work item: nothing for the scribe to write
+    body = revision_body(d, item_id, None if core.is_local(item_id) else lg.item_url(wid, item_id))
+    url = (local.get("doc") if local else "<#%s 的需求包链接>" % item_id) if core.is_local(item_id) else lg.doc_url(item_id, it)
     heads = core.heading_ids(lg, url)
     status = next((b for b, t in heads if t == "状态包"), None)
     retitle_to, whole = None, None
@@ -627,7 +765,10 @@ def append(lg, item_id, path):
     mine = (lg.caller or {}).get("tag")
     if mine and mine not in first:
         raise core.LedgerError("交接记录第一行的会话标签要是自己的 %s：每个会话只记自己的交接" % mine)
-    url = lg.doc_url(item_id)
+    if core.is_local(item_id):                         # a task without a work item: its package is the document
+        url = core.local_task(lg, item_id)[1].get("doc") if lg.mode != "offline" else "<#%s 的需求包链接>" % item_id
+    else:
+        url = lg.doc_url(item_id)
     lg.lark("docs", "+update", "--doc", url, "--command", "append", "--doc-format", "markdown",
             "--content", "-", write=True, stdin=content)
 
@@ -641,6 +782,9 @@ def relink(lg, item_id):
     document is uploaded before the item exists, so it carries neither); the next revision does the same for a
     document nobody relinked. The block is replaced in place: the document keeps its identity and link."""
     item_id = core.item_id_of(item_id)
+    if core.is_local(item_id):
+        print("#%s 没有工作项：编号在上传时已经写进需求包的标题和“关联工作项”一行，不用 relink。" % item_id)
+        return
     it = lg.item(item_id)
     names, seq, owner = core.doc_owner(lg, it)
     core.must_be(lg, "改 #%s 的主文档" % item_id, names=names, roles=first_sheet_roles(core.receipt_of(lg, item_id).get("draft")),
@@ -775,6 +919,9 @@ def main(argv=None):
     p.add_argument("--source", help="来源工作项 ID：执行关系的需求包挂在它的主文档下面")
     p.add_argument("--doc", help="上次建文档没有拿到确定的结果时：已经建好的文档的链接，或者 new 重新建")
     p.add_argument("--apply", action="store_true")
+    p = sub.add_parser("accept"); p.add_argument("id", help="没建工作项的任务的编号，比如 2101-3")
+    p.add_argument("--result", required=True, help="通过 或 不通过"); p.add_argument("--note", help="一句话：不通过时写哪里不行")
+    p.add_argument("--apply", action="store_true")
     p = sub.add_parser("attach"); p.add_argument("id"); p.add_argument("field"); p.add_argument("file")
     p.add_argument("--apply", action="store_true")
     p = sub.add_parser("revise"); p.add_argument("id"); p.add_argument("draft")
@@ -790,6 +937,8 @@ def main(argv=None):
 def run_command(lg, args):
     if args.cmd == "upload":
         upload(lg, args.draft, args.source, args.doc)
+    elif args.cmd == "accept":
+        accept(lg, args.id, args.result, args.note)
     elif args.cmd == "attach":
         attach(lg, args.id, args.field, args.file)
     elif args.cmd == "revise":

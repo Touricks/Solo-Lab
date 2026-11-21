@@ -61,7 +61,12 @@ TRUE_WORDS = {"是", "true", "True", "1", "yes", "要"}
 FALSE_WORDS = {"否", "false", "False", "0", "no", "不要"}
 RESEARCHER = "研究员"
 FIRST_TASK = "packages/drafts/pmo/研究任务单-首条.md"    # the sheet init writes; the scribe registers it while the pool opens
-SESSION_NAME = re.compile(r"^[A-Za-z]+-p[0-2]-\w+$")
+SESSION_NAME = re.compile(r"^[A-Za-z]+-p[0-2]-\w+(?:-\d{1,2})?$")      # Alg-p1-02; a +0's work name: Alg-p0-2101, Alg-p0-2101-3
+# 1.1.0: what a +1 hands to a +0 (a 需求包 in the 执行 relation) has no work item. It goes by a number of its own,
+# <the work item it belongs to>-<a running number>, 2101-3: in the message headers, in the +0's work name, in the
+# receipts packages/sent/2101-3.json. Its documents hang under the main document of #2101; its state is local.
+LOCAL_REF = re.compile(r"^(\d{3,})-(\d{1,2})$")
+ITEM_REF = r"\d+(?:-\d{1,2}(?!\d))?"                # a work item ID or such a number, inside a longer text
 
 
 class LedgerError(Exception):
@@ -149,11 +154,17 @@ def utc_noon_ms(text):
 
 
 def item_id_of(value):
-    """A work item id given as 2003 or #2003; LedgerError for anything else."""
+    """A work item id given as 2003 or #2003, or the number of a task without a work item (2101-3);
+    LedgerError for anything else."""
     text = str(value or "").strip().lstrip("#")
-    if not text.isdigit():
+    if not (text.isdigit() or LOCAL_REF.match(text)):
         raise LedgerError("工作项 ID 要写成数字，比如 2003 或 #2003：%r" % value)
     return text
+
+
+def is_local(item_id):
+    """Is this the number of a task that has no work item (2101-3)?"""
+    return bool(LOCAL_REF.match(str(item_id or "").strip().lstrip("#")))
 
 
 def system_states(spec):
@@ -416,6 +427,10 @@ class Ledger:
 
     # reads
     def get(self, item_id, field_keys=None):
+        if is_local(item_id):
+            raise LedgerError("#%s 没有工作项：+1 派给 +0 的活从 1.1.0 起不建工作项，它的需求包、交付和验收都在知识库和本地回执里。"
+                              "看它用 ledger.py get %s；交付用 docs.py upload <交付包>，验收用 docs.py accept %s" % (
+                                  str(item_id).lstrip("#"), str(item_id).lstrip("#"), str(item_id).lstrip("#")))
         args = ["workitem", "get", "--work-item-id", str(item_id)]
         if field_keys:
             args += ["--fields", json.dumps(field_keys)]
@@ -728,7 +743,7 @@ def link_line(text, ref, item_id, relink=False):
     m = LINK_LINE.search(head)
     if not m:
         raise LedgerError("包头里没有“关联工作项”一行：登记新工作项的草稿写“- 关联工作项：待建”")
-    value, num = m.group(2).strip(), re.escape(str(item_id))
+    value, num = m.group(2).strip(), re.escape(str(item_id)) + r"(?![\d-])"
     if is_placeholder(value) or relink and re.fullmatch(r"#?%s" % num, value):
         return text[:m.start()] + m.group(1) + ref + m.group(3) + text[m.end():]
     if re.fullmatch(r"#?%s|\[#?%s\]\(\S+\)" % (num, num), value):
@@ -785,15 +800,15 @@ class Draft:
         self.rel = rels.get(self.header.get("关系", "").strip())
         title = title_of(self.text)
         self.task = re.split(r"[：:]", title, 1)[-1].strip() if title else os.path.basename(path)
-        m = re.search(r"（([A-Za-z]+-p[0-2]-[\w]+)）", self.header.get("发出方", ""))
+        m = re.search(r"（([A-Za-z]+-p[0-2]-[\w]+(?:-\d{1,2})?)）", self.header.get("发出方", ""))
         self.author = m.group(1) if m else None
-        m = re.search(r"（([A-Za-z]+-p[0-2]-[\w]+)）", self.header.get("接收方", ""))
+        m = re.search(r"（([A-Za-z]+-p[0-2]-[\w]+(?:-\d{1,2})?)）", self.header.get("接收方", ""))
         self.receiver = m.group(1) if m else None
         seq_by_cn = {spec.term("seq", s): s for s, _, _ in spec.sequences()}
         self.sender_seq = sequence_named(spec, self.header.get("发出方", ""))
         self.receiver_seq = sequence_named(spec, self.header.get("接收方", ""))
         link = self.header.get("关联工作项", "")
-        self.linked = re.findall(r"#(\d+)", link)
+        self.linked = re.findall(r"#(%s)" % ITEM_REF, link)
         src = re.search(r"来源工作项[：:\s]*#?(\d+)", self.text)
         self.source = src.group(1) if src else None
         ref = re.search(r"#?(\d{3,})", self.header.get("所属研究任务", ""))
@@ -1351,6 +1366,48 @@ def attach_receipt(lg, item_id, label, path, text):
     return target, rec if isinstance(rec, dict) else {}
 
 
+# ------------------------------------------------- tasks without a work item
+LOCAL_OPEN, LOCAL_DELIVERED, LOCAL_ACCEPTED = "执行中", "待验收", "已验收"
+
+
+def local_task(lg, ref):
+    """(path, receipt) of a task without a work item, packages/sent/<ref>.json; LedgerError when there is none."""
+    ref = str(ref).strip().lstrip("#")
+    path = os.path.join(sent_dir(lg), "%s.json" % ref)
+    rec = load_json(path, {}) if os.path.exists(path) else {}
+    if not (isinstance(rec, dict) and rec.get("local") and str(rec.get("work_item_id")) == ref):
+        raise LedgerError("packages/sent/ 里没有 #%s 的回执：这个编号的任务没有上传过。派活的会话先运行 docs.py upload <需求包草稿> --source %s --apply" % (
+            ref, ref.split("-")[0]))
+    return path, rec
+
+
+def next_local_ref(lg, source):
+    """The number the next task under a work item takes: <source>-<n>, n one more than the highest in
+    packages/sent/ (unfinished uploads count: their documents may exist)."""
+    taken = [0]
+    for path in glob.glob(os.path.join(glob.escape(sent_dir(lg)), "%s-*.json" % source)):
+        m = LOCAL_REF.match(os.path.basename(path)[:-5])
+        if m and m.group(1) == str(source):
+            taken.append(int(m.group(2)))
+    if max(taken) >= 99:
+        raise LedgerError("#%s 下面已经派了 99 件活，编号用完了：把剩下的并进新的下发需求包" % source)
+    return "%s-%d" % (source, max(taken) + 1)
+
+
+def local_summary(rec):
+    """One line and what follows it for `ledger.py get` of a task without a work item."""
+    ref = rec.get("work_item_id")
+    lines = ["#%s  没建工作项的任务（%s 派给 +0）  %s  %s" % (ref, rec.get("by") or "?", rec.get("state") or LOCAL_OPEN, rec.get("title") or ""),
+             "  上级工作项：#%s" % rec.get("source"), "  需求包：%s" % rec.get("doc")]
+    if rec.get("receiver"):
+        lines.append("  承接会话：%s" % rec["receiver"])
+    for d in rec.get("deliveries") or []:
+        lines.append("  交付包第 %s 版（%s，%s）：%s" % (d.get("version"), d.get("by") or "?", d.get("at", "")[:10], d.get("doc")))
+    for a in rec.get("acceptances") or []:
+        lines.append("  验收（%s，%s）：%s%s" % (a.get("by") or "?", a.get("at", "")[:10], a.get("result"), "。" + a["note"] if a.get("note") else ""))
+    return "\n".join(lines)
+
+
 def check_new(d, kind):
     """A draft of a new work item: its sender is a session (a sheet's may be 研究员, 导师) and a package is
     its first version."""
@@ -1382,7 +1439,7 @@ def new_item_sequence(lg, d, kind, wid):
     return seq
 
 
-ITEM_IN_TITLE = re.compile(r"^工作项\s*(?:<工作项 ID>|#?\d+)\s*｜\s*")
+ITEM_IN_TITLE = re.compile(r"^工作项\s*(?:<工作项 ID>|#?\d+(?:-\d{1,2})?)\s*｜\s*")
 
 
 def new_document(spec, d, kind):

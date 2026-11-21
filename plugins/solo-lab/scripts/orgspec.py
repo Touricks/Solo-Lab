@@ -159,8 +159,8 @@ class OrgSpec:
     def message_header_re(self):
         """The header that starts every message between pool sessions: 【委托 #2101】Alg-p2-01 → Alg-p1-01."""
         names = sorted(self.terms["msg"].values(), key=len, reverse=True)
-        name = r"[A-Za-z]+-p[0-2]-\d+"
-        return re.compile(r"【(%s)(?:\s*#(\d{3,}))?[^】]*】\s*(?:(%s)\s*(?:→|->)\s*(%s))?" % (
+        name = r"[A-Za-z]+-p[0-2]-\d+(?:-\d{1,2}(?!\d))?"
+        return re.compile(r"【(%s)(?:\s*#(\d{3,}(?:-\d{1,2}(?![\d-]))?))?[^】]*】\s*(?:(%s)\s*(?:→|->)\s*(%s))?" % (
             "|".join(re.escape(n) for n in names), name, name))
 
     def sequence(self, sid):

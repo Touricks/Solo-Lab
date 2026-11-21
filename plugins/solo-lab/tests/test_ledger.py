@@ -125,6 +125,26 @@ class LedgerCase(unittest.TestCase):
     def state(self, item_id):
         return self.fake.state_of(self.fake.item(item_id))
 
+    def in_flight_execute(self, path, source):
+        """A 同序列需求 of the 执行 relation as one registered before 1.1.0: from 1.1.0 what a +1 hands to a +0 has
+        no work item, and the items of that relation that exist go on to their end. Its document is the one the
+        scribe created then."""
+        lg = self.lg()
+        d = ledger_core.Draft(self.spec, path)
+        title, body = ledger_core.new_document(self.spec, d, None)
+        with contextlib.redirect_stdout(io.StringIO()):
+            url = lg.create_doc(ledger_core.parent_node(lg, "same_seq", d.sender_seq, d.rel, source), title, body)
+            workitem.IN_FLIGHT_EXECUTE = True
+            try:
+                return workitem.register(lg, path, source=source, doc=url)
+            finally:
+                workitem.IN_FLIGHT_EXECUTE = False
+
+    def local(self, ref):
+        """The receipt packages/sent/<ref>.json of a task without a work item."""
+        with open(os.path.join(self.tmp, "packages", "sent", "%s.json" % ref), encoding="utf-8") as f:
+            return json.load(f)
+
     def uploaded(self, path):
         """The upload receipt packages/sent/upload-<draft file>.json of a draft."""
         with open(os.path.join(self.tmp, "packages", "sent", "upload-%s.json" % os.path.basename(path)), encoding="utf-8") as f:
@@ -363,28 +383,106 @@ class RegisterTest(LedgerCase):
         by_header = self.draft(ASSIGN, "h.md", edit=lambda t: t.replace("- 需要接收方做的事", "- 所属研究任务：#%s\n- 需要接收方做的事" % first, 1))
         self.assertEqual(self.value(self.quiet(register, self.lg(), by_header), "same_seq", "task_ref"), first)
 
-    def test_execute_request_hangs_under_its_source(self):
+    def test_what_a_p1_hands_to_a_p0_has_no_work_item(self):
+        """1.1.0: a 需求包 of the 执行 relation is uploaded by the session that hands the task out, under the main
+        document of the work item it belongs to, and takes the number <that item>-<n>. No work item is created
+        and the scribe is not asked; the +0 uploads its delivery under the package, and the session that handed
+        the task out accepts it with one line at the package's end."""
         self.task()
         source = self.quiet(register, self.lg(), self.draft(ASSIGN, "a.md", edit=lambda t: t.replace("产品 +2（Product-p2-01）", "质量 +2（Quality-p2-01）")))
-        text = self.fails(register, self.lg(), self.draft(EXECUTE, "e.md", edit=lambda t: t.replace("- 来源工作项：#2100\n", "")))
-        self.assertIn("--source <ID>", text)
-        item_id = self.quiet(register, self.lg(), self.draft(EXECUTE, "e2.md", edit=lambda t: t.replace("- 来源工作项：#2100\n", "")), source=source)
-        self.assertEqual(self.value(item_id, "same_seq", "source_item"), source)
-        self.assertEqual(self.value(item_id, "same_seq", "owner_session"), "Quality-p0-%s" % item_id)   # the +0's work name
+        bare = lambda t: t.replace("- 关联工作项：待建\n- 来源工作项：#2100\n", "- 关联工作项：待建\n")
+        text = self.fails(docs.upload, self.lg(), self.draft(EXECUTE, "e.md", edit=bare))
+        self.assertIn("--source <上级工作项 ID>", text)
+        path = self.draft(EXECUTE, "e2.md", edit=bare)
+        items = len(self.fake.items)
+        lg = self.lg()
+        url, out = self.out(docs.upload, lg, path, source=source)
+        ref = "%s-1" % source
+        self.assertEqual((len(self.fake.items), lg.wrote("meegle")), (items, []))          # nothing in Feishu Project
+        doc = self.fake.doc_of_link(url)
         parent = self.fake.doc_by(self.value(source, "same_seq", "main_doc").rsplit("/", 1)[1])["node_token"]
-        self.assertEqual(self.fake.doc_by(self.value(item_id, "same_seq", "main_doc").rsplit("/", 1)[1])["parent"], parent)
-        wrong = self.draft(ASSIGN, "e3.md", edit=lambda t: t.replace("产品 +2（Product-p2-01）", "产品 +1（Product-p1-03）"))
+        self.assertEqual((doc["parent"], doc["title"]), (parent, "%s｜需求包（Quality-p1-02）：在留出集上重评节点 #142" % ref))
+        self.assertIn("- 关联工作项：#%s（不建工作项，上级工作项 #%s）" % (ref, source), doc["body"])
+        self.assertTrue(doc["body"].rstrip().endswith("## 交接记录"))
+        self.assertIn("上传：执行关系的需求包不建工作项，编号 #%s，文档挂在 #%s 的主文档下：%s" % (ref, source, url), out)
+        self.assertIn("接着给 +0 发【委托 #%s】，消息里单独写一行“会话名：Quality-p0-%s”" % (ref, ref), out)
+        rec = self.local(ref)
+        self.assertEqual((rec["status"], rec["local"], rec["type"], rec["relation"], rec["source"], rec["doc"], rec["by"], rec["state"]),
+                         ("registered", True, "same_seq", "execute", source, url, "Quality-p1-02", "执行中"))
+        with open(path, encoding="utf-8") as f:
+            self.assertIn("- 关联工作项：#%s\n" % ref, f.read())                          # the draft names its number
+        lg = self.lg()
+        again, out = self.out(docs.upload, lg, path, source=source)                       # run again: nothing is created
+        self.assertEqual((again, lg.wrote("lark-cli")), (url, []))
+        self.assertIn("编号 #%s，没有再传" % ref, out)
+        other = self.quiet(docs.upload, self.lg(), self.draft(EXECUTE, "e3.md", edit=bare), source=source)
+        self.assertEqual(self.local("%s-2" % source)["doc"], other)                       # the next task under the same item
+        # the scribe is not in it
+        self.assertIn("执行关系的需求包从 1.1.0 起不建工作项，也不用书记员登记：请 Quality-p1-02 自己运行",
+                      self.fails(workitem.register, self.lg(), self.draft(EXECUTE, "e4.md", edit=bare), source=source))
+        self.assertIn("#%s 没有工作项" % ref, self.fails(workitem.confirm, self.lg(), ref, "Quality-p0-01"))
+        # the +0 delivers under the package
+        back = self.write(example(EXECUTE_DELIVERY).replace("- 关联工作项：#2106", "- 关联工作项：#%s" % ref).replace(
+            "Quality-p0-2106", "Quality-p0-%s" % ref), "back.md")
+        self.assertIn("还没有交付包", self.fails(docs.accept, self.lg(), ref, "通过"))
+        lg = self.lg()
+        link, out = self.out(docs.upload, lg, back)
+        self.assertEqual((self.fake.doc_of_link(link)["parent"], lg.wrote("meegle")), (doc["node_token"], []))
+        self.assertIn("上传：交付包挂在 #%s 的需求包下面：%s\n#%s 没有工作项，不用找书记员：接着给派活的会话 Quality-p1-02 发【交付 #%s】" % (ref, link, ref, ref), out)
+        self.assertEqual((self.local(ref)["state"], [d["version"] for d in self.local(ref)["deliveries"]]), ("待验收", [1]))
+        self.assertIn("没有工作项，交付不经书记员", self.fails(workitem.reply, self.lg(), back))
+        self.assertEqual(ledger_core.local_summary(self.local(ref)).splitlines()[0],
+                         "#%s  没建工作项的任务（Quality-p1-02 派给 +0）  待验收  在留出集上重评节点 #142" % ref)
+        # the +1 does not accept: the task is open again, and the next version is a new document
+        self.assertIn("验收不通过要写哪里不行", self.fails(docs.accept, self.lg(), ref, "不通过"))
+        _, out = self.out(docs.accept, self.lg(), ref, "不通过", "第 2 条没有证据")
+        self.assertIn("验收：#%s 不通过，结论记在需求包末尾。" % ref, out)
+        self.assertEqual(self.local(ref)["state"], "执行中")
+        self.assertRegex(doc["body"], r"\[PMO\+0\] 验收（[\d-]+）：不通过，交付包第 1 版。第 2 条没有证据")
+        self.assertIn("这一份写的是第 1 版", self.fails(docs.upload, self.lg(), self.write(example(EXECUTE_DELIVERY).replace(
+            "- 关联工作项：#2106", "- 关联工作项：#%s" % ref), "back-b.md")))
+        self.write(example(EXECUTE_DELIVERY).replace("- 关联工作项：#2106", "- 关联工作项：#%s" % ref).replace(
+            "第 1 版（2026-11-26）", "第 2 版（2026-11-27）"), "back.md")
+        v2 = self.quiet(docs.upload, self.lg(), back)
+        self.assertNotEqual(v2, link)
+        self.assertEqual((self.local(ref)["state"], [d["version"] for d in self.local(ref)["deliveries"]]), ("待验收", [1, 2]))
+        _, out = self.out(docs.accept, self.lg(), ref, "通过")
+        self.assertIn("验收：#%s 通过，结论记在需求包末尾。这件活了结了。" % ref, out)
+        self.assertEqual(self.local(ref)["state"], "已验收")
+        self.assertIn("已经验收过了", self.out(docs.accept, self.lg(), ref, "通过")[1])
+        third = self.write(example(EXECUTE_DELIVERY).replace("- 关联工作项：#2106", "- 关联工作项：#%s" % ref).replace(
+            "第 1 版（2026-11-26）", "第 3 版（2026-11-28）"), "back-3.md")
+        self.assertIn("#%s 已经验收：验收以后不再重新交交付包" % ref, self.fails(docs.upload, self.lg(), third))
+        self.assertIn("docs.py accept 只管没建工作项的任务", self.fails(docs.accept, self.lg(), source, "通过"))
+        # the package of a task that is still open takes a next version from the session that handed it out
+        ref2 = "%s-2" % source
+        v2 = self.draft(EXECUTE, "e3v2.md", edit=lambda t: bare(t).replace("第 1 版（2026-11-25）", "第 2 版（2026-11-27）").replace(
+            "## 认知层", "## 认知层\n\n补一句：只看留出集。"))
+        lg = self.lg()
+        _, out = self.out(docs.revise, lg, ref2, v2, "补一句范围")
+        self.assertIn("修订：#%s 的主文档开头换成第 2 版" % ref2, out)
+        self.assertNotIn("workitem.py update", out)                                    # no work item: nothing to ask the scribe
+        doc2 = self.fake.doc_of_link(other)
+        self.assertIn("补一句：只看留出集。", doc2["body"])
+        self.assertIn("- 关联工作项：#%s" % ref2, doc2["body"])
+        self.assertEqual((self.local(ref2)["version"], lg.wrote("meegle"), doc2["title"]),
+                         (2, [], "%s｜需求包（Quality-p1-02）：在留出集上重评节点 #142" % ref2))
+        self.assertIn("已经验收：验收以后不再修订", self.fails(docs.revise, self.lg(), ref, self.draft(EXECUTE, "late.md", edit=lambda t: bare(t).replace(
+            "第 1 版（2026-11-25）", "第 2 版（2026-11-27）")), "晚了"))
+        self.assertIn("没有工作项，也没有自己的状态包", self.fails(docs.status_block, self.lg(), ref2, v2))
+        wrong = self.draft(ASSIGN, "e9.md", edit=lambda t: t.replace("产品 +2（Product-p2-01）", "产品 +1（Product-p1-03）"))
         self.assertIn("职级对不上", self.fails(register, self.lg(), wrong))
 
     def test_a_p2_without_a_p1_hands_a_closed_task_to_its_p0(self):
         """1.0.12: a sequence that opens with its +2 alone (产品, 算法 and 外联 by default) gives a closed task to a +0
-        itself: a request of the 执行 relation, under the work item the task belongs to. A +1 writes 执行 only."""
+        itself: a request of the 执行 relation, under the work item the task belongs to. A +1 writes 执行 only.
+        1.1.0: such a task has no work item, whoever hands it out."""
         task = self.task()
         by_p2 = lambda t: t.replace("- 来源工作项：#2100\n", "").replace("质量 +1（Quality-p1-02）", "质量 +2（Quality-p2-01）")
-        item_id = self.quiet(register, self.lg(), self.draft(EXECUTE, "p2.md", edit=by_p2), source=task)
-        self.assertEqual(self.value(item_id, "same_seq", "source_item"), task)
-        self.assertEqual(self.value(item_id, "same_seq", "owner_session"), "Quality-p0-%s" % item_id)   # the work name a 执行 request gets
-        self.assertIn("--source <ID>", self.fails(register, self.lg(), self.draft(EXECUTE, "p2b.md", edit=by_p2)))
+        url = self.quiet(docs.upload, self.lg(), self.draft(EXECUTE, "p2.md", edit=by_p2), source=task)
+        rec = self.local("%s-1" % task)
+        self.assertEqual((rec["source"], rec["by"], rec["doc"]), (task, "Quality-p2-01", url))
+        self.assertIn("--source <上级工作项 ID>", self.fails(docs.upload, self.lg(), self.draft(EXECUTE, "p2b.md", edit=by_p2)))
         down = self.draft(ASSIGN, "p1.md", edit=lambda t: t.replace("产品 +2（Product-p2-01）", "产品 +1（Product-p1-03）"))
         text = self.fails(register, self.lg(), down)
         self.assertIn("职级对不上", text)
@@ -1114,8 +1212,8 @@ class StepTest(LedgerCase):
     def test_a_p0_asks_under_its_pool_name(self):
         self.task()
         source = self.quiet(register, self.lg(), self.draft(ASSIGN, "a.md", edit=lambda t: t.replace("产品 +2（Product-p2-01）", "质量 +2（Quality-p2-01）")))
-        request = self.quiet(register, self.lg(), self.draft(EXECUTE, "e.md", edit=lambda t: t.replace("- 来源工作项：#2100\n", "")), source=source)
-        self.assertEqual(self.value(request, "same_seq", "owner_session"), "Quality-p0-%s" % request)   # the work name
+        request = self.in_flight_execute(self.draft(EXECUTE, "e.md", edit=lambda t: t.replace("- 来源工作项：#2100\n", "")), source)
+        self.assertEqual(self.value(request, "same_seq", "owner_session"), "Quality-p0-%s" % request)   # the work name; registered before 1.1.0
         for by in ("Alg-p0-01", "Quality-p1-02"):
             self.assertIn("不能请书记员确认这一步", self.fails(workitem.confirm, self.lg(), request, by), by)
         self.quiet(workitem.confirm, self.lg(), request, "Quality-p0-01")                # the pool slot of the +0 on the item
@@ -2379,9 +2477,13 @@ class ValuesAndReadsTest(LedgerCase):
     def test_trace_follows_the_source(self):
         self.task()
         source = self.quiet(register, self.lg(), self.draft(ASSIGN, "a.md", edit=lambda t: t.replace("产品 +2（Product-p2-01）", "质量 +2（Quality-p2-01）")))
-        child = self.quiet(register, self.lg(), self.draft(EXECUTE, "e.md", edit=lambda t: t.replace("- 来源工作项：#2100\n", "")), source=source)
+        child = self.in_flight_execute(self.draft(EXECUTE, "e.md", edit=lambda t: t.replace("- 来源工作项：#2100\n", "")), source)
         _, text = self.out(ledger.trace, self.lg("preview"), child)
         self.assertEqual([line.split()[0] for line in text.splitlines()], ["#" + child, "#" + source])
+        self.quiet(docs.upload, self.lg(), self.draft(EXECUTE, "e2.md", edit=lambda t: t.replace("- 来源工作项：#2100\n", "")), source=source)
+        _, text = self.out(ledger.trace, self.lg("preview"), "%s-1" % source)             # 1.1.0: a task without a work item
+        self.assertEqual([line.split()[0] for line in text.splitlines()], ["#%s-1" % source, "#" + source])
+        self.assertIn("没建工作项的任务  执行中", text)
 
 
 # ------------------------------------------------------------------ 1.0.4

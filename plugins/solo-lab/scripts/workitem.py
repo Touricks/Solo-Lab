@@ -59,6 +59,9 @@ def created_id(out, what):
         raise core.LedgerError("%s建了，但输出里没有工作项 ID：%s；去网页上核对，不要重跑" % (
             what, json.dumps(out, ensure_ascii=False)[:300]))
     return str(item_id)
+# 1.1.0: a 需求包 in the 执行 relation has no work item (docs.py upload gives it a number of its own). Items of
+# that relation registered before the upgrade go on to their end; the tests of those set this to register one.
+IN_FLIGHT_EXECUTE = False
 EXISTING_GONE = ("register --existing 停用了：研究任务单和包一样原位修订，文档链接不变。运行 "
                  "docs.py revise %s <修订稿> --note '<改了什么>' --apply")
 
@@ -302,6 +305,10 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
     d = core.Sheet(spec, path, kind) if kind else core.Draft(spec, path)
     wid = kind or core.work_item_type(d)
     core.check_new(d, kind)
+    if wid == "same_seq" and d.rel == "execute" and not IN_FLIGHT_EXECUTE:
+        raise core.LedgerError("执行关系的需求包从 1.1.0 起不建工作项，也不用书记员登记：请 %s 自己运行 python3.12 -I .claude/solo-lab/bin/docs.py upload %s "
+                               "--source <上级工作项 ID> --apply，拿到编号（上级工作项 ID-序号）再委托 +0。升级前已经登记的这类工作项照旧走完" % (
+                                   d.author or "派活的会话", os.path.relpath(path, lg.root)))
     if kind == "research_task":
         for line in core.run_conditions_hints(d):
             print(line)
@@ -479,6 +486,9 @@ def reply(lg, path, doc=None):
         raise core.LedgerError("包头的“关联工作项”要写它答复的工作项 ID，比如 #2003")
     parent_id = core.item_id_of(d.linked[0])
     rel = os.path.relpath(path, lg.root)
+    if core.is_local(parent_id):
+        raise core.LedgerError("#%s 没有工作项，交付不经书记员：承接的会话运行 docs.py upload %s --apply，交付包挂在需求包下面；"
+                               "派活的会话验收用 docs.py accept %s" % (parent_id, rel, parent_id))
     rpath = core.receipt_file(lg, ["reply-%s-%s" % (parent_id, core.safe_name(path))], path)
     rec = (core.load_json(rpath, {}) or {}) if lg.mode != "offline" else {}
     rec = rec if isinstance(rec, dict) else {}

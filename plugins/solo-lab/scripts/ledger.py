@@ -175,6 +175,11 @@ def trace(lg, item_id):
     cur = str(item_id)
     while cur and cur not in seen and len(seen) < 20:
         seen.append(cur)
+        if core.is_local(cur):                         # a task without a work item: its receipt names the item above it
+            rec = core.local_task(lg, cur)[1]
+            print("#%s  没建工作项的任务  %s  %s" % (cur, rec.get("state") or core.LOCAL_OPEN, rec.get("title") or ""))
+            cur = str(rec.get("source") or "") or None
+            continue
         it = lg.item(cur)
         if it is None:
             print("#%s（离线，无法回溯）" % cur)
@@ -213,7 +218,17 @@ def main(argv=None):
 
 
 def run_command(lg, args):
-    if args.cmd == "get":
+    if args.cmd in ("get", "next", "status") and core.is_local(args.id):
+        rec = core.local_task(lg, core.item_id_of(args.id))[1]     # a task a +1 handed to a +0: no work item, a local receipt
+        print(core.local_summary(rec))
+        if args.cmd == "next":
+            ref, by = rec["work_item_id"], rec.get("by") or "派活的会话"
+            print({core.LOCAL_OPEN: "下一步：承接的会话交付，运行 docs.py upload <交付包草稿>（包头“关联工作项”写 #%s），再给 %s 发【交付 #%s】。" % (ref, by, ref),
+                   core.LOCAL_DELIVERED: "下一步：%s 验收，运行 docs.py accept %s --result 通过|不通过 --note '<一句话>'。" % (by, ref),
+                   core.LOCAL_ACCEPTED: "这件活已经验收，了结了。"}.get(rec.get("state") or core.LOCAL_OPEN, ""))
+        elif args.cmd == "status":
+            print("没建工作项的任务没有自己的状态包：看它上级工作项的，ledger.py status %s" % rec.get("source"))
+    elif args.cmd == "get":
         if args.raw:
             print(json.dumps(lg.get(args.id, ["_all"]), ensure_ascii=False, indent=2))
         else:
