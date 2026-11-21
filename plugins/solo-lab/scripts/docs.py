@@ -5,9 +5,12 @@ answers for it, and each command holds the session it runs in against the docume
 (ledger_core.must_be). Nothing here writes a work item: what a new version changes on its work item is
 printed as the request to send to the scribe.
 
+    docs.py upload <draft>                  the document of a new work item, before the scribe registers it:
+                                            created under its node, its link kept in an upload receipt
+    docs.py relink <ID>                     once the item exists: its ID into the 关联工作项 line and the
+                                            title of its main document
     docs.py revise <ID> <draft> --note N    the next version of a 需求包 or 决策包: the main document's
                                             opening up to 状态包 replaced in place, a line in 交接记录
-    docs.py relink <ID>                     put the item's ID into the 关联工作项 line of its main document
     docs.py status-block <ID> --file F      replace the 状态包 section (block_replace)
     docs.py append <ID> --file F            append to 交接记录 (first line carries the session tag)
     docs.py ensure-node <key> | all         create knowledge-base nodes such as feedback or archive/alg
@@ -29,6 +32,112 @@ import orgspec  # noqa: E402
 import project_paths  # noqa: E402
 import space  # noqa: E402
 import ledger_core as core  # noqa: E402
+
+RUN = "python3.12 -I .claude/solo-lab/bin/"
+
+
+def first_sheet_roles(draft):
+    """The scribe uploads and relinks one document that is nobody's: the research-task sheet init writes
+    (ledger_core.FIRST_TASK), which it registers while the pool opens, before any session has a say."""
+    return (SCRIBE_ROLE,) if draft and os.path.normpath(draft) == os.path.normpath(core.FIRST_TASK) else ()
+
+
+def upload(lg, path, source=None, doc=None):
+    """Create the document of a new work item, before the work item exists (1.1.0: a document is written by
+    the session that answers for it; the scribe registers the item afterwards and puts the link into it).
+
+    The draft is checked as register checks it; the session is the draft's sender, or the +2 of its sequence
+    for a sheet whose sender is no session. The document goes under the node its type has (a package in the
+    执行 relation: under the main document of the item it comes from, --source), titled without a work item ID,
+    its 关联工作项 line still a placeholder: `docs.py relink` fills both once the item exists. The receipt
+    packages/sent/upload-<draft file>.json keeps the link and a digest of what was uploaded: the same command
+    run again creates no second document; when the draft has changed since and is not registered yet, the
+    document takes the draft's text and its title (overwrite, the link stays). When docs +create timed out or
+    answered without a link, the next run stops until --doc says what to do: --doc <链接> takes over the
+    document found on the web, --doc new creates another one. Returns the /wiki/ link."""
+    spec = lg.spec
+    kind = core.sheet_kind(path)
+    d = core.Sheet(spec, path, kind) if kind else core.Draft(spec, path)
+    wid = kind or core.work_item_type(d)
+    core.check_new(d, kind)
+    names, owner_seq, owner = core.doc_owner(lg, None, d)
+    rel = os.path.relpath(path, lg.root)
+    core.must_be(lg, "上传这份文档", names=names, roles=first_sheet_roles(rel), seq=owner_seq, why="这份草稿的发出方是 %s，请它来上传" % owner)
+    registered = core.find_receipt(lg, path) if lg.mode != "offline" else None
+    if registered and registered.get("work_item_id"):
+        raise core.LedgerError("这份草稿已经登记成 #%s（回执 %s），不要重复登记；改了内容的，用 docs.py revise %s <新草稿> --note '<改了什么>' 换主文档" % (
+            registered["work_item_id"], registered["_file"], registered["work_item_id"]))
+    core.link_line(d.text, "#0", "0")                 # a 关联工作项 line that is no placeholder stops here
+    seq = core.new_item_sequence(lg, d, kind, wid)
+    source = core.item_id_of(source or d.source) if (source or d.source) else None
+    parent = core.parent_node(lg, wid, seq, d.rel, source)
+    if kind == "research_task":
+        for line in core.run_conditions_hints(d):
+            print(line)
+    title, body = core.new_document(spec, d, kind)
+    digest = core.text_digest(title, body)
+    rpath, rec = core.upload_receipt(lg, path) if lg.mode != "offline" else (None, {})
+
+    def remember(**kw):
+        rec.update({k: v for k, v in kw.items() if v is not None})
+        if lg.mode == "apply":
+            rec.update(draft=rel, updated_at=core.now(), by=(lg.caller or {}).get("name") or core.RESEARCHER)
+            rec.setdefault("status", "created")
+            os.makedirs(core.sent_dir(lg), exist_ok=True)
+            core.save_json(rpath, rec)
+
+    then = "接着给书记员发【%s】，写上草稿 %s%s；登记回执到了以后运行 %sdocs.py relink <工作项 ID> --apply，把工作项 ID 写进文档。" % (
+        spec.term("msg", "register_request"), rel, "和来源工作项 #%s" % source if source and not d.source else "", RUN)
+    known = rec.get("doc") if not doc else None
+    if known and rec.get("sha256") == digest:
+        print("这份草稿已经上传过，没有再传：%s\n%s" % (known, then))
+        return known
+    if known:                                         # the draft changed after it was uploaded: the document follows it
+        lg.lark("docs", "+update", "--doc", known, "--command", "overwrite", "--doc-format", "markdown", "--content", "-",
+                write=True, stdin=body)
+        if rec.get("title") != title:
+            retitle(lg, known, title)
+        remember(sha256=digest, title=title)
+        print(("草稿在上传以后改过：文档已经换成现在的内容，链接不变：%s\n%s" if lg.mode == "apply"
+               else "预览：草稿在上传以后改过，会把文档换成现在的内容，链接不变：%s\n%s") % (known, then))
+        return known
+
+    def create():
+        return lg.create_doc(parent, title, body, created=lambda x: remember(docx=x, doc_unknown=False))
+
+    try:
+        url = core.main_document(lg, dict(rec), doc, "节点 %s " % parent, create, remember)
+    except core.WriteMaybeDone as e:
+        raise core.WriteMaybeDone("%s\n建文档没有拿到确定的结果：先在网页上节点 %s 下核对。建好了的，运行 docs.py upload %s --doc <文档链接> --apply；"
+                                  "确认没建成的，运行 docs.py upload %s --doc new --apply" % (e, parent, rel, rel))
+    remember(status="uploaded", sha256=digest, title=title, parent=parent, source=source, type=wid)
+    print(("上传：文档建在节点 %s 下：%s\n%s" if lg.mode == "apply" else "预览：会把文档建在节点 %s 下（%s）。\n%s") % (parent, url, then))
+    return url
+
+
+def retitle(lg, url, title, whole=None):
+    """Give a document, and with it its node in the knowledge space, this title: the title is a block of its
+    own whose id is the document's. A refusal is no reason to stop what else is being written: it is printed
+    with the title to set by hand. Returns True when the title was written or is this one already."""
+    if whole is None:
+        whole = lg.lark("docs", "+fetch", "--doc", url, "--detail", "with-ids")
+    if whole is None:                                 # a preview, or offline
+        return False
+    doc_id, current = title_block(whole)
+    if current is not None and current.strip() == title:
+        return True
+    if not doc_id or current is None:
+        print("提醒：读不出文档的标题块，标题没有改；请在网页上把它改成“%s”。" % title)
+        return False
+    try:
+        lg.lark("docs", "+update", "--doc", url, "--command", "block_replace", "--block-id", doc_id,
+                "--doc-format", "xml", "--content", "-", write=True, stdin="<title>%s</title>" % html.escape(title, quote=False))
+    except core.LedgerError as e:
+        print("提醒：主文档的标题没有改成，还是“%s”；请在网页上把它改成“%s”。原因：%s" % (current.strip(), title, str(e).splitlines()[-1]))
+        return False
+    print("改名：主文档和它的知识库节点的标题从“%s”改成“%s”。" % (current.strip(), title))
+    return True
+
 
 SCRIBE_ROLE = "pmo-scribe"                    # the skeleton of knowledge-base nodes is the scribe's: no session's document
 STATUS_ROLES = ("pmo-router", "pmo-p2")       # who keeps a research task's 状态包, besides the document's owner
@@ -237,7 +346,7 @@ def revise(lg, item_id, path, note):
     url = lg.doc_url(item_id, it)
     heads = core.heading_ids(lg, url)
     status = next((b for b, t in heads if t == "状态包"), None)
-    retitle = None
+    retitle_to, whole = None, None
     if lg.mode == "offline":
         status = status or "<状态包标题的 block_id>"
         first, last = "<主文档第一块的 block_id>", "<状态包前一块的 block_id>"
@@ -250,20 +359,14 @@ def revise(lg, item_id, path, note):
         first, last = opening_blocks(whole_document(core.doc_content(whole)), status) if whole is not None else (
             "<主文档第一块的 block_id>", "<状态包前一块的 block_id>")
         doc_id, doc_title = title_block(whole) if whole is not None else (None, None)
-        retitle = (doc_id, doc_title) if title and doc_id and doc_title is not None and doc_title.strip() != title else None
+        retitle_to = title if title and doc_id and doc_title is not None and doc_title.strip() != title else None
     done, logged = [], False                      # what is written already, should a later step fail
     try:
         lg.lark("docs", "+update", "--doc", url, "--command", "block_replace", "--start-block-id", first, "--end-block-id", last,
                 "--doc-format", "markdown", "--content", "-", write=True, stdin=body)
         done.append("主文档开头已经换成第 %d 版" % d.version)
-        if retitle:                               # the document's title, and its node's: one block, the document's own
-            try:
-                lg.lark("docs", "+update", "--doc", url, "--command", "block_replace", "--block-id", retitle[0],
-                        "--doc-format", "xml", "--content", "-", write=True, stdin="<title>%s</title>" % html.escape(title, quote=False))
-                print("改名：主文档和它的知识库节点的标题从“%s”改成“%s”。" % (retitle[1].strip(), title))
-            except core.LedgerError as e:              # not worth stopping a revision for: the text is in place
-                print("提醒：主文档的标题没有改成，还是“%s”；请在网页上把它改成“%s”。原因：%s" % (
-                    retitle[1].strip(), title, str(e).splitlines()[-1]))
+        if retitle_to:                            # the document's title, and its node's: one block, the document's own
+            retitle(lg, url, retitle_to, whole)
         logged = revision_logged(lg, url, heads, d.version, date)
         if not logged:
             lg.lark("docs", "+update", "--doc", url, "--command", "append", "--doc-format", "markdown", "--content", "-", write=True,
@@ -367,12 +470,15 @@ LIST_ITEM = re.compile(r'<li\b[^>]*?\bid="([^"]+)"[^>]*>(.*?)</li>', re.S)
 
 
 def relink(lg, item_id):
-    """Put the work item into the 关联工作项 line of its main document, when the document
-    was created with a placeholder there. The block is replaced in place: the document
-    keeps its identity and link."""
+    """Put the work item into its main document: its ID with the link to it into the 关联工作项 line, and
+    “工作项 <ID>｜” in front of the title. The author runs it once the scribe has registered the item (the
+    document is uploaded before the item exists, so it carries neither); the next revision does the same for a
+    document nobody relinked. The block is replaced in place: the document keeps its identity and link."""
+    item_id = core.item_id_of(item_id)
     it = lg.item(item_id)
     names, seq, owner = core.doc_owner(lg, it)
-    core.must_be(lg, "改 #%s 的主文档" % item_id, names=names, seq=seq, why="这份文档归 %s 写" % owner)
+    core.must_be(lg, "改 #%s 的主文档" % item_id, names=names, roles=first_sheet_roles(core.receipt_of(lg, item_id).get("draft")),
+                 seq=seq, why="这份文档归 %s 写" % owner)
     url = lg.doc_url(item_id, it)
     data = lg.lark("docs", "+fetch", "--doc", url, "--detail", "with-ids")
     if data is None:
@@ -394,10 +500,13 @@ def relink(lg, item_id):
     fixed = core.link_line(line, "[#%s](%s)" % (item_id, link) if link else "#%s" % item_id, item_id)
     if fixed == line:
         print("#%s 的主文档已经写着它的 ID，不用改。" % item_id)
-        return
-    lg.lark("docs", "+update", "--doc", url, "--command", "block_replace", "--start-block-id", block, "--end-block-id", block,
-            "--doc-format", "markdown", "--content", "-", write=True, stdin=fixed + "\n")
-    print("已把 #%s 写进主文档的“关联工作项”一行。" % item_id)
+    else:
+        lg.lark("docs", "+update", "--doc", url, "--command", "block_replace", "--start-block-id", block, "--end-block-id", block,
+                "--doc-format", "markdown", "--content", "-", write=True, stdin=fixed + "\n")
+        print("已把 #%s 写进主文档的“关联工作项”一行。" % item_id)
+    _, current = title_block(data)
+    if current is not None and not re.match(r"工作项\s*#?%s\s*｜" % re.escape(str(item_id)), current.strip()):
+        retitle(lg, url, "工作项 %s｜%s" % (item_id, core.ITEM_IN_TITLE.sub("", current.strip())), data)
 
 
 def existing_node(lg, space, parent, key, title):
@@ -496,6 +605,10 @@ def ensure_all_nodes(lg):
 
 def main(argv=None):
     ap, sub = core.parser("写智能体组织的任务包文档")
+    p = sub.add_parser("upload"); p.add_argument("draft")
+    p.add_argument("--source", help="来源工作项 ID：执行关系的需求包挂在它的主文档下面")
+    p.add_argument("--doc", help="上次建文档没有拿到确定的结果时：已经建好的文档的链接，或者 new 重新建")
+    p.add_argument("--apply", action="store_true")
     p = sub.add_parser("revise"); p.add_argument("id"); p.add_argument("draft")
     p.add_argument("--note", required=True, help="这一版改了什么，记进交接记录")
     p.add_argument("--apply", action="store_true")
@@ -507,7 +620,9 @@ def main(argv=None):
 
 
 def run_command(lg, args):
-    if args.cmd == "revise":
+    if args.cmd == "upload":
+        upload(lg, args.draft, args.source, args.doc)
+    elif args.cmd == "revise":
         revise(lg, args.id, args.draft, args.note)
         if lg.mode == "apply" and core.receipt_of(lg, str(args.id).lstrip("#")).get("type") == "cross_request":
             print("跨序列需求：把这次修订告诉路由 %s 一声（修订的就是它的不用再说）。" % lg.spec.rules["naming"]["fixed_sessions"]["pmo-router"])

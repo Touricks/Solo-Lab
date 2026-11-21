@@ -1349,10 +1349,10 @@ class SpecAndRoutingTest(ProjectCase):
 
     def test_new_status_block_starts_with_the_cognitive_layer(self):
         body = "## 认知层\n\n这个阶段整理访谈，涉及 Product-p1-01 和需求文档 v1。\n\n## 目标\n\n写提纲。\n"
-        out = workitem.with_status_sections(body)
+        out = ledger_core.with_status_sections(body)
         self.assertIn("### 简介\n\n这个阶段整理访谈，涉及 Product-p1-01 和需求文档 v1。\n\n### 当前状态", out)
         self.assertLess(out.index("## 状态包"), out.index("## 交接记录"))
-        self.assertIn("### 简介\n\n### 当前状态", workitem.with_status_sections("## 方法\n\n写提纲。\n"))
+        self.assertIn("### 简介\n\n### 当前状态", ledger_core.with_status_sections("## 方法\n\n写提纲。\n"))
 
     def test_plugin_cites_nothing_outside_itself(self):
         """Nothing in the repository, docs included, points to material outside the plugin."""
@@ -1790,7 +1790,8 @@ class PoolSetupTest(PoolProjectCase):
             self.assertLess(len(e["title"]), 60)
             self.assertIn("pool.py expect %s --role %s" % (e["name"], e["role"]), e["expect"])
         self.assertIn("ensure-node all --apply", plan["scribe_first"])
-        self.assertIn("register %s --apply" % setup_core.FIRST_TASK, plan["scribe_first"])
+        self.assertIn("docs.py upload %s --apply；workitem.py register %s --apply；照登记输出的工作项 ID 运行 docs.py relink <工作项 ID> --apply" % (
+            setup_core.FIRST_TASK, setup_core.FIRST_TASK), plan["scribe_first"])
 
     def test_the_label_names_the_titles_and_the_section(self):
         with open(self.task_path, encoding="utf-8") as f:
@@ -2139,7 +2140,7 @@ class CheckLayersTest(PoolProjectCase):
         self.claim_all()
         lg = fake_space.SimLedger(self.tmp, "apply", self.fake, ())
         with contextlib.redirect_stdout(io.StringIO()):
-            task = workitem.register(lg, os.path.join(self.tmp, setup_core.FIRST_TASK))
+            task = fake_space.register(lg, os.path.join(self.tmp, setup_core.FIRST_TASK))
             setup.env_cmd(self.tmp, True)
         return task
 
@@ -2224,7 +2225,7 @@ class CheckLayersTest(PoolProjectCase):
         self.assertIn("桌面会话 local_PMO-p0-01", text)
         lg = fake_space.SimLedger(self.tmp, "apply", self.fake, ())
         with contextlib.redirect_stdout(io.StringIO()):
-            task = workitem.register(lg, os.path.join(self.tmp, setup_core.FIRST_TASK))
+            task = fake_space.register(lg, os.path.join(self.tmp, setup_core.FIRST_TASK))
         code, text = self.wait()
         self.assertEqual(code, 0, text)
         self.assertIn("知识库节点都在，首条研究任务已登记（#%s）" % task, text)
@@ -2314,7 +2315,7 @@ class CheckLayersTest(PoolProjectCase):
         sheet = os.path.join(self.tmp, "packages", "drafts", "pmo", "elsewhere.md")
         shutil.copyfile(os.path.join(self.tmp, setup_core.FIRST_TASK), sheet)
         with contextlib.redirect_stdout(io.StringIO()):
-            workitem.register(other, sheet)
+            fake_space.register(other, sheet)
         sent = os.path.join(self.tmp, "packages", "sent")
         for name in os.listdir(sent):                                        # as if registered from another directory
             if name.endswith(".json"):
@@ -5120,7 +5121,7 @@ class FreezePromptTest(PoolProjectCase):
         super().setUp()
         self.started_pool()
         self.fake = fake_space.FakeSpace()
-        self.quiet(workitem.register, self.lg(), os.path.join(self.tmp, setup_core.FIRST_TASK))
+        self.quiet(fake_space.register, self.lg(), os.path.join(self.tmp, setup_core.FIRST_TASK))
 
     def lg(self):
         return fake_space.SimLedger(self.tmp, "apply", self.fake, ())
@@ -5135,7 +5136,7 @@ class FreezePromptTest(PoolProjectCase):
         path = os.path.join(self.tmp, "packages", "drafts", "infra", name)
         with open(path, "w", encoding="utf-8") as f:
             f.write(text)
-        return self.quiet(workitem.register, self.lg(), path)
+        return self.quiet(fake_space.register, self.lg(), path)
 
     def context(self, sid, text):
         return self.prompt(sid, text)[1].get("additionalContext", "")

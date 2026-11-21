@@ -30,6 +30,7 @@ import contextlib
 import datetime
 import fcntl
 import glob
+import hashlib
 import json
 import os
 import re
@@ -59,6 +60,7 @@ READ_COMMANDS = ("get", "next", "query", "mql", "trace", "status")
 TRUE_WORDS = {"是", "true", "True", "1", "yes", "要"}
 FALSE_WORDS = {"否", "false", "False", "0", "no", "不要"}
 RESEARCHER = "研究员"
+FIRST_TASK = "packages/drafts/pmo/研究任务单-首条.md"    # the sheet init writes; the scribe registers it while the pool opens
 SESSION_NAME = re.compile(r"^[A-Za-z]+-p[0-2]-\w+$")
 
 
@@ -862,7 +864,7 @@ def find_receipt(lg, path):
     if not os.path.isdir(d):
         return None
     for name in sorted(os.listdir(d)):
-        if name.endswith(".json") and not name.startswith("reply-"):
+        if name.endswith(".json") and not name.startswith(("reply-", "upload-", "attach-")):
             rec = load_json(os.path.join(d, name))
             if isinstance(rec, dict) and rec.get("draft") == rel:
                 rec["_file"] = "packages/sent/%s" % name
@@ -1196,6 +1198,171 @@ def typed_item(lg, item_id, wid_hint=None):
     if not wid:
         raise LedgerError("读不出 #%s 的类型；用 --type 指明" % item_id)
     return it, wid
+
+
+# ------------------------------------------------- documents of new work items
+# From 1.1.0 the document comes first and the work item second: the author runs `docs.py upload`, which creates
+# the document and keeps a receipt (packages/sent/upload-<draft file>.json); the scribe's `workitem.py register`
+# reads the draft's header and that receipt and creates the work item with the link in its 主文档 field; the
+# author's `docs.py relink` writes the item's ID into the document. What the two scripts share is here.
+STATUS_SECTION = "## 状态包\n\n### 简介\n\n%s### 当前状态\n\n### 近期变化\n\n### 风险\n"
+
+
+def cognitive_layer(body):
+    """What a new 状态包 starts from: the 认知层 of a package, the 目标 of a 研究任务单. '' when neither."""
+    for heading in ("认知层", "目标"):
+        m = re.search(r"^## %s[ \t]*\n(.*?)(?=^## |\Z)" % heading, body, re.M | re.S)
+        if m and m.group(1).strip():
+            return m.group(1).strip()
+    return ""
+
+
+def with_status_sections(body):
+    """Main documents end with 状态包 and then 交接记录; add whichever the draft lacks.
+    A new 状态包 starts with the 认知层 as its 简介: the router matches against it."""
+    has_status = re.search(r"^## 状态包\s*$", body, re.M)
+    has_log = re.search(r"^## 交接记录\s*$", body, re.M)
+    if has_status and has_log:
+        return body
+    intro = cognitive_layer(body)
+    status = STATUS_SECTION % (intro + "\n\n" if intro else "")
+    if has_log:
+        return body[:has_log.start()] + status + "\n" + body[has_log.start():]
+    if has_status:
+        return body.rstrip("\n") + "\n\n## 交接记录\n"
+    return body + "\n" + status + "\n## 交接记录\n"
+
+
+def doc_from_link(lg, link, given=False):
+    """/wiki/ link of a document known by a /wiki/ or /docx/ link or a document_id.
+    given=True checks a link typed with --doc before using it."""
+    link = (link or "").strip()
+    if given and not re.match(r"https?://[^/\s]+/(?:wiki|docx)/[A-Za-z0-9]{6,}$", link):
+        raise LedgerError("--doc 要给文档的 /wiki/ 或 /docx/ 链接，或者 new：%s" % link)
+    if "/wiki/" in link:
+        return link
+    return lg.doc_link(link if link.startswith("http") else None, None if link.startswith("http") else link)
+
+
+def main_document(lg, rec, doc, where, create, remember):
+    """The /wiki/ link of the draft's document: given with --doc, kept in the receipt, or created now.
+
+    create() makes the document and calls remember(docx=...) as soon as it exists;
+    remember(**kw) updates the receipt. When docs +create timed out or answered
+    without a link, the receipt keeps doc_unknown and the next run stops until --doc
+    says what to do: --doc <链接> takes over the document found on the web, --doc new
+    creates another one.
+    """
+    if doc and doc.strip().lower() != "new":
+        url = doc_from_link(lg, doc, given=True)
+        remember(doc=url, doc_unknown=False)
+        return url
+    if rec.get("doc"):
+        return rec["doc"]
+    if rec.get("docx"):
+        url = doc_from_link(lg, rec["docx"])
+        remember(doc=url)
+        return url
+    if rec.get("doc_unknown") and (doc or "").strip().lower() != "new":
+        raise LedgerError("上次建文档没有拿到确定的结果，文档可能已经建在%s下了。先在网页上核对：建好了的，重跑时加 --doc <文档链接> 接着用它；确认没建成的，加 --doc new 重新建" % where)
+    try:
+        url = create()
+    except WriteMaybeDone:
+        remember(doc_unknown=True)
+        raise
+    remember(doc=url, doc_unknown=False)
+    return url
+
+
+def parent_node(lg, wid, seq, rel, source):
+    if wid == "same_seq" and rel == "execute":
+        if not source:
+            raise LedgerError("执行关系的需求包要写来源工作项（它所属的下发需求包）：--source <ID>")
+        node = lg.node_of(lg.doc_url(source))
+        if not node:
+            raise LedgerError("来源工作项 #%s 的主文档不是知识库文档，没法把执行需求包挂在它下面" % source)
+        return node
+    key = "same_seq/%s" % seq if wid == "same_seq" else wid
+    n = lg.nodes.get(key)
+    if not n or not n.get("node_token"):
+        raise LedgerError("ids.json 里没有知识库节点 %s；先跑 ensure-node %s" % (key, key))
+    return n["node_token"]
+
+
+
+
+RUN_CONDITIONS = ("执行环境", "计算资源")
+NOT_YET = re.compile(r"(?:待研究员确认|待确认|待定|未定|无)(?:$|[\s（(，,。；;：:])")
+DECISION_REF = re.compile(r"(?:决策\s*#?\s*|#)(\d{3,})")
+
+
+def run_conditions_hints(d):
+    """Lines to print when a research task sheet writes 执行环境 or 计算资源 without the decision that set them."""
+    section = d.section("资源上限")
+    hints = []
+    for row in RUN_CONDITIONS:
+        m = re.search(r"^\s*[-*]\s*%s\s*[：:][ \t]*(.*)$" % row, section, re.M)
+        value = m.group(1).strip() if m else ""
+        if not value or orgspec.placeholder(value) or NOT_YET.match(value) or DECISION_REF.search(value):
+            continue
+        hints.append("提示：研究任务单“资源上限”里的%s写了“%s”，没有定下它的决策 ID：%s要进决策队列。请发出方写决策包交研究员定，"
+                     "探索任务也一样；定了以后把决策 ID 写进这一行，比如“%s（决策 #<ID>）”，没定之前写“待研究员确认”。" % (row, value, row, value))
+    return hints
+
+
+def check_new(d, kind):
+    """A draft of a new work item: its sender is a session (a sheet's may be 研究员, 导师) and a package is
+    its first version."""
+    if not d.author:
+        raise LedgerError("发出方要带会话名，比如“算法 +2（Alg-p2-01）”")
+    if not kind and d.version != 1:
+        raise LedgerError("登记的是新工作项，包头“版本”写第 1 版，现在是第 %s 版：已经登记过的包改了内容，用 docs.py revise <工作项 ID> <新草稿> 换主文档" % d.version)
+
+
+def new_item_sequence(lg, d, kind, wid):
+    """The sequence a new work item belongs to; a 同序列需求's relation goes with its sender's rank and a
+    跨序列需求 names both sequences."""
+    spec = lg.spec
+    # a sheet the researcher or the mentor is the sender of belongs to the entry's sequence
+    seq = d.receiver_seq if wid == "cross_request" else d.sender_seq or ("pmo" if kind else None)
+    if not seq:
+        raise LedgerError("从发出方、接收方认不出序列：写成“<序列名> +<职级>（<会话名>）”")
+    if wid == "same_seq":
+        if not d.rel:
+            raise LedgerError("同序列需求要写关系：下发或执行")
+        rank = re.search(r"-p([0-2])-", d.author or "")
+        # +2 发下发关系的包，+1 发执行关系的包；本序列没开 +1 时 +2 直接委托 +0，写的也是执行关系（1.0.12）
+        expected = {"2": ("assign", "execute"), "1": ("execute",)}.get(rank.group(1), ()) if rank else ()
+        if d.rel not in expected:
+            raise LedgerError("关系“%s”和发出方 %s 的职级对不上：+2 发给 +1 的同序列需求是下发，本序列没开 +1、直接发给 +0 的是执行；+1 发的是执行；退回作者改包头" % (
+                spec.term("rel", d.rel), d.author))
+    if wid == "cross_request" and not (d.sender_seq and d.receiver_seq):
+        raise LedgerError("跨序列需求要认得出发起序列和承接序列")
+    return seq
+
+
+ITEM_IN_TITLE = re.compile(r"^工作项\s*(?:<工作项 ID>|#?\d+)\s*｜\s*")
+
+
+def new_document(spec, d, kind):
+    """(title, body) of the document a draft of a new work item becomes: the title without the item's ID,
+    which `docs.py relink` puts in front once the item exists; the draft without its title line, with 状态包
+    and 交接记录 at its end (a 反馈 has neither)."""
+    title = ITEM_IN_TITLE.sub("", naming(spec, d, kind)[1])
+    body = d.body_without_title()
+    return title, body if kind == "feedback" else with_status_sections(body)
+
+
+def text_digest(title, body):
+    return hashlib.sha256(("%s\n%s" % (title, body)).encode("utf-8")).hexdigest()
+
+
+def upload_receipt(lg, path):
+    """(path, receipt) of a draft's upload receipt packages/sent/upload-<draft file>.json; the receipt is {}
+    when the draft was not uploaded."""
+    target = receipt_file(lg, ["upload-%s" % safe_name(path)], path)
+    rec = load_json(target, {}) if os.path.exists(target) else {}
+    return target, rec if isinstance(rec, dict) else {}
 
 
 def is_last(node):

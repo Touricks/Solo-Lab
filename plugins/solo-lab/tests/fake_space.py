@@ -9,8 +9,10 @@ needs a reason, puts the target back in progress and the nodes after it back to 
 started, and keeps the field values; an operation record takes a while to show up.
 """
 import copy
+import contextlib
 import datetime
 import html
+import io
 import json
 import os
 import re
@@ -481,6 +483,8 @@ class FakeSpace:
         new = self.parse_blocks(stdin or "")
         if flags.get("--command") == "append":
             blocks.extend(new)
+        elif flags.get("--command") == "overwrite":       # the whole document; its title stays
+            blocks[:] = new
         elif flags.get("--command") == "block_replace":
             ids = [b["id"] for b in blocks]
             start, end = ids.index(flags["--start-block-id"]), ids.index(flags["--end-block-id"])
@@ -580,3 +584,23 @@ class SimLedger(ledger_core.Ledger):
     def wrote(self, *words):
         """The write commands that contain all the words."""
         return [argv for argv, write, _ in self.calls if write and all(w in argv for w in words)]
+
+
+def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=None):
+    """A registration as its two sessions carry it out from 1.1.0: the author uploads the document
+    (docs.upload), the scribe creates the work item with the link in its 主文档 field (workitem.register), the
+    author writes the item's ID into the document (docs.relink). What the two steps of the author print is
+    left out: the tests of a registration read what the scribe sees. Only the scribe's step runs offline,
+    with --resume or --doc, and on a draft that is registered already (the scribe's step says so). A preview
+    is the scribe's: by then the author has uploaded."""
+    import docs
+    import workitem
+    if lg.mode != "offline" and not resume and not doc and not ledger_core.find_receipt(lg, path):
+        author = lg if lg.mode == "apply" else SimLedger(lg.root, "apply", lg.fake)
+        with contextlib.redirect_stdout(io.StringIO()):
+            docs.upload(author, path, source=source)
+    item = workitem.register(lg, path, source=source, pairs=pairs, resume=resume, doc=doc, task=task)
+    if lg.mode == "apply":
+        with contextlib.redirect_stdout(io.StringIO()):
+            docs.relink(lg, item)
+    return item

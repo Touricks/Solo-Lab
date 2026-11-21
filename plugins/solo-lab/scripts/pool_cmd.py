@@ -506,13 +506,23 @@ def recover_cmd(root, policy):
     word = (policy.get("msg") or {}).get("resume", "继续")
     print("恢复清单：")
     unfinished, replies = [], []
-    for path in pool.files_in(os.path.join(root, "packages", "sent"), "*.json"):
+    uploads, sent = [], pool.files_in(os.path.join(root, "packages", "sent"), "*.json")
+    known = {(pool.load_json(p, {}) or {}).get("draft") for p in sent if not os.path.basename(p).startswith(("reply-", "upload-", "attach-"))}
+    for path in sent:
         rec = pool.load_json(path, {}) or {}
+        if isinstance(rec, dict) and os.path.basename(path).startswith("upload-"):     # the author's step of a registration
+            if rec.get("status") != "uploaded":
+                uploads.append("%s（文档没传完，作者 %s 重跑 docs.py upload <草稿>）" % (rec.get("draft"), rec.get("by") or "?"))
+            elif rec.get("draft") not in known:
+                uploads.append("%s（文档已上传，还没登记：作者 %s 把登记请求再发一次）" % (rec.get("draft"), rec.get("by") or "?"))
+            continue
         if isinstance(rec, dict) and rec.get("status") not in (None, "registered", "replied"):
             if os.path.basename(path).startswith("reply-"):
                 replies.append("%s（答复 #%s，%s）" % (rec.get("draft"), rec.get("parent"), rec.get("status")))
             else:
                 unfinished.append("%s（#%s，%s）" % (rec.get("draft"), rec.get("work_item_id"), rec.get("status")))
+    if uploads:
+        print("- 传了文档、还没登记成工作项的草稿：%s" % "；".join(uploads))
     if unfinished:
         print("- 书记员先补完写到一半的登记，逐条运行 workitem.py register <草稿> --resume：%s" % "；".join(unfinished))
     if replies:

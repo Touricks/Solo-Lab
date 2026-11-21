@@ -702,7 +702,7 @@ class ExpiryTest(DeliveryCase):
     def setUp(self):
         super().setUp()
         self.fake = fake_space.FakeSpace()
-        self.quiet(workitem.register, self.lg(), os.path.join(self.tmp, setup_core.FIRST_TASK))
+        self.quiet(fake_space.register, self.lg(), os.path.join(self.tmp, setup_core.FIRST_TASK))
 
     def lg(self):
         return fake_space.SimLedger(self.tmp, "apply", self.fake, ())
@@ -716,7 +716,7 @@ class ExpiryTest(DeliveryCase):
         path = os.path.join(self.tmp, "packages", "drafts", "pmo", name)
         with open(path, "w", encoding="utf-8") as f:
             f.write(re.sub(r"^- 所属研究任务：.*\n", "", text, flags=re.M))
-        return self.quiet(workitem.register, self.lg(), path)
+        return self.quiet(fake_space.register, self.lg(), path)
 
     def age(self, item, hours):
         """The decision as if it had been registered that many hours ago, in the local state and in its receipt."""

@@ -65,34 +65,6 @@ EXISTING_GONE = ("register --existing 停用了：研究任务单和包一样原
                  "docs.py revise %s <修订稿> --note '<改了什么>' --apply")
 
 
-STATUS_SECTION = "## 状态包\n\n### 简介\n\n%s### 当前状态\n\n### 近期变化\n\n### 风险\n"
-
-
-def cognitive_layer(body):
-    """What a new 状态包 starts from: the 认知层 of a package, the 目标 of a 研究任务单. '' when neither."""
-    for heading in ("认知层", "目标"):
-        m = re.search(r"^## %s[ \t]*\n(.*?)(?=^## |\Z)" % heading, body, re.M | re.S)
-        if m and m.group(1).strip():
-            return m.group(1).strip()
-    return ""
-
-
-def with_status_sections(body):
-    """Main documents end with 状态包 and then 交接记录; add whichever the draft lacks.
-    A new 状态包 starts with the 认知层 as its 简介: the router matches against it."""
-    has_status = re.search(r"^## 状态包\s*$", body, re.M)
-    has_log = re.search(r"^## 交接记录\s*$", body, re.M)
-    if has_status and has_log:
-        return body
-    intro = cognitive_layer(body)
-    status = STATUS_SECTION % (intro + "\n\n" if intro else "")
-    if has_log:
-        return body[:has_log.start()] + status + "\n" + body[has_log.start():]
-    if has_status:
-        return body.rstrip("\n") + "\n\n## 交接记录\n"
-    return body + "\n" + status + "\n## 交接记录\n"
-
-
 def check_receipt(lg, path, resume, again=""):
     """The receipt to continue from with --resume (or --doc); None for a fresh registration."""
     rec = core.find_receipt(lg, path)
@@ -104,8 +76,7 @@ def check_receipt(lg, path, resume, again=""):
     if rec.get("status") == "registered":
         raise core.LedgerError("这份草稿已经登记成 #%s（回执 %s），不要重复登记%s" % (item_id, rec["_file"], again))
     if not resume:
-        step = "写回主文档链接" if rec.get("doc") else ("查主文档的知识库节点" if rec.get("docx") else "建主文档")
-        raise core.LedgerError("上次已经建了工作项 #%s，但没做完（停在：%s）。修好原因后加 --resume 接着做，不会再建一个" % (item_id, step))
+        raise core.LedgerError("上次已经建了工作项 #%s，但没做完（停在：补字段和登记评论）。修好原因后加 --resume 接着做，不会再建一个" % item_id)
     try:
         lg.item(item_id)
     except core.LedgerError as e:
@@ -209,47 +180,6 @@ def owner_note(lg, item_id):
 
 
 
-def doc_from_link(lg, link, given=False):
-    """/wiki/ link of a document known by a /wiki/ or /docx/ link or a document_id.
-    given=True checks a link typed with --doc before using it."""
-    link = (link or "").strip()
-    if given and not re.match(r"https?://[^/\s]+/(?:wiki|docx)/[A-Za-z0-9]{6,}$", link):
-        raise core.LedgerError("--doc 要给文档的 /wiki/ 或 /docx/ 链接，或者 new：%s" % link)
-    if "/wiki/" in link:
-        return link
-    return lg.doc_link(link if link.startswith("http") else None, None if link.startswith("http") else link)
-
-
-def main_document(lg, rec, doc, where, create, remember):
-    """The /wiki/ link of the draft's document: given with --doc, kept in the receipt, or created now.
-
-    create() makes the document and calls remember(docx=...) as soon as it exists;
-    remember(**kw) updates the receipt. When docs +create timed out or answered
-    without a link, the receipt keeps doc_unknown and the next run stops until --doc
-    says what to do: --doc <链接> takes over the document found on the web, --doc new
-    creates another one.
-    """
-    if doc and doc.strip().lower() != "new":
-        url = doc_from_link(lg, doc, given=True)
-        remember(doc=url, doc_unknown=False)
-        return url
-    if rec.get("doc"):
-        return rec["doc"]
-    if rec.get("docx"):
-        url = doc_from_link(lg, rec["docx"])
-        remember(doc=url)
-        return url
-    if rec.get("doc_unknown") and (doc or "").strip().lower() != "new":
-        raise core.LedgerError("上次建文档没有拿到确定的结果，文档可能已经建在%s下了。先在网页上核对：建好了的，重跑时加 --doc <文档链接> 接着用它；确认没建成的，加 --doc new 重新建" % where)
-    try:
-        url = create()
-    except core.WriteMaybeDone:
-        remember(doc_unknown=True)
-        raise
-    remember(doc=url, doc_unknown=False)
-    return url
-
-
 def resolved_pairs(lg, pairs):
     """--set pairs with @file replaced by the file's text, as kept in a receipt: a --resume
     writes the same values even if the file has moved or changed."""
@@ -270,21 +200,6 @@ def merge_pairs(*lists):
         for pair in pairs or []:
             merged[pair.partition("=")[0]] = pair
     return list(merged.values())
-
-
-def parent_node(lg, wid, seq, rel, source):
-    if wid == "same_seq" and rel == "execute":
-        if not source:
-            raise core.LedgerError("执行关系的需求包要写来源工作项（它所属的下发需求包）：--source <ID>")
-        node = lg.node_of(lg.doc_url(source))
-        if not node:
-            raise core.LedgerError("来源工作项 #%s 的主文档不是知识库文档，没法把执行需求包挂在它下面" % source)
-        return node
-    key = "same_seq/%s" % seq if wid == "same_seq" else wid
-    n = lg.nodes.get(key)
-    if not n or not n.get("node_token"):
-        raise core.LedgerError("ids.json 里没有知识库节点 %s；先跑 ensure-node %s" % (key, key))
-    return n["node_token"]
 
 
 def ensure_roles(lg, wid, item_id):
@@ -324,11 +239,6 @@ def flow_entry(lg, wid, name=None):
         raise core.LedgerError("%s有这些流程：%s；%s" % (lg.spec.term("wi", wid), flows,
                                                "没有“%s”" % name if name else "要写明走哪一个"))
     return {"field_key": "template", "field_value": str(tid)}
-
-
-def space_url(lg):
-    host = (lg.ids.get("meegle") or {}).get("host") or "project.feishu.cn"
-    return "https://%s/%s" % (host, lg.simple_name or lg.key)
 
 
 def open_tasks(lg):
@@ -376,47 +286,26 @@ def first_step_is_the_senders(lg, wid, nodes):
 # A research task sheet's 资源上限 names the conditions a paid run depends on: 执行环境 and 计算资源 say
 # 待研究员确认, or name the decision that set them. Choosing them meets criterion 4 of the list of
 # irreversible actions, so they go into the decision queue, exploratory tasks included.
-RUN_CONDITIONS = ("执行环境", "计算资源")
-NOT_YET = re.compile(r"(?:待研究员确认|待确认|待定|未定|无)(?:$|[\s（(，,。；;：:])")
-DECISION_REF = re.compile(r"(?:决策\s*#?\s*|#)(\d{3,})")
-
-
-def run_conditions_hints(d):
-    """Lines to print when a research task sheet writes 执行环境 or 计算资源 without the decision that set them."""
-    section = d.section("资源上限")
-    hints = []
-    for row in RUN_CONDITIONS:
-        m = re.search(r"^\s*[-*]\s*%s\s*[：:][ \t]*(.*)$" % row, section, re.M)
-        value = m.group(1).strip() if m else ""
-        if not value or orgspec.placeholder(value) or NOT_YET.match(value) or DECISION_REF.search(value):
-            continue
-        hints.append("提示：研究任务单“资源上限”里的%s写了“%s”，没有定下它的决策 ID：%s要进决策队列。请发出方写决策包交研究员定，"
-                     "探索任务也一样；定了以后把决策 ID 写进这一行，比如“%s（决策 #<ID>）”，没定之前写“待研究员确认”。" % (row, value, row, value))
-    return hints
-
-
 def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=None):
-    """Register a draft: a work item with the draft as its main document.
+    """Register a draft: a work item whose main document is the document its author uploaded.
 
     需求包 → 同序列需求 or 跨序列需求; 决策包 → 决策; 研究任务单 → 研究任务; 反馈 → 反馈.
-    Everything that can fail is checked before the work item exists: the header, the
-    fields the new-item page requires, the parent node. The item is created with a
-    link to the space as its main document, since the page requires one; the document
-    is created next, with the item's ID in its title and header, and written back. A decision's
-    执行方 and 研究员要做的事 go into the fields of those names where the space has them (header_fields).
-    A sheet or a package that is registered already takes its next version through revise, which keeps the
-    document and its link (until 1.0.9 a revised 研究任务单 became a new document: register --existing).
+    From 1.1.0 the scribe creates no document: the author runs `docs.py upload` first, and the link is read
+    from the upload receipt (packages/sent/upload-<draft file>.json), or given with --doc. A draft that was
+    not uploaded, or that changed after it was, stops here with the command its author runs. Everything that
+    can fail is checked before the work item exists: the header, the fields the new-item page requires, the
+    document. The item is created with the link in its 主文档 field; the author's `docs.py relink` writes the
+    item's ID into the document afterwards. A decision's 执行方 and 研究员要做的事 go into the fields of those
+    names where the space has them (header_fields). A sheet or a package that is registered already takes its
+    next version through `docs.py revise`, which keeps the document and its link.
     """
     spec = lg.spec
     kind = core.sheet_kind(path)
     d = core.Sheet(spec, path, kind) if kind else core.Draft(spec, path)
     wid = kind or core.work_item_type(d)
-    if not d.author:
-        raise core.LedgerError("发出方要带会话名，比如“算法 +2（Alg-p2-01）”")
-    if not kind and d.version != 1:
-        raise core.LedgerError("登记的是新工作项，包头“版本”写第 1 版，现在是第 %s 版：已经登记过的包改了内容，用 docs.py revise <工作项 ID> <新草稿> 换主文档" % d.version)
+    core.check_new(d, kind)
     if kind == "research_task":
-        for line in run_conditions_hints(d):
+        for line in core.run_conditions_hints(d):
             print(line)
     rec = check_receipt(lg, path, resume or bool(doc) and bool(core.find_receipt(lg, path))) if lg.mode != "offline" else None
     if rec and rec.get("existing"):
@@ -427,28 +316,15 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
     source = core.item_id_of(source or d.source) if (source or d.source) else None
     core.link_line(d.text, "#0", "0")                      # a 关联工作项 line that is no placeholder stops here
     name, title = core.naming(spec, d, kind)
+    seq = core.new_item_sequence(lg, d, kind, wid)
 
     fields = [{"field_key": "name", "field_value": name}, flow_entry(lg, wid, d.flow)]
     required = [("sender", d.author)]
-    # a sheet the researcher or the mentor is the sender of belongs to the entry's sequence
-    seq = d.receiver_seq if wid == "cross_request" else d.sender_seq or ("pmo" if kind else None)
-    if not seq:
-        raise core.LedgerError("从发出方、接收方认不出序列：写成“<序列名> +<职级>（<会话名>）”")
     if "sequence" in lg.contract.slots(wid, "fields"):
         required.append(("sequence", spec.term("seq", seq)))
     if wid == "same_seq":
-        if not d.rel:
-            raise core.LedgerError("同序列需求要写关系：下发或执行")
-        rank = re.search(r"-p([0-2])-", d.author or "")
-        # +2 发下发关系的包，+1 发执行关系的包；本序列没开 +1 时 +2 直接委托 +0，写的也是执行关系（1.0.12）
-        expected = {"2": ("assign", "execute"), "1": ("execute",)}.get(rank.group(1), ()) if rank else ()
-        if d.rel not in expected:
-            raise core.LedgerError("关系“%s”和发出方 %s 的职级对不上：+2 发给 +1 的同序列需求是下发，本序列没开 +1、直接发给 +0 的是执行；+1 发的是执行；退回作者改包头" % (
-                spec.term("rel", d.rel), d.author))
         required += [("relation", spec.term("rel", d.rel)), ("owner_session", d.receiver or "待委托")]
     if wid == "cross_request":
-        if not (d.sender_seq and d.receiver_seq):
-            raise core.LedgerError("跨序列需求要认得出发起序列和承接序列")
         required += [("from_sequence", spec.term("seq", d.sender_seq)), ("to_sequence", spec.term("seq", d.receiver_seq))]
     if source:
         required.append(("source_item", source))
@@ -473,14 +349,15 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
             fields.append(lg.entry(wid, ref, raw))
         except (core.LedgerError, KeyError, orgspec.OrgSpecError) as e:
             print("提醒：跳过字段 %s（之后可以用 update 补）：%s" % (ref, e))
-    sets = parse_sets(lg, wid, pairs)                 # on --resume, all values are written again with the main document
+    sets = parse_sets(lg, wid, pairs)                 # on --resume, all values are written again
     if any("upload" in v for _, v in sets):
-        raise core.LedgerError("登记时还没有主文档，产出文档没处挂：先登记，再用 workitem.py update <工作项 ID> --set <字段>=@<文件> 上传")
+        raise core.LedgerError("登记时不上传产出文档：先登记，这一步的负责会话再用 docs.py attach <工作项 ID> <字段> <文件> 上传，把链接交给书记员")
     fields += core.header_fields(lg, wid, d, {v["field_key"] for _, v in sets})
     if not rec:
         fields += [v for _, v in sets]
+    url = uploaded_document(lg, path, d, kind, rec, doc)
     doc_key = lg.field(wid, "main_doc")["field_key"]
-    fields = [f for f in fields if f["field_key"] != doc_key] + [{"field_key": doc_key, "field_value": space_url(lg)}]
+    fields = [f for f in fields if f["field_key"] != doc_key] + [{"field_key": doc_key, "field_value": url}]
     have = {f["field_key"] for f in fields if f.get("field_value") not in (None, "")}
     lacking = [c["name"] for c in lg.space_type(wid).get("create_fields") or [] if c.get("required") and c["field_key"] not in have]
     if lacking and not rec:
@@ -489,65 +366,72 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
     owners = lg.role_owners(wid)
     if owners:
         fields.append(owners)
-    parent = parent_node(lg, wid, seq, d.rel, source)
+    core.parent_node(lg, wid, seq, d.rel, source)       # the node the document hangs under is there
 
     kinds = core.receipt_kind(spec, wid, d, pairs)
     if rec:
         item_id = rec["work_item_id"]
         print("接着上次的 #%s 做。" % item_id)
-        core.save_receipt(lg, path, item_id, "created", kinds, pairs=pairs)        # values given on --resume too
+        core.save_receipt(lg, path, item_id, "created", kinds, pairs=pairs, doc=url)   # values given on --resume too
     else:
         created = lg.meegle("workitem", "create", "--work-item-type", lg.api(wid), "--fields",
                             json.dumps(fields, ensure_ascii=False), write=True)
         item_id = created_id(created, spec.term("wi", wid)) if created is not None else "<新工作项 ID>"
         core.save_receipt(lg, path, item_id, "created", kinds, source=source, task=task, pairs=resolved_pairs(lg, pairs),
-                     registered_at=core.now())
+                          registered_at=core.now(), doc=url)
     if wid == "decision" and kinds.get("queue"):      # frozen from the moment the work item exists
         core.hold(lg, item_id, kinds, (rec or {}).get("registered_at") or core.receipt_of(lg, item_id).get("registered_at"))
     title = title.replace("<工作项 ID>", item_id)
-
-    state = {}
-
-    def remember(**kw):
-        state.update(kw)
-        core.save_receipt(lg, path, item_id, "created", **kw)
-
-    def create():
-        link = lg.item_url(wid, item_id)
-        body = core.link_line(d.body_without_title(), "[#%s](%s)" % (item_id, link) if link else "#%s" % item_id, item_id)
-        if kind != "feedback":
-            body = with_status_sections(body)
-        return lg.create_doc(parent, title, body, created=lambda x: remember(docx=x, doc_unknown=False))
-
     try:
         if owners and not rec:
             ensure_roles(lg, wid, item_id)
-        url = main_document(lg, rec or {}, doc, "节点 %s " % parent, create, remember)
-        updates = [{"field_key": doc_key, "field_value": url}]
-        if rec:
-            updates += [v for _, v in sets]
+        updates = [{"field_key": doc_key, "field_value": url}] + [v for _, v in sets] if rec else []
         if wid == "same_seq" and d.rel == "execute" and not d.receiver:
             updates.append(lg.entry(wid, "owner_session", "%s-p0-%s" % (spec.term("abbrev", d.sender_seq), item_id)))
-        lg.meegle("workitem", "update", "--work-item-id", item_id, "--fields",
-                  json.dumps(updates, ensure_ascii=False), write=True)
+        if updates:
+            lg.meegle("workitem", "update", "--work-item-id", item_id, "--fields",
+                      json.dumps(updates, ensure_ascii=False), write=True)
         lg.meegle("comment", "add", "--work-item-id", item_id, "--content",
                   "%s 已登记：%s。主文档：%s" % (lg.tag, title, url), write=True)
     except core.LedgerError as e:
-        if state.get("doc_unknown", (rec or {}).get("doc_unknown")) and not (state.get("docx") or state.get("doc")):
-            raise core.WriteMaybeDone("%s\n工作项 #%s 已经建了，建主文档没有拿到确定的结果：先在网页上节点 %s 下核对。建好了的，运行 workitem.py register %s --resume --doc <文档链接> --apply；确认没建成的，运行 workitem.py register %s --resume --doc new --apply" % (
-                e, item_id, parent, path, path))
-        raise core.LedgerError("%s\n工作项 #%s 已经建了，主文档字段暂时指着空间首页；修好后运行 workitem.py register %s --resume --apply 接着做，不会再建一个工作项（来源工作项、所属研究任务和 --set 的值已记在回执里）" % (
+        raise core.LedgerError("%s\n工作项 #%s 已经建了，主文档字段已经填上；修好后运行 workitem.py register %s --resume --apply 接着做，不会再建一个工作项（来源工作项、所属研究任务和 --set 的值已记在回执里）" % (
             e, item_id, path))
     drifted = ""
     if lg.mode == "apply":
         drifted = core.write_back(path, d.text, item_id)
         core.save_receipt(lg, path, item_id, "registered", doc=url, draft_changed=True if drifted else None)
-    print(("登记：%s #%s，主文档放在节点 %s 下。" if lg.mode == "apply" else "预览：会登记一条%s（#%s），主文档放在节点 %s 下。") % (
-        spec.term("wi", wid), item_id, parent))
+    print(("登记：%s #%s，主文档是 %s。" if lg.mode == "apply" else "预览：会登记一条%s（#%s），主文档是 %s。") % (
+        spec.term("wi", wid), item_id, url))
+    if lg.mode == "apply":
+        print("回执里告诉发出方 %s：运行 python3.12 -I .claude/solo-lab/bin/docs.py relink %s --apply，把工作项 ID 写进文档的“关联工作项”一行和标题。" % (
+            d.author, item_id))
     if drifted:
         print("提醒：" + drifted)
     after_register(lg, wid, d, item_id)
     return item_id
+
+
+def uploaded_document(lg, path, d, kind, rec, doc):
+    """The /wiki/ link of the document a draft's author uploaded: given with --doc, kept in the registration
+    receipt of an unfinished run, or read from the upload receipt. The scribe creates no document: a draft that
+    was not uploaded stops here, and so does one that changed after it was uploaded, since the work item's
+    fields are read from the draft and the document would say something else."""
+    author = d.author if core.SESSION_NAME.match(d.author or "") else "发出方的会话"
+    rel = os.path.relpath(path, lg.root)
+    if doc and doc.strip().lower() == "new":
+        raise core.LedgerError("书记员不建文档（1.1.0 起文档谁负责谁写）：请 %s 运行 docs.py upload %s --doc new --apply，再登记" % (author, rel))
+    if doc:
+        return core.doc_from_link(lg, doc, given=True)
+    if (rec or {}).get("doc"):
+        return rec["doc"]
+    if lg.mode == "offline":
+        return "<主文档链接>"
+    _, up = core.upload_receipt(lg, path)
+    if not up.get("doc"):
+        raise core.LedgerError("这份草稿的文档还没上传：文档谁负责谁写，请 %s 先运行 python3.12 -I .claude/solo-lab/bin/docs.py upload %s --apply，再发登记请求" % (author, rel))
+    if up.get("sha256") and up["sha256"] != core.text_digest(*core.new_document(lg.spec, d, kind)):
+        raise core.LedgerError("草稿在上传以后改过，文档里还是上传时的内容：请 %s 重新运行 python3.12 -I .claude/solo-lab/bin/docs.py upload %s --apply（文档链接不变），再登记" % (author, rel))
+    return up["doc"]
 
 
 def after_register(lg, wid, d, item_id):
@@ -655,7 +539,7 @@ def reply(lg, path, doc=None):
         return lg.create_doc(node, title, d.body_without_title(), created=lambda x: remember(docx=x, doc_unknown=False))
 
     try:
-        link = main_document(lg, dict(rec), doc, "#%s 的主文档下" % parent_id, create, remember)
+        link = core.main_document(lg, dict(rec), doc, "#%s 的主文档下" % parent_id, create, remember)
         lg.meegle("workitem", "update", "--work-item-id", parent_id, "--fields", json.dumps(
             [{"field_key": link_key, "field_value": link}]), write=True)
         lg.meegle("comment", "add", "--work-item-id", parent_id, "--content",
@@ -778,7 +662,7 @@ def attach(lg, item_id, it, wid, key, path):
         return lg.create_doc(node, title, body, created=lambda x: remember(docx=x, doc_unknown=False))
 
     try:
-        link = main_document(lg, dict(rec), None, "#%s 的主文档下" % item_id, create, remember)
+        link = core.main_document(lg, dict(rec), None, "#%s 的主文档下" % item_id, create, remember)
     except core.WriteMaybeDone as e:
         raise core.LedgerError("%s\n上传 %s 没有拿到确定的结果（回执 %s）。先在网页上看 #%s 的主文档下有没有这份文档：有的话把它的链接直接写进 "
                           "--set %s=<文档链接>；确认没有，删掉这份回执再重跑" % (e, rel, receipt, item_id, label))

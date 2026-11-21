@@ -41,7 +41,7 @@ SHARED_HOOK_SCRIPTS = ("pool.py",)         # kept in scripts/, copied into the h
 POOL_DEFAULTS = {"p1": 1, "p0": 1, "later": ["liaison", "product", "alg"], "max_sessions": 30, "label": ""}
 # plugin scripts the researcher's own session runs from the plugin directory; the hook trusts them by path and hash
 PLUGIN_RUN = ("setup.py", "check.py", "space.py", "pool.py", "onboarding.py")
-FIRST_TASK = "packages/drafts/pmo/研究任务单-首条.md"
+FIRST_TASK = ledger_core.FIRST_TASK
 POOL_SESSIONS = (7, 57)
 
 SCRIBE_LARK = ["docs +create", "docs +update", "wiki +node-create", "wiki +move",
@@ -1066,8 +1066,9 @@ SCRIBE_FIRST = (
     "onboarding.py 只管计时，它报错就跳过，不影响写入："
     "1. onboarding.py start nodes；docs.py ensure-node all --apply；onboarding.py end nodes。"
     "2. ledger.py query tasks，空间里已经有研究任务就跳过这一件；没有的话 onboarding.py start first_task；"
-    "workitem.py register %s --apply；onboarding.py end first_task。"
-    "回话写明：建了几个节点、沿用了几个，研究任务的工作项 ID 和主文档链接；哪一条命令失败，原样贴出报错，不要重试两次以上。" % FIRST_TASK)
+    "docs.py upload %s --apply；workitem.py register %s --apply；照登记输出的工作项 ID 运行 docs.py relink <工作项 ID> --apply；"
+    "onboarding.py end first_task。"
+    "回话写明：建了几个节点、沿用了几个，研究任务的工作项 ID 和主文档链接；哪一条命令失败，原样贴出报错，不要重试两次以上。" % (FIRST_TASK, FIRST_TASK))
 
 
 MODEL_TIERS = ("haiku", "sonnet", "opus", "fable")
