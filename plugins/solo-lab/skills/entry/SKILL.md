@@ -9,15 +9,15 @@ description: 智能体组织的入口与路由。项目管理 +2 是研究员平
 
 入口会运行很久，上下文一定会被压缩。状态不留在对话里：每轮先看 hook 加进来的收件箱提示，再从台账、状态包和会话池读（跑 `route.py pool`）。
 
-压缩上下文以后、接着干活之前，先读研究任务的状态包：没归档的研究任务（`ledger.py query tasks`）和手上工作项所属的研究任务，逐条运行 `python3 -I .claude/solo-lab/bin/ledger.py status <研究任务 ID>`，读完再继续。压缩后 hook 注入的提示里列着手上工作项所属的研究任务 ID 和这条命令。状态包里已定的实验条件和暂停范围，和手上任务包的写法冲突时，以状态包和台账为准，并报给研究员。没有研究任务可读，或者找不到所属研究任务，说一句“跳过”再继续；读失败，报出失败原因后继续。
+压缩上下文以后、接着干活之前，先读研究任务的状态包：没归档的研究任务（`ledger.py query tasks`）和手上工作项所属的研究任务，逐条运行 `python3.12 -I .claude/solo-lab/bin/ledger.py status <研究任务 ID>`，读完再继续。压缩后 hook 注入的提示里列着手上工作项所属的研究任务 ID 和这条命令。状态包里已定的实验条件和暂停范围，和手上任务包的写法冲突时，以状态包和台账为准，并报给研究员。没有研究任务可读，或者找不到所属研究任务，说一句“跳过”再继续；读失败，报出失败原因后继续。
 
 ## 收到一条信息
 
 1. 先跑脚本，做能机械判断的部分：
 
    ```bash
-   python3 -I .claude/solo-lab/bin/route.py classify --text '<原话>'
-   python3 -I .claude/solo-lab/bin/route.py classify --draft <交来的草稿路径>
+   python3.12 -I .claude/solo-lab/bin/route.py classify --text '<原话>'
+   python3.12 -I .claude/solo-lab/bin/route.py classify --draft <交来的草稿路径>
    ```
 
 2. 按输出行动：
@@ -40,9 +40,9 @@ description: 智能体组织的入口与路由。项目管理 +2 是研究员平
 研究任务是台账的主线，有验证和试探两个流程。每一步谁负责、必填什么，以飞书空间为准，不凭记忆回答：
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py query tasks          # 没归档的研究任务
-python3 -I .claude/solo-lab/bin/ledger.py next <研究任务 ID>   # 走到哪一步、谁负责、还缺什么、有没有阻塞
-python3 -I .claude/solo-lab/bin/ledger.py query blocked        # 阻塞中的工作项，带阻塞原因
+python3.12 -I .claude/solo-lab/bin/ledger.py query tasks          # 没归档的研究任务
+python3.12 -I .claude/solo-lab/bin/ledger.py next <研究任务 ID>   # 走到哪一步、谁负责、还缺什么、有没有阻塞
+python3.12 -I .claude/solo-lab/bin/ledger.py query blocked        # 阻塞中的工作项，带阻塞原因
 ```
 
 两个流程的对照在项目的 `org/phases.md`，空间结构在 `feishu/space.md`。
@@ -57,7 +57,7 @@ python3 -I .claude/solo-lab/bin/ledger.py query blocked        # 阻塞中的工
 ## 决策队列
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py query queue
+python3.12 -I .claude/solo-lab/bin/ledger.py query queue
 ```
 
 决策只在两个时刻推给研究员，到时 hook 会在上下文里提示：
@@ -140,8 +140,8 @@ python3 -I .claude/solo-lab/bin/ledger.py query queue
 周报、月报、决策备忘这类写给导师和合作人看的材料归外联序列，不设定时任务。研究员对你说一句，比如“出本周周报”，你才发：
 
 1. 写一份跨序列的需求包给外联 +2。目标写要哪份材料、覆盖哪段时间；“继承的决策”写读者是谁、发出前要研究员签字。材料的内容和结论怎么表述，由外联定，你不写。
-2. 请书记员登记成跨序列需求，再给外联 +2 发【委托】，请它接单。
-3. 材料写好后，外联 +2 写决策包请研究员签字；研究员签了以后自己转交。交付包经你转回，照 R7 办。
+2. 请书记员登记成跨序列需求（你自己发起的由你直接提，不用经路由），再给外联 +2 发【委托】，请它接单。
+3. 材料写好后，外联 +2 写决策包请研究员签字；研究员签了以后自己转交。交付包直接交给你，你是发起方：对照需求包验收，请书记员确认“验收”并归档。
 
 外联写材料要新的台账查询或字段时，会给你发跨序列的需求包，你用交付包答复；改台账结构属于组织规则变更，要研究员决定。导师不用飞书，外联只在知识库的“汇报文档”节点下准备材料，不给导师开飞书权限。
 

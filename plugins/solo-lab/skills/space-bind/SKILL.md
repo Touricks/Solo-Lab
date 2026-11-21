@@ -16,7 +16,7 @@ description: 把插件的约定绑定到飞书项目空间时，处理对不上�
 ## 先看核对结果
 
 ```bash
-python3 -I <插件目录>/scripts/setup.py feishu --target <项目目录> --live
+python3.12 -I <插件目录>/scripts/setup.py feishu --target <项目目录> --live
 ```
 
 这是预览：只读飞书，不写文件。它按任务文件里写的空间读出结构，逐个槽位找对应的对象，再核对流程能不能被脚本推进。输出里看三处：
@@ -71,14 +71,14 @@ python3 -I <插件目录>/scripts/setup.py feishu --target <项目目录> --live
 **预览，再写入。** 研究员确认后带着 `--map` 再预览一遍，问题少了、绑定数满了，再加 `--apply`：
 
 ```bash
-python3 -I <插件目录>/scripts/setup.py feishu --target <项目目录> --live --map research_task=研究课题 --map decision.sign_result=批不批
-python3 -I <插件目录>/scripts/setup.py feishu --target <项目目录> --live --map research_task=研究课题 --map decision.sign_result=批不批 --apply
+python3.12 -I <插件目录>/scripts/setup.py feishu --target <项目目录> --live --map research_task=研究课题 --map decision.sign_result=批不批
+python3.12 -I <插件目录>/scripts/setup.py feishu --target <项目目录> --live --map research_task=研究课题 --map decision.sign_result=批不批 --apply
 ```
 
 写入的是 `feishu/ids.json`（绑定）、`feishu/space.json` 和 `feishu/space.md`（快照）、`feishu/binding.md`（绑定结果和还缺什么）、`org/phases.md`（研究任务的流程对照）。写入后在项目目录里核对一遍，最后一行以“通过”结尾，或者剩下的问题都已经进了缺项清单：
 
 ```bash
-python3 -I .claude/solo-lab/bin/space.py check --target .
+python3.12 -I .claude/solo-lab/bin/space.py check --target .
 ```
 
 ## --map 的写法
@@ -91,7 +91,7 @@ python3 -I .claude/solo-lab/bin/space.py check --target .
 - 可以写多个。名字里有空格的，整个参数加引号。
 - 指认写入一次就够：绑定记的是 type_key 和 field_key，以后重读不带 `--map` 也沿用，类型和字段在空间里改名也不会断。
 - 哪些类型是指认过的，看 `feishu/ids.json` 的 `meegle.types`：某个槽位记下的 `api_name` 和槽位标识不同，`name` 也和约定里的名字不同，它就是指认过的。
-- 只指认字段时不用读飞书。在项目目录里跑 `python3 -I .claude/solo-lab/bin/space.py bind --target . --map <类型槽位>.<字段槽位>=<字段名>`，它照本地的快照算一遍，只打印绑定结果和问题，不写文件。
+- 只指认字段时不用读飞书。在项目目录里跑 `python3.12 -I .claude/solo-lab/bin/space.py bind --target . --map <类型槽位>.<字段槽位>=<字段名>`，它照本地的快照算一遍，只打印绑定结果和问题，不写文件。
 - 角色、状态、系统字段和流程指认不了，只能改空间。
 
 ## 给模板维护者写缺项清单

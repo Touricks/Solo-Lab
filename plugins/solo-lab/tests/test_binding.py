@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Tests for `setup.py feishu` and `setup.py template` on a node-flow space:
-python3 -I -B tests/test_binding.py
+python3.12 -I -B tests/test_binding.py
 
 The space is replayed from tests/fixtures/feishu/v2/space-calls.json; nothing calls Feishu.
 """
@@ -168,7 +168,7 @@ class FeishuTest(BindingCase):
 
     def test_every_session_may_read_the_space(self):
         for cmd in ("snapshot", "bind", "check", "show"):
-            self.assertIn("Bash(python3 -I .claude/solo-lab/bin/space.py %s *)" % cmd, setup.READ_ALLOW)
+            self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/space.py %s *)" % cmd, setup.READ_ALLOW)
         self.assertEqual([a for a in setup.READ_ALLOW if "export" in a], [])        # writes a file wherever it is told to
 
     def test_a_space_that_is_not_there_is_made_from_the_template(self):

@@ -22,11 +22,11 @@
 
 | 想知道 | 看哪里 |
 | --- | --- |
-| 一条工作项现在在哪一步、谁负责、还缺什么 | `python3 -I .claude/solo-lab/bin/ledger.py next <工作项 ID>`。现读，以它为准 |
-| 每个流程有哪些节点，各自的负责角色和必填项 | `feishu/space.md` 的“流程”一节；或者 `python3 -I .claude/solo-lab/bin/space.py show --target . flows` |
-| 一个类型有哪些字段和选项、角色、状态，新建时必填什么 | `feishu/space.md` 里这个类型的一节；或者 `python3 -I .claude/solo-lab/bin/space.py show --target . fields` |
+| 一条工作项现在在哪一步、谁负责、还缺什么 | `python3.12 -I .claude/solo-lab/bin/ledger.py next <工作项 ID>`。现读，以它为准 |
+| 每个流程有哪些节点，各自的负责角色和必填项 | `feishu/space.md` 的“流程”一节；或者 `python3.12 -I .claude/solo-lab/bin/space.py show --target . flows` |
+| 一个类型有哪些字段和选项、角色、状态，新建时必填什么 | `feishu/space.md` 里这个类型的一节；或者 `python3.12 -I .claude/solo-lab/bin/space.py show --target . fields` |
 | 研究任务各流程的对照和推进规则 | `org/phases.md` |
-| 约定的槽位各绑到了空间里的哪个对象，还缺什么 | `feishu/binding.md`；或者 `python3 -I .claude/solo-lab/bin/space.py show --target . binding` |
+| 约定的槽位各绑到了空间里的哪个对象，还缺什么 | `feishu/binding.md`；或者 `python3.12 -I .claude/solo-lab/bin/space.py show --target . binding` |
 | 快照是什么时候读的 | `feishu/space.md` 开头的读取时间 |
 
 - `feishu/space.md` 和 `space.py show` 读的都是快照 `feishu/space.json`。空间配置改过以后要重读，用技能 `solo-lab:space-read`。

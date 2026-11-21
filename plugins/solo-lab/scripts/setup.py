@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Initialise a project directory for the agent organisation (the plugin's init step).
 
-    python3 -I scripts/setup.py precheck
-    python3 -I scripts/setup.py announce --target DIR [--name NAME | --task task.json] [--sequences ...]
-    python3 -I scripts/setup.py init --target DIR --task task.json [--sequences product,alg,...] [--apply]
-    python3 -I scripts/setup.py feishu --target DIR [--map ID=NAME ...] [--live] [--apply]
-    python3 -I scripts/setup.py template [--space NAME] [--target DIR]
-    python3 -I scripts/setup.py check --target DIR [--live] [--sessions FILE] [--readback FILE]
-    python3 -I scripts/setup.py pool --target DIR [--manual]
-    python3 -I scripts/setup.py login [--wait]
-    python3 -I scripts/setup.py env --target DIR [--apply]
+    python3.12 -I scripts/setup.py precheck
+    python3.12 -I scripts/setup.py announce --target DIR [--name NAME | --task task.json] [--sequences ...]
+    python3.12 -I scripts/setup.py init --target DIR --task task.json [--sequences product,alg,...] [--apply]
+    python3.12 -I scripts/setup.py feishu --target DIR [--map ID=NAME ...] [--live] [--apply]
+    python3.12 -I scripts/setup.py template [--space NAME] [--target DIR]
+    python3.12 -I scripts/setup.py check --target DIR [--live] [--sessions FILE] [--readback FILE]
+    python3.12 -I scripts/setup.py pool --target DIR [--manual]
+    python3.12 -I scripts/setup.py login [--wait]
+    python3.12 -I scripts/setup.py env --target DIR [--apply]
 
 announce says what an initialisation is about to create: the project space and the knowledge
 space by name, the knowledge-base nodes, the first research task, the sessions and the files in
@@ -58,7 +58,7 @@ research task. It returns 0 only when all four are ready. --live reads Feishu ba
 only); --sessions takes the client's own list of sessions saved as JSON; --readback takes each
 session's model, effort and context window as the client reported them, holds the model against
 the pool plan and the window against the session that initialised, and prints the table.
-Python 3.9 standard library only.
+Python 3.12 standard library only (1.0.12: until then 3.9, the python3 macOS ships).
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -95,7 +95,9 @@ BIN_SCRIPTS = ("orgspec.py", "ledger.py", "route.py", "space.py", "pool.py", "pr
 HOOK_SCRIPTS = ("guard.py", "audit.py", "instances.py", "inbox.py", "feishu_cmd.py")
 SHARED_HOOK_SCRIPTS = ("pool.py",)         # kept in scripts/, copied into the hooks too
 # liaison writes for readers other than the researcher: its +1 and +0 are opened when the first piece is due
-POOL_DEFAULTS = {"p1": 1, "p0": 1, "later": ["liaison"], "max_sessions": 30, "label": ""}
+# later: sequences that open with their +2 alone. 产品 and 算法 joined 外联 in 1.0.12 (the researcher, 2026-11-20): their
+# work is one line of thought, and of 1217 messages a real pool sent in a day their +1 and +0 received five.
+POOL_DEFAULTS = {"p1": 1, "p0": 1, "later": ["liaison", "product", "alg"], "max_sessions": 30, "label": ""}
 # plugin scripts the researcher's own session runs from the plugin directory; the hook trusts them by path and hash
 PLUGIN_RUN = ("setup.py", "space.py", "onboarding.py")
 FIRST_TASK = "packages/drafts/pmo/研究任务单-首条.md"
@@ -122,19 +124,19 @@ READ_ALLOW = [
     "Bash(meegle workflow list-state-required *)", "Bash(meegle project search *)",
     "Bash(meegle view search *)", "Bash(meegle view get *)", "Bash(meegle user me *)",
     "Bash(meegle auth status)", "Bash(meegle telemetry status)", "Bash(meegle version)",
-    "Bash(python3 -I .claude/solo-lab/bin/ledger.py get *)",
-    "Bash(python3 -I .claude/solo-lab/bin/ledger.py next *)",
-    "Bash(python3 -I .claude/solo-lab/bin/ledger.py query *)",
-    "Bash(python3 -I .claude/solo-lab/bin/ledger.py trace *)",
-    "Bash(python3 -I .claude/solo-lab/bin/ledger.py status *)",
-    "Bash(python3 -I .claude/solo-lab/bin/ledger.py mql *)",
-    "Bash(python3 -I .claude/solo-lab/bin/space.py snapshot *)",
-    "Bash(python3 -I .claude/solo-lab/bin/space.py bind *)",
-    "Bash(python3 -I .claude/solo-lab/bin/space.py check *)",
-    "Bash(python3 -I .claude/solo-lab/bin/space.py show *)",
-    "Bash(python3 -I .claude/solo-lab/bin/route.py classify *)",
-    "Bash(python3 -I .claude/solo-lab/bin/orgspec.py lint *)",
-    "Bash(python3 -I .claude/solo-lab/bin/orgspec.py show *)",
+    "Bash(python3.12 -I .claude/solo-lab/bin/ledger.py get *)",
+    "Bash(python3.12 -I .claude/solo-lab/bin/ledger.py next *)",
+    "Bash(python3.12 -I .claude/solo-lab/bin/ledger.py query *)",
+    "Bash(python3.12 -I .claude/solo-lab/bin/ledger.py trace *)",
+    "Bash(python3.12 -I .claude/solo-lab/bin/ledger.py status *)",
+    "Bash(python3.12 -I .claude/solo-lab/bin/ledger.py mql *)",
+    "Bash(python3.12 -I .claude/solo-lab/bin/space.py snapshot *)",
+    "Bash(python3.12 -I .claude/solo-lab/bin/space.py bind *)",
+    "Bash(python3.12 -I .claude/solo-lab/bin/space.py check *)",
+    "Bash(python3.12 -I .claude/solo-lab/bin/space.py show *)",
+    "Bash(python3.12 -I .claude/solo-lab/bin/route.py classify *)",
+    "Bash(python3.12 -I .claude/solo-lab/bin/orgspec.py lint *)",
+    "Bash(python3.12 -I .claude/solo-lab/bin/orgspec.py show *)",
 ]
 # What no session runs, whatever its role: Claude Code refuses these before a hook is asked, and a hook's
 # "allow" does not lift a deny. So nothing a role may run belongs here. Until 1.0.10 the list also denied
@@ -316,7 +318,7 @@ def load_pool_settings(raw):
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
-        raise SetupError("研究任务的 pool 要写成 {\"p1\": 1, \"p0\": 1, \"later\": [\"liaison\"], \"max_sessions\": 30}")
+        raise SetupError("研究任务的 pool 要写成 {\"p1\": 1, \"p0\": 1, \"later\": [\"liaison\", \"product\", \"alg\"], \"max_sessions\": 30}")
     unknown = sorted(k for k in raw if k not in POOL_DEFAULTS and not k.startswith("_"))
     if unknown:
         raise SetupError("研究任务的 pool 里有不认识的字段：%s；能写的是 p1、p0、later、max_sessions、label" % "、".join(unknown))
@@ -488,10 +490,16 @@ def build_policy(spec, task, seqs):
     return policy
 
 
-ROUTE = "python3 -I .claude/solo-lab/bin/route.py"
-POOL_ALLOW = ["Bash(python3 -I .claude/solo-lab/bin/onboarding.py *)"] + ["Bash(%s %s)" % (ROUTE, c) for c in ("pool", "audit")] + [
-    "Bash(%s %s *)" % (ROUTE, c) for c in ("claim", "expect", "pool", "refill", "todo", "audit", "notify", "focus")]
-SCRIBE_ALLOW = ["Bash(python3 -I .claude/solo-lab/bin/ledger.py %s *)" % w
+# The interpreter every command the plugin writes names: the hooks in settings.json, the permission rules, the
+# role texts, the skills. From 1.0.12 the scripts are tested under Python 3.12 alone and run there alone (the
+# researcher, 2026-11-20). The command names the version, python3.12 and not python3: on macOS python3 is the
+# system's 3.9, and whatever the researcher installed for it (their experiments' packages) hangs on that name.
+PYTHON = "python3.12"
+MIN_PYTHON = (3, 12)
+ROUTE = "%s -I .claude/solo-lab/bin/route.py" % PYTHON
+POOL_ALLOW = ["Bash(python3.12 -I .claude/solo-lab/bin/onboarding.py *)"] + ["Bash(%s %s)" % (ROUTE, c) for c in ("pool", "audit", "cross")] + [
+    "Bash(%s %s *)" % (ROUTE, c) for c in ("claim", "expect", "pool", "refill", "todo", "audit", "cross", "notify", "focus")]
+SCRIBE_ALLOW = ["Bash(python3.12 -I .claude/solo-lab/bin/ledger.py %s *)" % w
                 for w in ("register", "revise", "reply", "confirm", "rollback", "update", "comment", "status-block", "append",
                           "archive", "relink", "ensure-node")]
 POOL_HOOK_EVENTS = ("Stop", "StopFailure", "Notification", "PermissionRequest", "PermissionDenied", "PostCompact")
@@ -515,7 +523,7 @@ def build_settings(task, risk, policy):
 
     def hook(script):
         return [{"type": "command", "timeout": 30,
-                 "command": "python3 -I -B \"$CLAUDE_PROJECT_DIR/.claude/hooks/%s\"" % script}]
+                 "command": "python3.12 -I -B \"$CLAUDE_PROJECT_DIR/.claude/hooks/%s\"" % script}]
     hooks = {
         "PreToolUse": [{"matcher": "Bash|Monitor|Edit|Write|NotebookEdit|Agent|Task|AskUserQuestion",
                         "hooks": hook("guard.py")},
@@ -660,6 +668,7 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
     n = spec.rules["naming"]
     scribe = policy["agents"]["pmo-scribe"]["fixed_session"]
     entry = policy["agents"]["pmo-p2"]["fixed_session"]
+    router = policy["agents"]["pmo-router"]["fixed_session"]
     reg, receipt = spec.term("msg", "register_request"), spec.term("msg", "register_receipt")
     if rank == 0:
         session = ("会话池里你是一个桌面会话，池位名写作 `%s-p0-01` 这样的两位序号：侧栏标题、短名和消息抬头都用它。"
@@ -668,34 +677,41 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
         session = "会话池里你是一个桌面会话，会话名在开局那句话里，写作 `%s` 这样的两位序号，认领后不变，消息抬头用它。" % pol["session_pattern"].replace("<序号>", "01")
     lines = [
         "- 会话名：%s会话标签是 `%s`。" % (session, pol["tag"]),
-        "- 开工或接手：先读交给你的包；再用 `python3 -I .claude/solo-lab/bin/ledger.py get <工作项 ID>` 读工作项，读主文档的“状态包”接上进度。不靠对话记状态。",
+        "- 开工或接手：先读交给你的包；再用 `python3.12 -I .claude/solo-lab/bin/ledger.py get <工作项 ID>` 读工作项，读主文档的“状态包”接上进度。不靠对话记状态。",
         "- " + after_compaction("入口" if rank == 2 else "上一级"),
-        "- 写包用技能 `solo-lab:packages`（模板副本在 `.claude/solo-lab/templates/`）。草稿写到 `packages/drafts/%s/`，文件名照 `%s`；写完跑 `python3 -I .claude/solo-lab/bin/orgspec.py lint <路径>`。" % (seq, n["draft"]),
+        "- 写包用技能 `solo-lab:packages`（模板副本在 `.claude/solo-lab/templates/`）。草稿写到 `packages/drafts/%s/`，文件名照 `%s`；写完跑 `python3.12 -I .claude/solo-lab/bin/orgspec.py lint <路径>`。" % (seq, n["draft"]),
     ]
-    if rank == 2:           # a +2 answers requests of other sequences; they travel through the entry
-        lines.append("- 交付：你答复的是别的序列发来的跨序列需求。交付包发给入口 `%s`，首行写 `%s：<包名> <包路径>`，下面是三行以内的摘要；入口请书记员登记，再通知发起方。"
-                     "发完把回执（delivered 或 queued，以及 message_id）写进本轮的最后一句。" % (entry, msg_head(spec, "report", receiver=entry)))
-    else:
-        lines.append("- 交付：写好交付包，先给 `%s` 发【%s】：写草稿路径，动作“上传答复”，再写一行“确认节点：#<需求 ID>，由 <你的会话名> 提出”，它上传交付包并确认“执行”这一步。"
-                     "拿到【%s】后给委托方发消息，首行写 `%s：<包名> <包路径>`，下面是三行以内的摘要。发完把回执（delivered 或 queued，以及 message_id）写进本轮的最后一句。" % (
-                         scribe, reg, receipt, msg_head(spec, "report", receiver="<委托方会话名>")))
-    dispatch = ("再跑 `python3 -I .claude/solo-lab/bin/route.py pool --role %s` 找空闲的会话。有空闲的：登记请求写“开工：是”，拿到【%s #ID】后发 "
+    # every rank delivers the same way: the scribe uploads, then the package goes straight to whoever asked. Until
+    # 1.0.12 a +2 answering another sequence handed its delivery to the entry, which passed it on.
+    lines.append("- 交付：写好交付包，先给 `%s` 发【%s】：写草稿路径，动作“上传答复”，再写一行“确认节点：#<需求 ID>，由 <你的会话名> 提出”，它上传交付包并确认“执行”这一步。"
+                 "拿到【%s】后给委托方发消息，首行写 `%s：<包名> <包路径>`，下面是三行以内的摘要。%s发完把回执（delivered 或 queued，以及 message_id）写进本轮的最后一句。" % (
+                     scribe, reg, receipt, msg_head(spec, "report", receiver="<委托方会话名>"),
+                     "别的序列发来的跨序列需求，委托方就是发起它的那个 +2：交付直接发给它，不经入口。" if rank == 2 else ""))
+    dispatch = ("再跑 `python3.12 -I .claude/solo-lab/bin/route.py pool --role %s` 找空闲的会话。有空闲的：登记请求写“开工：是”，拿到【%s #ID】后发 "
                 "`%s：<包名> <包路径>`%s。没有空闲的：登记请求写“开工：否”，工作项留在“待开工”排队；等有会话空出来，先请书记员确认“开工”这一步（`ledger.py confirm <工作项 ID> --by <承接方的会话名>`），再委托。")
+    closed = "要派的活是不是封闭任务，和在途的 +0 有没有改同一批文件；有重叠的排在它后面做，不并行"
     if rank == 2:
         lines.append(("- 委托 +1：先写下发关系的需求包，给 `%s` 发【%s】（写草稿路径）。" % (scribe, reg))
                      + dispatch % (pol["spawn"][0], receipt, msg_head(spec, "assign", receiver="<+1 的池位名>"), ""))
+        lines.append("- 本序列没开 +1 时，封闭任务直接委托 +0：需求包写执行关系，方法和验收标准一起写明，登记请求里写“来源工作项 #<这件活所属的研究任务或跨序列需求 ID>”，"
+                     "消息里单独写一行“会话名：%s-p0-<工作项 ID>”，其余照上一条。做到一半还要新信息或新判断的事不派给 +0，自己做。补 +0 之前先看两件事：%s。" % (pol["abbrev"], closed))
+        if seq in (task.get("pool") or {}).get("later", []):
+            lines.append("- 本序列开池时只有你一个会话：活自己做。有封闭任务（查文献、跑一段分析、独立复核这类）时补 +0；有要长期占上下文的设计阶段时才补 +1，这个阶段结束就请研究员释放它。")
     elif rank == 1:
+        lines.append("- 哪类活自己做：看一件事做到一半还需不需要新的信息或新的判断。不需要的是封闭任务，交 +0；需要的（开跑一个批次并盯着、撤作业、合并和解冲突、命令被拦下以后的重试这类）你自己做，不派给 +0。"
+                     "自己做的时候，盯守交给脚本或后台任务，你只读汇总，免得上下文被日志撑大。+0 报来“这个任务不是封闭任务”的，收回自己做。补 +0 之前先看两件事：%s。" % closed)
         lines.append(("- 委托 +0：执行关系的需求包按验收标准划分，不按运行次数划分。先给 `%s` 发【%s】（写草稿路径和“来源工作项 #<它所属的下发需求包 ID>”）。" % (scribe, reg))
                      + dispatch % (pol["spawn"][0], receipt, msg_head(spec, "assign", receiver="<+0 的池位名>"),
                                    "，消息里单独写一行“会话名：%s-p0-<工作项 ID>”" % pol["abbrev"]))
     else:
-        lines.append("- 你不再往下委托。")
+        lines.append("- 你不再往下委托。交给你的是封闭任务：照需求包的方法和验收标准做完就交付。任务中途第二次被要求转向（改方法、改范围、撤掉重来这类）时先停下，"
+                     "告诉委托方“这个任务不是封闭任务”，由它收回自己做；第一次转向照做。")
     if rank in (1, 2):
         lines.append("- 验收：收到【%s】后，对照需求包的验收标准看交付包，`ledger.py get <需求 ID>` 的“交付包”字段是它的链接。通过：给 `%s` 发【%s】，动作“确认节点”和“归档”，"
                      "写“确认节点：#<需求 ID>，由 <你的会话名> 提出”。不通过：动作“回滚节点”，写“回滚节点：#<需求 ID> 退回到 执行，原因：<一句话>”，"
                      "拿到【%s】后给承接方发【%s】说明要改什么。%s" % (
                          spec.term("msg", "report"), scribe, reg, receipt, spec.term("msg", "resume"),
-                         "你发起的跨序列需求，入口用【%s】告诉你交付到了，验收的做法一样。" % spec.term("msg", "notice") if rank == 2 else ""))
+                         "你发起的跨序列需求，承接方 +2 直接给你发【%s】，验收的做法一样，要改什么也直接告诉它。" % spec.term("msg", "report") if rank == 2 else ""))
         opens = ("你开本序列的 +1；+0 由它上面的 +1 开，要补 +0 请研究员到那个 +1 的会话里说（本序列没有 +1 时才由你开）" if rank == 2
                  else "你开自己下面的 +0")
         lines.append("- 上限和补位：每个角色 +1 最多 3 个会话、+0 最多 5 个。没有空闲会话就排队。会话一层开一层，侧栏里新会话嵌在开它的会话下面：%s。"
@@ -705,12 +721,19 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
                      "研究员在你的会话里点一下就开；不归你开的，照命令的输出请开它的会话提卡。" % opens)
         lines.append("- 你开的会话每结束一轮，应用会叫醒你一次。这不算交付：先跑 `route.py pool --queue <你的会话名>`，有等你委托的事、又有空闲会话就委托出去，没有就一句话结束本轮。")
     if rank == 2:
-        lines.append("- 跨序列的需求包、决策包写成草稿发给入口 `%s`（需求包草稿也用【%s】这个抬头，决策包用【%s】），由入口转交；你不直接委托别的序列。" % (
-            entry, spec.term("msg", "report"), spec.term("msg", "decide")))
-        lines.append("- 别的序列发来的跨序列需求，由入口用【%s】转给你。先接单：把需求复述、承接范围、预计交付时间写在消息里发给入口，抬头也用【%s】，这时还不写交付包，入口请书记员确认“接单”这一步；"
-                     "不接就写明原因交给入口，由它请书记员退回“提出”。接了以后序列内照常委托，做完的交付包照上面“交付”一条交给入口。" % (
-                         spec.term("msg", "assign"), spec.term("msg", "report")))
-        lines.append("- 研究任务走到你们序列负责的那一步时，这一步归你推进；书记员确认上一步以后会用【%s】告诉你。先用 `python3 -I .claude/solo-lab/bin/ledger.py next <研究任务 ID>` 看这一步必填什么，"
+        # 1.0.12: a request to another sequence goes to the router once (duplicates, conflicts, registration), and
+        # from then on the two +2 talk to each other. Until then every message of it passed through the entry.
+        lines.append("- 跨序列的需求包写成草稿，给路由 `%s` 发 `%s：跨序列需求包 <包路径>`。它对照台账查重复和冲突，请书记员登记，用【%s #ID】把工作项 ID 回给你；"
+                     "你再直接给承接方 +2 发 `%s：<包名> <包路径>`。它说和进行中的工作重复、或者碰到冻结项的，照它说的先处理，不发委托。"
+                     "决策包照旧写成草稿发给入口 `%s`，抬头用【%s】。" % (
+                         router, msg_head(spec, "notice", item=None, receiver=router), spec.term("msg", "notice"),
+                         msg_head(spec, "assign", receiver="<承接方 +2 的会话名>"), entry, spec.term("msg", "decide")))
+        lines.append("- 别的序列发来的跨序列需求，发起方 +2 直接用【%s #ID】发给你。先接单：给 `%s` 发【%s】，写“确认节点：#<ID>，由 <你的会话名> 提出”和三项必填（需求复述、承接范围、预计交付时间），"
+                     "这时还不写交付包；拿到【%s】后用【%s #ID】把这三项告诉发起方。不接：请书记员“回滚节点：#<ID> 退回到 提出”并写原因，再告诉发起方。接了以后序列内照常委托。" % (
+                         spec.term("msg", "assign"), scribe, reg, receipt, spec.term("msg", "notice")))
+        lines.append("- 跨序列需求登记以后，澄清、答复、进度和验收意见都带着工作项 ID 直接和对方 +2 往来，不经入口和路由；路由从登记回执和派发日志看进展。"
+                     "改范围、改成功标准、改冻结项不在往来里谈定：写决策包交入口。")
+        lines.append("- 研究任务走到你们序列负责的那一步时，这一步归你推进；书记员确认上一步以后会用【%s】告诉你。先用 `python3.12 -I .claude/solo-lab/bin/ledger.py next <研究任务 ID>` 看这一步必填什么，"
                      "序列内的事委托 +1，要别的序列配合就发跨序列的需求包。要填链接的产出有两条路。你自己写的（和研究员谈出来的规格、需求文档这一类）：写在本地，"
                      "登记请求里把字段写成 `<字段>=@<本地文件>`，书记员上传到研究任务单下面并填上链接；研究员签字前要看的，先请书记员用 "
                      "`ledger.py update <任务 ID> --set <字段>=@<本地文件>` 传上去，把链接写进决策包。委托下去做的（要查、要跑、要整理的上下文文档、实验方案、试探记录这一类）："
@@ -719,11 +742,11 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
     else:
         if seq != "quality":
             lines.append("- 交付包里写明材料来源、每个变体的结果和运行 ID，失败的也列。你自己跑出的分数是开发分，只用来调试，不当结论写。")
-        lines.append("- 需要别的序列配合的、要拍板的事，写进交给上一级的交付包，由本序列 +2 交给入口；你不直接找别的序列。")
+        lines.append("- 需要别的序列配合的、要拍板的事，写进交给上一级的交付包，由本序列 +2 去办；你不直接找别的序列。")
     lines += common_role_lines(spec, seq, rank, name, pol, task, policy)
     if rank == 2:
         lines += [
-            "- 研究员会直接点开你的会话交代事情。这时先运行 `python3 -I .claude/solo-lab/bin/route.py focus open --topic '<一句话>'`，用 `route.py notify %s --text '…'` 告诉入口；做完或研究员说“结束”时运行 `route.py focus close`。谈定的事写成决策包（渠道：研究员主动发起）交给入口登记。没写进台账的决定不算数。" % entry,
+            "- 研究员会直接点开你的会话交代事情。这时先运行 `python3.12 -I .claude/solo-lab/bin/route.py focus open --topic '<一句话>'`，用 `route.py notify %s --text '…'` 告诉入口；做完或研究员说“结束”时运行 `route.py focus close`。谈定的事写成决策包（渠道：研究员主动发起）交给入口登记。没写进台账的决定不算数。" % entry,
             "- 被其他 agent 会话叫醒的轮次，研究员多半不在，不向研究员提问：要研究员拍板的事写决策包，或给入口发【%s】；+1 和 +0 要拍板的事写进交付包。收尾里的提问 hook 会去掉。" % spec.term("msg", "decide"),
             "- 只要研究员动一下手、没有选项要他挑的事（恢复集群连接、下载数据、连 VPN、跑一条只有他能跑的命令这类），不写决策包：运行 `route.py todo add --text '<要他做什么>' --for <工作项 ID> --done-when '<做完怎么算数>'` 记进研究员任务清单，入口向研究员列出；他做完了，或者你自己核对到了结果，运行 `route.py todo done <编号>`。建错的、不做了的工作项归档不了，也不去推它的节点：运行 `route.py todo add --for <工作项 ID> --terminate --text '<为什么不要它了>'`，由研究员在网页上终止。有两个以上的选项要他挑，或者做了以后不好撤回的，是决策，照旧写决策包。",
             "- 决策定下以后要研究员亲手做的事（整理数据、挂 API、维护沙箱、开 Docker、调设置这类），写在决策包包头“研究员要做的事”。"
@@ -772,6 +795,7 @@ def agent_file(spec, seq, rank, task, policy):
 
 
 POOL_DESC = "不要用 Agent 工具派这个角色，给它的会话发消息。"
+CROSS_RECORD = "packages/drafts/pmo/跨序列协调记录.md"     # the router keeps it; route.py cross names it too
 
 
 def entry_values(spec, policy):
@@ -783,13 +807,13 @@ def entry_values(spec, policy):
     me = pol["fixed_session"]
     return {
         "entry_runs_as": "在会话池里是研究员平时对话的会话",
-        "entry_preface": "先写清工作方式：用中文回答，先给结论；先读再改，做完核对结果；研究员在场就问，不在场就写进决策队列，不猜参数、不编结果。你会运行很久，上下文一定会被压缩，所以不靠对话记状态：每次都从台账、状态包和 `python3 -I .claude/solo-lab/bin/route.py pool` 读。",
+        "entry_preface": "先写清工作方式：用中文回答，先给结论；先读再改，做完核对结果；研究员在场就问，不在场就写进决策队列，不猜参数、不编结果。你会运行很久，上下文一定会被压缩，所以不靠对话记状态：每次都从台账、状态包和 `python3.12 -I .claude/solo-lab/bin/route.py pool` 读。",
         "entry_to_router": "给 `%s` 发 `%s：<一句话>`，把原话和脚本输出写进消息（长的先写进 `packages/drafts/pmo/` 再给路径）。它把结论用【%s】发回给你。" % (
             router, msg_head(spec, "assign", item=None, sender=me, receiver=router), spec.term("msg", "report")),
         "entry_dispatch": (
             "**委托。** 照派发图给这些角色的会话发消息：%s。已经有工作项的事用【委托 #ID】；"
             "还没有工作项的（研究员刚交代的新任务、要对方起草的包）用【通知】，正文写研究员的原话和要它做什么。"
-            "两种都先跑 `python3 -I .claude/solo-lab/bin/route.py pool --role <角色>` 找人：有空闲的发给空闲的，优先发给台账里“负责会话”对应的那个；"
+            "两种都先跑 `python3.12 -I .claude/solo-lab/bin/route.py pool --role <角色>` 找人：有空闲的发给空闲的，优先发给台账里“负责会话”对应的那个；"
             "显示“研究员在用”的不打断，用 `route.py notify <会话名> --text '...' --work-item <ID>` 留言，紧急的才发消息。"
             "消息首行写 `%s：<包名> <包路径>`，下面写要它做什么；正文不复述，包在文件里。回执是 delivered 或 queued 才算发出；"
             "对方收没收到，以对方 hook 记在 `.claude/logs/dispatch.jsonl` 的时间为准。\n\n**登记。** 工作项、字段、状态和文档只由书记员写。"
@@ -811,6 +835,9 @@ def entry_values(spec, policy):
             "委托一批工作项之前先看额度：5 小时额度用了八成以上，只委托紧急程度为“插队”的。"
             "你开的会话每结束一轮，应用会叫醒你一次，这不算交付：先跑 `route.py pool --queue %s`，有待开工的工作项又有空闲会话就委托出去，没有就一句话结束本轮。") % (
             bullets([spec.render(spec.rules["entry"]["focus_rule"])]), spec.term("msg", "resume"), me),
+        "entry_cross": "**跨序列需求不经你转手。** 发起方 +2 把需求包交路由 `%s` 查重、登记，再直接委托承接方 +2；接单、答复、交付、验收都在两个 +2 之间。"
+                       "看进展用 `route.py cross` 和路由的协调记录 `%s`。"
+                       "路由报来改范围、改标准、改冻结项的内容，或者两边说法对不上的，请有关的 +2 写决策包。各序列交来的包只有决策包经你，包的流向表在 `org/org.md`。" % (router, CROSS_RECORD),
         "entry_permissions": "**权限提示。** 每个会话的权限提示只出现在它自己的会话里；`route.py pool --watch` 把等研究员批准的会话列在最前。请研究员不要对飞书写操作的提示选“不再询问”。",
         "after_compaction": after_compaction("研究员", entry=True),
         "entry_status": "**状态包由你维护。** 研究任务主文档末尾的“状态包”记这条任务现在的状态：上游卡在哪条决策、哪些实验条件已经定死、哪些工作暂停了。"
@@ -836,7 +863,7 @@ def pmo_file(spec, rank, task, policy):
         common.update({
             "description_json": yaml_str(prefix + desc),
             "seq_intro": s["intro"], "handoff_rules": spec.handoff_rules(), "signoff": spec.signoff_items(),
-            "routing_table": spec.routing_table(), "package_routes": spec.package_routes(),
+            "routing_table": spec.routing_table(),
             "writes": describe_writes(pol),
         })
         common.update(entry_values(spec, policy))
@@ -845,9 +872,26 @@ def pmo_file(spec, rank, task, policy):
         router_scribe = "**交给书记员。** 入口要你安排登记、分发或归档时，给 `%s` 发【%s】，等它回【%s】，再把书记员的写入结果和异常清单写进给入口的【%s】。" % (
             scribe, spec.term("msg", "register_request"), spec.term("msg", "register_receipt"), spec.term("msg", "report"))
         router_report = "**交付。** 给入口发【%s】：路由结论，或者决策队列表，或者书记员的写入结果。正文长的写进 `packages/drafts/pmo/`，消息里只给路径和三行摘要。" % spec.term("msg", "report")
-        common.update({"description_json": yaml_str(prefix + "项目管理 +1（路由）。按路由决策表给出路由结论、入口要时汇总决策队列、安排书记员登记；不委托序列 +2。"),
+        me, notice = pol["fixed_session"], spec.term("msg", "notice")
+        # 1.0.12: the router is where a request to another sequence starts, and it keeps the record of what the
+        # two +2 then settle between themselves. Until then it only answered the entry, and a real pool never asked.
+        router_cross = (
+            "**跨序列需求的委托。** 各序列的 +2 把跨序列的需求包草稿用【%s】发给你。先跑 `python3.12 -I .claude/solo-lab/bin/route.py classify --draft <包路径>`，草稿没通过检查的退回作者。"
+            "再对照台账查两件事：和进行中的工作有没有重复（`ledger.py query cross`、`ledger.py query open --sequence <承接序列>`）；"
+            "有没有碰到所属研究任务签字后冻结的字段，或者待定决策“冻结的动作”（`ledger.py status <研究任务 ID>`、`ledger.py query queue`）。"
+            "没有问题：给 `%s` 发【%s】（草稿路径，动作“新建工作项并上传”），拿到【%s #ID】后回给发起方 `%s：已登记，可以委托`，由它直接委托承接方 +2。"
+            "有问题：不登记，把是哪一条回给发起方；要研究员定的，另给入口发【%s】。你不改写包的内容，不替序列判断做不做，也不委托承接方。\n\n"
+            "**协调记录。** 跨序列需求登记以后，两个 +2 直接往来，不经你和入口。书记员在这类工作项上每写一次（接单、交付、验收、回滚、归档），会把【%s】另发一份给你。"
+            "收到后跑 `python3.12 -I .claude/solo-lab/bin/route.py cross <工作项 ID>` 看这条需求的往来（日志只记每条消息的首行，内容读首行写的包），"
+            "更新 `%s`：每条进行中的跨序列需求一行，写谁在等谁、卡在哪一步、前置条件齐没齐、最近一次往来。"
+            "有下面三种情况，给入口发【%s】，写明是哪条需求、哪一句：往来里出现改范围、改成功标准、改冻结项的内容；两个序列的说法对不上；"
+            "过了截止时间没有动静（期限看 `ledger.py query cross`，`route.py cross` 会标出 48 小时没有往来的）。都没有就一句话结束本轮，不给入口发消息。") % (
+            notice, scribe, spec.term("msg", "register_request"), spec.term("msg", "register_receipt"),
+            msg_head(spec, "notice", item="<工作项 ID>", sender=me, receiver="<发起方 +2 的会话名>"), spec.term("msg", "report"),
+            spec.term("msg", "register_receipt"), CROSS_RECORD, spec.term("msg", "report"))
+        common.update({"description_json": yaml_str(prefix + "项目管理 +1（路由）。按路由决策表给出路由结论、入口要时汇总决策队列、安排书记员登记；给跨序列需求查重、登记，维护跨序列协调记录；不委托序列 +2。"),
                        "routing_table": spec.routing_table(), "router_scribe": router_scribe, "router_report": router_report,
-                       "after_compaction": after_compaction("入口")})
+                       "router_cross": router_cross, "after_compaction": after_compaction("入口")})
         return render(scaffold("agents/router.md.tmpl"), common)
     intake = "\n\n会话池里各会话直接给你发【%s】。一次处理一条；你在忙时，后来的消息会自动排队。写完给请求方回 `%s：<写了什么>`，下面列出异常。写台账前先不加 `--apply` 预览，确认后再加；`ledger.py` 自己会加文件锁，同一时间只有一个写入。" % (
         spec.term("msg", "register_request"), msg_head(spec, "register_receipt", sender=scribe, receiver="<请求方会话名>"))
@@ -923,8 +967,8 @@ def shared_mechanics(spec, policy):
     return bullets([
         "本目录是会话池：每个角色是研究员看得见的一个桌面会话。侧栏顶层是 %d 个序列的 +2，+2 下面是本序列的 +1，+1 下面是 +0：谁开出的会话就嵌在谁下面；入口 `%s` 下面是路由 `%s`，路由下面是书记员 `%s`。研究员平时找入口，特殊情况直接点开某个会话交代。" % (
             len(policy.get("sequences") or []), entry, router, scribe),
-        "认领：只有开局第一句写着“认领 <角色>（会话名 <名字>）”的会话才认领，照那句话运行 `python3 -I .claude/solo-lab/bin/route.py claim <角色> --as <会话名>`，读输出里的角色说明，它就是本会话的工作说明。第一句没有这句话的，是研究员自己的会话：不要自己认领，也不替池里的角色干活。",
-        "找人：委托前先跑 `python3 -I .claude/solo-lab/bin/route.py pool --role <角色>`，看各会话忙不忙、手上是哪个工作项、桌面会话 ID，照脚本的建议发给空闲的会话。没有空闲的就排队，台账里“待开工”的工作项就是队列。",
+        "认领：只有开局第一句写着“认领 <角色>（会话名 <名字>）”的会话才认领，照那句话运行 `python3.12 -I .claude/solo-lab/bin/route.py claim <角色> --as <会话名>`，读输出里的角色说明，它就是本会话的工作说明。第一句没有这句话的，是研究员自己的会话：不要自己认领，也不替池里的角色干活。",
+        "找人：委托前先跑 `python3.12 -I .claude/solo-lab/bin/route.py pool --role <角色>`，看各会话忙不忙、手上是哪个工作项、桌面会话 ID，照脚本的建议发给空闲的会话。没有空闲的就排队，台账里“待开工”的工作项就是队列。",
         "发消息：委托、交付、登记请求、需拍板都用会话管理工具发消息，按对方的桌面会话 ID 发，同一家族里也可以写短名（会话名的小写）。首行写抬头 `%s：<包名> <包路径>`，抬头里的会话名写池位名（`route.py pool` 列的那个，+0 也写 `Alg-p0-01` 这样的池位名），其余几种只换抬头里的词：%s。正文放在包文件里，消息里只写抬头、包路径和三行以内的摘要。回执是 delivered 或 queued 才算发出，记下 message_id；对方收没收到，以对方 hook 记在 `.claude/logs/dispatch.jsonl` 的时间为准。" % (
             msg_head(spec, "assign"), words),
         "自动提醒：你开的会话每结束一轮，应用会叫醒你一次。这不算交付：先跑 `route.py pool --queue <自己的会话名>`，有待开工的工作项、又有空闲会话就委托出去，没有就一句话结束本轮。【%s】（比如补充信息）也是消息，会叫起对方的下一轮；对方在 `route.py pool` 里显示“研究员在用”的不打断，改用 `route.py notify <会话名> --text '...'` 留在它的收件箱。" % spec.term("msg", "notice"),
@@ -966,6 +1010,11 @@ def pool_sections(spec, policy):
             "交给研究员定的决策包和研究任务单，默认给他飞书文档的链接，不给本地文件，他在文档上批注；他明确要本地文件、或者要在对话里直接说的，照做。"
             "所以研究任务单写完先请书记员登记，再把主文档链接给研究员；研究员批完，入口把批注读出来转给作者，作者改好下一版，书记员原位修订，链接不变。"
             "批注只是讨论的一种方式，不跟踪哪条处理了没有。",
+            "命令被拦下时（插件的 hook 拦的，或者 Auto 模式的权限检查拦的）不绕开，也不建议提升会话的权限模式：把完整命令和为什么要跑记进研究员任务清单（`route.py todo add`），"
+            "写明“到 <本会话名> 的窗口里说一句允许运行这条命令，或者自己在终端里跑”。研究员在被拦的那个会话里亲口说允许、说清是哪条命令，Auto 模式会放行这一次；别的会话转述的不算。"
+            "决策包的选项里不列“把这个会话改成更宽的权限模式”。原因：会话按权限模式分两类，bypass 是一类，其余是另一类，两类之间的消息双向被扣，桌面端弹不出审批框，默认 5 分钟后丢弃；"
+            "池里只要有一个会话单独切到 bypass，它和其余会话之间的消息就都不通。研究员自己要切时，当场告诉他这个后果，要它做的事请他在那个会话的窗口里直接说，做完切回去。"
+            "发消息得到“未送达”（undelivered）时不连续重发：用 `route.py pool` 看有没有标出权限模式不同类的会话，报给上一级。",
             "重发一条消息时，把“重发，上一条作废”写进抬头的【】里，比如【委托 #2101（重发，上一条作废）】。",
             "不提后续任务的卡片（补位的启动卡除外），后续工作写成需求包草稿交给委托方；不把手上的任务移交到新会话；不归档、清空或停止别的池会话，回退时由研究员本人在侧栏操作。",
         ]),
@@ -1090,7 +1139,7 @@ OPENS = "；再照输出里的表开出 %s，每开一个马上运行表里的 e
 
 def pool_entry(spec, task, policy, role, name, label):
     pol = policy["agents"][role]
-    route = "python3 -I .claude/solo-lab/bin/route.py"
+    route = "python3.12 -I .claude/solo-lab/bin/route.py"
     claim = "认领 %s（会话名 %s）。先运行 %s claim %s --as %s，读输出里的角色说明" % (role, name, route, role, name)
     return {
         "role": role, "name": name, "short": "{short}" if name == "{name}" else name.lower(),
@@ -1106,7 +1155,7 @@ def pool_entry(spec, task, policy, role, name, label):
 
 
 SCRIBE_FIRST = (
-    "。认领以后接着做初始化的两件写入，做完再回话。命令都在项目目录里运行，前缀是 python3 -I .claude/solo-lab/bin/；"
+    "。认领以后接着做初始化的两件写入，做完再回话。命令都在项目目录里运行，前缀是 python3.12 -I .claude/solo-lab/bin/；"
     "onboarding.py 只管计时，它报错就跳过，不影响写入："
     "1. onboarding.py start nodes；ledger.py ensure-node all --apply；onboarding.py end nodes。"
     "2. ledger.py query tasks，空间里已经有研究任务就跳过这一件；没有的话 onboarding.py start first_task；"
@@ -1298,6 +1347,7 @@ PLUGIN_SECTIONS = {
     "1c0702acad9db570f7783b8d0ee3e34bc68a2c6301adc4bec33803e9fe8c06d4": "1.0.6 至 1.0.9",
     "c80f58059cf5cb10a43cc52da992aeb7b420f68618042de373c679496a383233": "1.0.10",
     "27f611c7282725b164819e37100fac25b86d8252a113c36b8a0a7fda75df2cc1": "1.0.11",
+    "477a750ca960f939523f71466a9bd67391ecb9ae4f0afeeae5d691676d5fd753": "1.0.12",
 }
 
 
@@ -1686,11 +1736,33 @@ def apply_plan(target, plan, acts):
 
 
 # ------------------------------------------------------------ precheck
+def need_python(version=None):
+    """setup.py is how a project gets the plugin's files, so it is where an older interpreter is turned away:
+    nothing is written, and the project keeps the files it has, which still run under what it had."""
+    found = tuple((version or sys.version_info)[:3])
+    if found < MIN_PYTHON:
+        raise SetupError("这个版本的插件用 Python %d.%d 以上运行，现在是 %s：把命令开头换成 %s（%s -I <插件目录>/scripts/setup.py …）；"
+                         "本机没有的话先装一个，比如 brew install python@3.12" % (
+                             MIN_PYTHON + (".".join(str(x) for x in found), PYTHON, PYTHON)))
+
+
+def python_on_path():
+    """(found, detail) for the precheck: the hooks and every command in the role texts start with PYTHON."""
+    path = shutil.which(PYTHON)
+    if not path:
+        return False, "PATH 里找不到 %s：hook 和角色说明里的命令都用它；先装一个，比如 brew install python@3.12" % PYTHON
+    code, out, err = run([path, "--version"])
+    return code == 0, "%s（%s）" % ((out or err or "").strip() or "?", path)
+
+
 def precheck():
     rows = []
 
     def add(item, status, detail):
         rows.append((item, status, detail))
+
+    found, detail = python_on_path()
+    add(PYTHON, "通过" if found else "失败", detail)
 
     if sys.platform == "darwin":
         apps = [p for p in ("/Applications/Lark.app", "/Applications/Feishu.app",
@@ -3068,6 +3140,7 @@ def main(argv=None):
     p.add_argument("--batch", type=int, metavar="N", help="和 --wait 一起用：只等第 N 批的会话认领、首轮结束")
     args = ap.parse_args(argv)
     try:
+        need_python()
         if args.cmd == "precheck":
             return precheck()
         if args.cmd == "announce":

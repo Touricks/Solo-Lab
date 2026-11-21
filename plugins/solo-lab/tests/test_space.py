@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for space.py and the contract: python3 -I -B tests/test_space.py
+"""Tests for space.py and the contract: python3.12 -I -B tests/test_space.py
 
 The fixtures in tests/fixtures/feishu/v2/ were recorded from the reference template space
 with read-only commands: space-calls.json holds every meegle answer space.py asked for,

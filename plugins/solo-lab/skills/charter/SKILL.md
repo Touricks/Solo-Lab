@@ -10,7 +10,7 @@ description: 开一条研究任务：访谈研究员，写研究任务单（目�
 开之前先看空间里已有的研究任务。同一个问题已经有一条没归档的，接着推进那一条，不再开第二条：
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py query tasks
+python3.12 -I .claude/solo-lab/bin/ledger.py query tasks
 ```
 
 ## 初始化时登记的那一条
@@ -25,7 +25,7 @@ python3 -I .claude/solo-lab/bin/ledger.py query tasks
 3. **请书记员修订。** 给书记员发登记请求，写明草稿路径、这条研究任务的工作项 ID 和改了什么。ID 在首条草稿的“关联工作项”一行，`ledger.py query tasks` 也查得到。书记员先预览，再加 `--apply`：
 
    ```bash
-   python3 -I .claude/solo-lab/bin/ledger.py revise <那条研究任务的工作项 ID> <修订稿> --note '<改了什么>'
+   python3.12 -I .claude/solo-lab/bin/ledger.py revise <那条研究任务的工作项 ID> <修订稿> --note '<改了什么>'
    ```
 
 4. **把主文档链接给研究员。** 修订是原位的：工作项的 ID、流程、评论都在，文档还是那一篇，链接不变，开头换成修订稿，交接记录多一行；标题变了的，工作项名称和文档标题一起改。入口把主文档的飞书链接给研究员，他在文档上批注；批注怎么读、怎么转，见下面“请研究员看”。研究员没有意见了，入口再告诉第一步的负责方接着推进：验证任务的第一步“确定目标”归产品 +2。
@@ -103,7 +103,7 @@ python3 -I .claude/solo-lab/bin/ledger.py query tasks
 ## 登记以后
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py next <工作项 ID>
+python3.12 -I .claude/solo-lab/bin/ledger.py next <工作项 ID>
 ```
 
 这条命令列出现在走到哪一步、由谁负责、还缺哪些必填项。负责这一步的 +2 把产出备齐，再给书记员发登记请求确认节点：

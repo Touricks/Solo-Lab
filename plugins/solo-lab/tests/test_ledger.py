@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for ledger.py on node flows: python3 -I -B tests/test_ledger.py
+"""Tests for ledger.py on node flows: python3.12 -I -B tests/test_ledger.py
 
 The space is tests/fake_space.py: the structure of the reference template, behaving as the
 real space was seen to. Nothing here calls Feishu.
@@ -345,6 +345,34 @@ class RegisterTest(LedgerCase):
         self.assertEqual(self.fake.doc_by(self.value(item_id, "same_seq", "main_doc").rsplit("/", 1)[1])["parent"], parent)
         wrong = self.draft(ASSIGN, "e3.md", edit=lambda t: t.replace("产品 +2（Product-p2-01）", "产品 +1（Product-p1-03）"))
         self.assertIn("职级对不上", self.fails(ledger.register, self.lg(), wrong))
+
+    def test_a_p2_without_a_p1_hands_a_closed_task_to_its_p0(self):
+        """1.0.12: a sequence that opens with its +2 alone (产品, 算法 and 外联 by default) gives a closed task to a +0
+        itself: a request of the 执行 relation, under the work item the task belongs to. A +1 writes 执行 only."""
+        task = self.task()
+        by_p2 = lambda t: t.replace("- 来源工作项：#2100\n", "").replace("质量 +1（Quality-p1-02）", "质量 +2（Quality-p2-01）")
+        item_id = self.quiet(ledger.register, self.lg(), self.draft(EXECUTE, "p2.md", edit=by_p2), source=task)
+        self.assertEqual(self.value(item_id, "same_seq", "source_item"), task)
+        self.assertEqual(self.value(item_id, "same_seq", "owner_session"), "Quality-p0-%s" % item_id)   # the work name a 执行 request gets
+        self.assertIn("--source <ID>", self.fails(ledger.register, self.lg(), self.draft(EXECUTE, "p2b.md", edit=by_p2)))
+        down = self.draft(ASSIGN, "p1.md", edit=lambda t: t.replace("产品 +2（Product-p2-01）", "产品 +1（Product-p1-03）"))
+        text = self.fails(ledger.register, self.lg(), down)
+        self.assertIn("职级对不上", text)
+        self.assertIn("本序列没开 +1、直接发给 +0 的是执行", text)
+
+    def test_the_router_gets_the_receipts_of_a_cross_request(self):
+        """1.0.12: the two +2 of a 跨序列需求 ask the scribe themselves and talk to each other, so each thing the
+        scribe writes on one ends with a line that sends the receipt to the router too. Not on other items,
+        and not on a preview."""
+        self.task()
+        cross = self.quiet(ledger.register, self.lg(), self.draft(CROSS, "c.md"))
+        same = self.quiet(ledger.register, self.lg(), self.draft(ASSIGN, "a.md"))
+        line = "跨序列需求：这条回执另发一份给路由 PMO-p1-01"
+        self.assertIn(line, self.out(ledger.also_to_router, self.lg(), cross)[1])
+        self.assertIn(line, self.out(ledger.also_to_router, self.lg(), "#" + cross)[1])
+        self.assertEqual(self.out(ledger.also_to_router, self.lg(), same)[1], "")
+        self.assertEqual(self.out(ledger.also_to_router, self.lg("preview"), cross)[1], "")
+        self.assertEqual(self.out(ledger.also_to_router, self.lg(), None)[1], "")
 
     def test_cross_request_is_put_in_by_its_sender(self):
         self.task()

@@ -888,7 +888,8 @@ def kind_allowed(policy, kind, sender, receiver):
         return False
     if rule.get("along"):
         a, b = (receiver, sender) if rule.get("reverse") else (sender, receiver)
-        return any(edge_ok(policy, e, a, b) for e in d.get(rule["along"], []))
+        along = [rule["along"]] if isinstance(rule["along"], str) else rule["along"]    # one group of edges, or several
+        return any(edge_ok(policy, e, a, b) for group in along for e in d.get(group, []))
     if rule.get("to") and receiver != rule["to"]:
         return False
     if rule.get("from") and sender != rule["from"]:
@@ -915,7 +916,7 @@ def receive_checks(policy, root, pool, msg, me):
     if not addressed_to(policy, pool, msg, me):
         out.append("抬头写的接收方是 %s，不是本会话 %s；确认是不是发错了" % (msg["to"], me["name"]))
     if sender_claim and not kind_allowed(policy, kind, sender_claim["role"], me["role"]):
-        out.append("派发图里 %s（%s）不给 %s（%s）发【%s】；照规范该走入口或本序列上一级，接不接先和发出方确认" % (
+        out.append("派发图里 %s（%s）不给 %s（%s）发【%s】；照规范该走本序列上一级，跨序列的该由两边的 +2 往来，接不接先和发出方确认" % (
             sender, sender_claim["role"], me["name"], me["role"], names.get(kind, kind)))
     routing = sender_claim and sender_claim["role"] == policy.get("entry_role") and me["role"] == policy.get("router_role")
     if kind == "assign" and item and not receipt_exists(root, item):
@@ -941,7 +942,9 @@ def receive_checks(policy, root, pool, msg, me):
 # ------------------------------------------------------------ open items
 def all_open_items(root, owners=None):
     """{name: ({#ID: receiver} assigned and not reported back, {#ID: sender} still owed)} from the
-    messages the receivers' hooks saw. One pass over dispatch.jsonl."""
+    messages the receivers' hooks saw. One pass over dispatch.jsonl. A session owes an item until it reports
+    it: to the session it owes it to, or to another one the dispatch graph lets it report to (in_graph, which
+    the receiver's hook writes from 1.0.12 on)."""
     owners = owners or {}
     sent, owed = {}, {}
     for rec in read_events(root):
@@ -964,6 +967,12 @@ def all_open_items(root, owners=None):
             theirs = owed.get(frm, {})
             if theirs.get(item) == to:
                 theirs.pop(item)
+            elif item in theirs and rec.get("in_graph"):
+                # delivered to somebody else, along an edge of the graph: a 跨序列需求 the entry passed on before
+                # 1.0.12 is answered to the +2 that asked for it, and the entry is owed nothing more
+                waiting = theirs.pop(item)
+                if sent.get(waiting, {}).get(item) == frm:
+                    sent[waiting].pop(item)
     names = set(sent) | set(owed)
     return {n: (sent.get(n, {}), owed.get(n, {})) for n in names}
 
@@ -988,7 +997,7 @@ TASK_TYPE = "research_task"            # the contract's main-line type, as a rec
 TASK_HOPS = 5                          # how far up 来源工作项 the receipts are followed
 TASKS_SHOWN = 4                        # research tasks named in the line, at most
 TASK_ITEMS_SHOWN = 6                   # work items named for one research task, at most
-STATUS_CMD = "python3 -I .claude/solo-lab/bin/ledger.py status %s"
+STATUS_CMD = "python3.12 -I .claude/solo-lab/bin/ledger.py status %s"
 COMPACTED = "上下文刚压缩过，接着干活之前先读所属研究任务的状态包（规矩照角色说明里“压缩上下文以后”那一条）："
 NOTHING_HELD = ("上下文刚压缩过。派发记录里本会话没有未了的工作项：手上确实没有的，说一句“跳过”再继续；"
                 "有的，照角色说明里“压缩上下文以后”那一条找到它所属的研究任务，先运行 %s 读状态包。" % (STATUS_CMD % "<研究任务 ID>"))

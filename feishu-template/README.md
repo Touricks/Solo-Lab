@@ -39,13 +39,13 @@ Solo-Lab 插件把飞书项目空间当任务台账用。空间里有哪些工�
 
 | 在空间里补了什么 | 项目里要做的一步 | 谁做 | 不做会怎样 |
 | --- | --- | --- | --- |
-| 只加两个字段（第 2 节），配详情页、表格列和视图（第 6 节），状态没改名（视图筛选里的“待执行”选“已决定”） | 重读一次空间结构的快照：`python3 -I .claude/solo-lab/bin/space.py snapshot --target . --apply` | 任何会话 | 台账在快照里找不到这两个字段，登记和修订决策时照旧不写它们，视图里这两列是空的 |
+| 只加两个字段（第 2 节），配详情页、表格列和视图（第 6 节），状态没改名（视图筛选里的“待执行”选“已决定”） | 重读一次空间结构的快照：`python3.12 -I .claude/solo-lab/bin/space.py snapshot --target . --apply` | 任何会话 | 台账在快照里找不到这两个字段，登记和修订决策时照旧不写它们，视图里这两列是空的 |
 | 把状态“已决定”改名“待执行”（第 4 节），不管另外补没补字段 | 重新绑定：`setup.py feishu --target <项目目录> --live`，核对后加 `--apply`。它同时重读快照，上一行那一步不用另做 | 研究员的会话 | 台账还按“已决定”查：`ledger.py query queue` 列不出待执行的决策，确认“决定”以后不打印执行方，研究任务的签字核对认不出已经决定的决策 |
 
 两个字段不是约定里的槽位，插件按名字在快照（`feishu/space.json`）里找，不用重新绑定。状态是槽位，名字记在绑定（`feishu/ids.json`）里，只重读快照改不了它；重新绑定时先认标识，改了名照样对得上，换的只是名字。视图、详情页和表格列插件不读，不用做什么。做完在项目目录里核对：
 
 ```bash
-python3 -I .claude/solo-lab/bin/space.py check --target .
+python3.12 -I .claude/solo-lab/bin/space.py check --target .
 ```
 
 状态改了名、还没重新绑定时，它报“空间里现在是 “待执行”，绑定记的是 “已决定””。升级前登记、还没归档的决策，这两个字段是空的；要补的，书记员照回执用 `ledger.py update` 补，做法见插件的 `skills/setup/references/mechanisms.md`“升到 1.0.5”一条。
@@ -65,7 +65,7 @@ python3 -I .claude/solo-lab/bin/space.py check --target .
 ## 核对一个空间
 
 ```bash
-python3 -I plugins/solo-lab/scripts/space.py check --space <空间名、simple_name 或 project_key>
+python3.12 -I plugins/solo-lab/scripts/space.py check --space <空间名、simple_name 或 project_key>
 ```
 
 这条命令只读飞书，不写文件。它读出空间的结构，逐个槽位找对应的对象，再核对流程：每个流程正好一个末尾节点且由书记员负责，每个节点正好一个约定里的角色，签字字段和结论字段在某个节点上是必填。退出码 0 是通过，1 是有缺项，缺项逐条列出。
@@ -79,11 +79,11 @@ python3 -I plugins/solo-lab/scripts/space.py check --space <空间名、simple_n
 3. 跑上面的核对命令，通过后把结构快照读到一个临时文件，再从它生成[结构.md](结构.md)。快照文件里有空间的各种标识，不放进仓库：
 
 ```bash
-python3 -I plugins/solo-lab/scripts/space.py export --space <模板空间的名字> --out <space.json>
+python3.12 -I plugins/solo-lab/scripts/space.py export --space <模板空间的名字> --out <space.json>
 ```
 
 ```bash
-python3 -I plugins/solo-lab/scripts/space.py show --snapshot <space.json> structure
+python3.12 -I plugins/solo-lab/scripts/space.py show --snapshot <space.json> structure
 ```
 
 4. 在网页上删掉第 2 步的样例工作项：工作项详情页右上角的“···”里有“删除”。命令行删不了。

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tests for the solo-lab plugin. Standard library only, no Feishu access.
 
-    python3 -I -B tests/test_plugin.py
+    python3.12 -I -B tests/test_plugin.py
 """
 import contextlib
 import datetime
@@ -431,7 +431,7 @@ class DecisionsFileTest(ProjectCase):
         time kept."""
         old = setup.render(setup.scaffold("org/decisions.md.tmpl"), {"deviations": setup.bullets(self.V105)})
         self.assertEqual(setup.PLUGIN_SECTIONS.get(setup.sha256(setup.squeeze(self.section(old)))), "1.0.5")
-        self.assertEqual(setup.PLUGIN_SECTIONS.get(setup.sha256(setup.squeeze(self.current_section()))), "1.0.11")
+        self.assertEqual(setup.PLUGIN_SECTIONS.get(setup.sha256(setup.squeeze(self.current_section()))), "1.0.12")
         before = self.write(self.V105)
         kind, out = self.init()
         self.assertEqual(kind, "update")
@@ -555,18 +555,18 @@ class DecisionsFileTest(ProjectCase):
 class HookTest(ProjectCase):
 
     def test_only_scribe_writes_ledger(self):
-        cmd = {"command": "python3 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"}
+        cmd = {"command": "python3.12 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"}
         _, out = self.guard("alg-p2", "Bash", cmd)
         self.assertEqual(out.get("permissionDecision"), "deny")
         _, out = self.scribe("Bash", cmd)
         self.assertNotEqual(out.get("permissionDecision"), "deny")
         _, out = self.guard("pmo-scribe", "Bash", cmd)                    # a subagent of that type holds no claim
         self.assertEqual(out.get("permissionDecision"), "deny")
-        _, out = self.guard("alg-p2", "Bash", {"command": "python3 -I .claude/solo-lab/bin/ledger.py query open"})
+        _, out = self.guard("alg-p2", "Bash", {"command": "python3.12 -I .claude/solo-lab/bin/ledger.py query open"})
         self.assertNotEqual(out.get("permissionDecision"), "deny")
 
     def test_tampered_script_not_trusted(self):
-        cmd = {"command": "python3 -I .claude/solo-lab/bin/ledger.py query open"}
+        cmd = {"command": "python3.12 -I .claude/solo-lab/bin/ledger.py query open"}
         _, out = self.guard("alg-p2", "Bash", cmd)
         self.assertNotEqual(out.get("permissionDecision"), "deny")
         with open(os.path.join(self.tmp, ".claude", "solo-lab", "bin", "ledger.py"), "a", encoding="utf-8") as f:
@@ -615,10 +615,20 @@ class RouteTest(ProjectCase):
         self.assertTrue(out["needs_router"])
 
     def test_drafts(self):
-        cases = {2: ("R7", "alg-p2"), 4: ("R7", "quality-p2"), 7: ("R5", "pmo-scribe"), 8: ("R6", "pmo-scribe")}
+        # a request to another sequence goes to the router, which hands its work item ID back to the sender (1.0.12)
+        cases = {2: ("R7", "pmo-router"), 4: ("R7", "pmo-router"), 7: ("R5", "pmo-scribe"), 8: ("R6", "pmo-scribe")}
         for block, (row, hop) in cases.items():
             out = route.classify_draft(self.spec, self.tmp, self.draft(block, "b%d.md" % block))
             self.assertEqual((out["row"], out.get("next_hop")), (row, hop), block)
+        steps = "\n".join(route.classify_draft(self.spec, self.tmp, self.draft(2, "c.md"))["steps"])
+        self.assertIn("路由对照台账查重复和冲突", steps)
+        self.assertIn("把工作项 ID 用【通知 #ID】回给发起方，由它直接委托 alg-p2", steps)
+        delivery = lambda t: t.replace("- 包类型：需求包", "- 包类型：交付包")
+        # where the entry still passes every package on (the Codex adapter), the hop is the receiving +2 as before
+        for block, hop in ((2, "alg-p2"), (4, "quality-p2")):
+            out = route.classify_draft(self.spec, self.tmp, self.draft(block, "o%d.md" % block), pool_run=False)
+            self.assertEqual((out["row"], out.get("next_hop")), ("R7", hop), block)
+            self.assertIn("请 %s 接单" % hop, "\n".join(out["steps"]))
 
     def test_in_sequence_package_not_routed(self):
         out = route.classify_draft(self.spec, self.tmp, self.draft(0))
@@ -683,12 +693,12 @@ class SecondRoundTest(ProjectCase):
     """Fixes from the independent check of the first round."""
 
     def test_guard_sees_every_ledger_write(self):
-        for cmd in ("python3 -I .claude/solo-lab/bin/ledger.py \\\n  confirm 1 执行中 --apply",
-                    "python3 -I .claude/solo-lab/bin/ledger.py 'register' --apply x.md",
+        for cmd in ("python3.12 -I .claude/solo-lab/bin/ledger.py \\\n  confirm 1 执行中 --apply",
+                    "python3.12 -I .claude/solo-lab/bin/ledger.py 'register' --apply x.md",
                     "bash -c 'python3 .claude/solo-lab/bin/ledger.py update --apply 1 --set a=b'"):
             _, out = self.guard("alg-p2", "Bash", {"command": cmd})
             self.assertEqual(out.get("permissionDecision"), "deny", cmd)
-        _, out = self.guard("alg-p2", "Bash", {"command": "python3 -I .claude/solo-lab/bin/ledger.py mql queue"})
+        _, out = self.guard("alg-p2", "Bash", {"command": "python3.12 -I .claude/solo-lab/bin/ledger.py mql queue"})
         self.assertNotEqual(out.get("permissionDecision"), "deny")
 
 
@@ -701,33 +711,33 @@ class ThirdRoundTest(ProjectCase):
         guard = importlib.import_module("guard")
         guard.fc.TRUSTED = guard.trusted_scripts(self.tmp)       # as evaluate() does
         reads = [
-            "python3 -I .claude/solo-lab/bin/ledger.py query open",
-            "python3 -I .claude/solo-lab/bin/ledger.py --offline get 1",
-            "python3 -I .claude/solo-lab/bin/ledger.py confirm --help",
+            "python3.12 -I .claude/solo-lab/bin/ledger.py query open",
+            "python3.12 -I .claude/solo-lab/bin/ledger.py --offline get 1",
+            "python3.12 -I .claude/solo-lab/bin/ledger.py confirm --help",
             "cat .claude/solo-lab/bin/ledger.py",
             'grep -rn "ledger.py:" org',
             "ls -la .claude/solo-lab/bin/ledger.py*",
             "diff .claude/solo-lab/bin/ledger.py .claude/solo-lab/bin/ledger.py.new",
             'git commit -m "ledger.py: fix confirm"',
             'echo "ledger.py register 由书记员跑"',
-            "python3 -I -c \"import ast; ast.parse(open('.claude/solo-lab/bin/ledger.py').read())\"",
-            "python3 -I .claude/solo-lab/bin/route.py classify --text 'ledger.py confirm 2030 要改'",
+            "python3.12 -I -c \"import ast; ast.parse(open('.claude/solo-lab/bin/ledger.py').read())\"",
+            "python3.12 -I .claude/solo-lab/bin/route.py classify --text 'ledger.py confirm 2030 要改'",
             "cat > packages/drafts/alg/x.md <<'EOF'\nrun python3 .claude/solo-lab/bin/ledger.py register x.md\nit's fine\nEOF",
         ]
         writes = [
-            "python3 -I .claude/solo-lab/bin/ledger.py \\\n  confirm 7151870875 执行中 --apply",
+            "python3.12 -I .claude/solo-lab/bin/ledger.py \\\n  confirm 7151870875 执行中 --apply",
             "python3 -X utf8 .claude/solo-lab/bin/ledger.py confirm 1 执行中 --apply",
-            "python3 -I -W ignore .claude/solo-lab/bin/ledger.py update 1 --set a=b --apply",
+            "python3.12 -I -W ignore .claude/solo-lab/bin/ledger.py update 1 --set a=b --apply",
             "python3 -m cProfile -o /dev/null .claude/solo-lab/bin/ledger.py confirm --apply 1 x",
             "cd .claude/solo-lab/bin && python3 - confirm --apply 1 x < ledger.py",
             "cat .claude/solo-lab/bin/ledger.py | python3 - confirm --apply 1 x",
             "PYTHONPATH=.claude/solo-lab/bin python3 -m ledger confirm --apply 1 x",
-            'python3 -I .claude/solo-lab/bin/"ledger".py archive --apply 1',
+            'python3.12 -I .claude/solo-lab/bin/"ledger".py archive --apply 1',
             "python3 $(echo .claude/solo-lab/bin/ledger.py) confirm --apply 1 x",
             "sub=confirm; python3 .claude/solo-lab/bin/ledger.py $sub 1 x",
             "bash -c 'python3 .claude/solo-lab/bin/ledger.py update --apply 1 --set a=b'",
             "timeout 60 python3 .claude/solo-lab/bin/ledger.py append --apply 1 --file r.md",
-            "python3 -I .claude/solo-lab/bin/ledger.py query open | head -5 && python3 .claude/solo-lab/bin/ledger.py archive --apply 3",
+            "python3.12 -I .claude/solo-lab/bin/ledger.py query open | head -5 && python3 .claude/solo-lab/bin/ledger.py archive --apply 3",
         ]
         for cmd in reads:
             self.assertIsNone(guard.ledger_write(cmd, self.tmp), cmd)
@@ -748,13 +758,13 @@ class FourthRoundTest(ProjectCase):
     def test_guard_shell_forms(self):
         guard = self.guard_module()
         L = ".claude/solo-lab/bin/ledger.py"
-        reads = [f"python3 -I {L}", f"python3 -m py_compile {L}", f"python3 -m pyflakes {L}",
-                 "python3 -I .claude/solo-lab/bin/route.py classify --text '问题出在 ledger.py'",
+        reads = [f"python3.12 -I {L}", f"python3 -m py_compile {L}", f"python3 -m pyflakes {L}",
+                 "python3.12 -I .claude/solo-lab/bin/route.py classify --text '问题出在 ledger.py'",
                  "python3 - <<'EOF'\nimport json\nprint(json.load(open('/tmp/ledger-open.json')))\nEOF",
-                 f"for q in queue blocked; do python3 -I {L} query $q; done",
+                 f"for q in queue blocked; do python3.12 -I {L} query $q; done",
                  f"echo python3 {L} confirm 1", f"git log -- {L}"]
-        writes = [f"python3 -I {L} query open\npython3 -I {L} confirm 1 执行中 --apply",
-                  f"for id in 1 2; do python3 -I {L} confirm $id 归档 --apply; done",
+        writes = [f"python3.12 -I {L} query open\npython3.12 -I {L} confirm 1 执行中 --apply",
+                  f"for id in 1 2; do python3.12 -I {L} confirm $id 归档 --apply; done",
                   f"while read id; do python3 {L} archive $id --apply; done < ids.txt",
                   f"if true; then python3 {L} update --apply 1 --set a=b; fi", f"{{ python3 {L} comment --apply 1 --text x; }}",
                   f"! python3 {L} register --apply x.md", f"echo 1 | xargs -I{{}} python3 {L} confirm --apply {{}} 执行中",
@@ -790,10 +800,10 @@ class FifthRoundTest(ProjectCase):
         self.g.fc.TRUSTED = self.g.trusted_scripts(self.tmp)       # as evaluate() does
         runs = os.path.join(self.tmp, "runs", "alg")
         os.makedirs(runs, exist_ok=True)
-        files = {"r.sh": "python3 -I %s register packages/drafts/alg/x.md --apply\n" % self.L,
+        files = {"r.sh": "python3.12 -I %s register packages/drafts/alg/x.md --apply\n" % self.L,
                  "r.py": "import subprocess\nsubprocess.run(['python3', '-I', '%s', 'register', 'x.md', '--apply'])\n" % self.L,
                  "stats.py": "import json\nprint(len(json.load(open('runs/alg/meegle.json'))))\n",
-                 "q.sh": "# list what is open\npython3 -I %s query open\n" % self.L}
+                 "q.sh": "# list what is open\npython3.12 -I %s query open\n" % self.L}
         for name, text in files.items():
             with open(os.path.join(runs, name), "w", encoding="utf-8") as f:
                 f.write(text)
@@ -813,59 +823,59 @@ class FifthRoundTest(ProjectCase):
 
     def test_comments_do_not_hide_the_next_line(self):
         L = self.L
-        self.check([f"python3 -I {L} get 2106   # current state", "echo see issue#12", "bash runs/alg/q.sh",
+        self.check([f"python3.12 -I {L} get 2106   # current state", "echo see issue#12", "bash runs/alg/q.sh",
                     f"cat > packages/drafts/alg/x.md <<'END-DRAFT'\nWe don't run ledger.py here\nEND-DRAFT"],
-                   [f"python3 -I {L} get 2106   # current state\npython3 -I {L} confirm 2106 执行中 --apply",
-                    f"ls packages/drafts/alg  # check\npython3 -I {L} register packages/drafts/alg/x.md --apply",
-                    f"echo see issue#12; python3 -I {L} archive 2106 --apply"])
+                   [f"python3.12 -I {L} get 2106   # current state\npython3.12 -I {L} confirm 2106 执行中 --apply",
+                    f"ls packages/drafts/alg  # check\npython3.12 -I {L} register packages/drafts/alg/x.md --apply",
+                    f"echo see issue#12; python3.12 -I {L} archive 2106 --apply"])
 
     def test_runners_scripts_and_option_clusters(self):
         L = self.L
         self.check(["python3 runs/alg/stats.py", f"python3 -m py_compile {L}",
                     "python3 -c \"import json; rows=[]; [rows.append(r['id']) for r in json.load(open('runs/alg/x.json'))]\""],
                    [f"uv run python {L} register x.md --apply", f"uv run {L} update 2106 --set a=b --apply",
-                    f"uv run --no-project python3 -I {L} archive 2106 --apply", f"poetry run python {L} archive --apply 1",
+                    f"uv run --no-project python3.12 -I {L} archive 2106 --apply", f"poetry run python {L} archive --apply 1",
                     f"conda run -n base python {L} archive --apply 1",
                     "bash runs/alg/r.sh", "sh runs/alg/r.sh", "source runs/alg/r.sh", ". runs/alg/r.sh",
-                    "bash < runs/alg/r.sh", "cat runs/alg/r.sh | sh", "python3 -I runs/alg/r.py",
-                    f"cat > runs/alg/r2.sh <<'EOF'\npython3 -I {L} register x.md --apply\nEOF\nbash runs/alg/r2.sh",
+                    "bash < runs/alg/r.sh", "cat runs/alg/r.sh | sh", "python3.12 -I runs/alg/r.py",
+                    f"cat > runs/alg/r2.sh <<'EOF'\npython3.12 -I {L} register x.md --apply\nEOF\nbash runs/alg/r2.sh",
                     f"python3 -BW ignore {L} register x.md --apply",
                     "cd .claude/solo-lab/bin && python3 -Bm ledger archive 2106 --apply",
                     f"python3 -m cProfile --sort cumtime {L} archive 2106 --apply",
                     f"python3 -m trace --count -C runs/alg {L} archive --apply 1",
                     "cd .claude/solo-lab/bin && python3 -m runpy ledger archive 2106 --apply",
                     "cd .claude/solo-lab/bin && python3 -m cProfile -m ledger archive --apply 1",
-                    "python3 -I -c \"import runpy; runpy.run_path('%s', run_name='__main__')\" register x.md --apply" % L,
+                    "python3.12 -I -c \"import runpy; runpy.run_path('%s', run_name='__main__')\" register x.md --apply" % L,
                     "python3 -c \"import sys; sys.path.insert(0, '.claude/solo-lab/bin'); import ledger as m; m.archive(m.Ledger('.', 'apply'), '1')\"",
-                    f"python3 -I {L} register --apply -- -h"])
+                    f"python3.12 -I {L} register --apply -- -h"])
 
     def test_find_eval_shells_and_other_interpreters(self):
         L = self.L
         self.check([f"find .claude -name ledger.py -exec cat {{}} \;",
-                    f"find .claude/solo-lab/bin -name ledger.py -execdir python3 -I {{}} query open \;",
+                    f"find .claude/solo-lab/bin -name ledger.py -execdir python3.12 -I {{}} query open \;",
                     f"ls {L}(.)", "reg() { ls; }; reg", f"grep -n update $(ls {L})"],
-                   [f"find .claude/solo-lab/bin -name ledger.py -execdir python3 -I {{}} archive 2106 --apply \;",
+                   [f"find .claude/solo-lab/bin -name ledger.py -execdir python3.12 -I {{}} archive 2106 --apply \;",
                     f"find . -name '*.md' -exec echo {{}} \; -exec python3 {L} register --apply {{}} \;",
-                    f"eval eval eval eval eval python3 -I {L} archive 2106 --apply",
-                    f"echo archive 2106 --apply | xargs python3 -I {L}",
-                    f"function reg {{ python3 -I {L} register x.md --apply; }}; reg",
-                    f"env -S 'python3 -I' {L} archive 2106 --apply",
-                    f"CMD='python3 -I {L} archive 2106 --apply'; eval \"$CMD\"",
-                    f"CMD='python3 -I {L} archive 2106 --apply'; bash -c \"$CMD\"",
+                    f"eval eval eval eval eval python3.12 -I {L} archive 2106 --apply",
+                    f"echo archive 2106 --apply | xargs python3.12 -I {L}",
+                    f"function reg {{ python3.12 -I {L} register x.md --apply; }}; reg",
+                    f"env -S 'python3.12 -I' {L} archive 2106 --apply",
+                    f"CMD='python3.12 -I {L} archive 2106 --apply'; eval \"$CMD\"",
+                    f"CMD='python3.12 -I {L} archive 2106 --apply'; bash -c \"$CMD\"",
                     f"csh -c 'python3 {L} archive --apply 1'", f"bash -c -- 'python3 {L} archive --apply 1'",
                     "perl -e 'system(\"python3\", \"%s\", \"archive\", \"2106\")'" % L,
                     "node -e \"require('child_process').execFileSync('python3', ['%s', 'archive', '2106'])\"" % L,
-                    f"cat > runs/alg/out.txt <<EOF\n$(python3 -I {L} archive 2106 --apply)\nEOF",
-                    "python3 -I .claude/solo-lab/bin/ledger.p? archive 2106 --apply",
-                    "python3 -I .claude/solo-lab/bin/ledger.[p]y archive --apply 1", f"python3 -I {L}(.) archive --apply 1"])
+                    f"cat > runs/alg/out.txt <<EOF\n$(python3.12 -I {L} archive 2106 --apply)\nEOF",
+                    "python3.12 -I .claude/solo-lab/bin/ledger.p? archive 2106 --apply",
+                    "python3.12 -I .claude/solo-lab/bin/ledger.[p]y archive --apply 1", f"python3.12 -I {L}(.) archive --apply 1"])
 
     def test_words_in_code_and_text_are_not_commands(self):
         L = self.L
         self.check([f"python3 - <<'PY'\nimport subprocess\nout=subprocess.run(['python3','-I','{L}','query','open'],capture_output=True)\nids=[1]\nids.append(2)\nPY",
                     f"cat > packages/drafts/alg/x.md <<'EOF'\n- 请书记员 ledger.py register 后 ledger.py update 2106\nEOF\npython3 - <<'PY'\nprint(1)\nPY",
-                    'git commit -m "ledger.py: fix confirm"', f"python3 -I {L} query open 2>/dev/null || echo 'ledger.py: 查询失败'",
-                    "python3 -I .claude/solo-lab/bin/route.py classify --text 'ledger.py confirm 2030 要改'"], [])
-        cmd = "python3 -I .claude/solo-lab/bin/route.py classify --text 'ledger.py confirm 2030 要改'"
+                    'git commit -m "ledger.py: fix confirm"', f"python3.12 -I {L} query open 2>/dev/null || echo 'ledger.py: 查询失败'",
+                    "python3.12 -I .claude/solo-lab/bin/route.py classify --text 'ledger.py confirm 2030 要改'"], [])
+        cmd = "python3.12 -I .claude/solo-lab/bin/route.py classify --text 'ledger.py confirm 2030 要改'"
         _, out = self.guard("alg-p2", "Bash", {"command": cmd})
         self.assertNotEqual(out.get("permissionDecision"), "deny")
 
@@ -889,7 +899,7 @@ class FifthRoundTest(ProjectCase):
         _, out = self.scribe("Bash", {"command": cmd})       # must not hang on the FIFO
         self.assertNotEqual(out.get("permissionDecision"), "deny")        # the tag check is a reminder now
         self.assertIn("会话标签", out.get("additionalContext", ""))
-        code, out = self.guard("alg-p2", "Bash", {"command": "python3 -I %s register \ud800 --apply" % self.L})
+        code, out = self.guard("alg-p2", "Bash", {"command": "python3.12 -I %s register \ud800 --apply" % self.L})
         self.assertIn(code, (0, 2))
         if code == 0:
             self.assertEqual(out.get("permissionDecision"), "deny")
@@ -932,16 +942,16 @@ class SixthRoundHookTest(ProjectCase):
         L, W = self.L, self.LARK_W
         files = {
             "runs/alg/r.py": "import subprocess\nsubprocess.run(['python3', '-I', '%s', 'register', 'x.md', '--apply'])\n" % L,
-            "runs/alg/r.sh": "python3 -I %s register packages/drafts/alg/x.md --apply\n" % L,
+            "runs/alg/r.sh": "python3.12 -I %s register packages/drafts/alg/x.md --apply\n" % L,
             "runs/alg/r2.py": "import subprocess\nsubprocess.run(['python3', '-I', '../../%s', 'archive', '2106', '--apply'])\n" % L,
             "runs/alg/push.py": "import subprocess\nsubprocess.run(%r.split())\n" % W,
             "runs/alg/push.sh": W + "\n",
-            "runs/alg/rx.sh": "#!/bin/sh\npython3 -I %s archive 2106 --apply\n" % L,
+            "runs/alg/rx.sh": "#!/bin/sh\npython3.12 -I %s archive 2106 --apply\n" % L,
             "runs/alg/rx.py": "#!/usr/bin/env python3\nimport subprocess\nsubprocess.run(['python3', '%s', 'archive', '2106', '--apply'])\n" % L,
             "runs/alg/pushx.sh": "#!/bin/sh\n" + W + "\n",
             "runs/alg/batch.py": "import glob, subprocess\nLEDGER = '%s'\nfor path in sorted(glob.glob('packages/drafts/alg/*.md')):\n"
-                                 "    subprocess.run(f'python3 -I {LEDGER} register {path} --apply', shell=True, check=True)\n" % L,
-            "runs/alg/batch2.py": "import shlex, subprocess\nL = '%s'\nsubprocess.run(shlex.split(f'python3 -I {L} confirm 2106 执行中 --apply'))\n" % L,
+                                 "    subprocess.run(f'python3.12 -I {LEDGER} register {path} --apply', shell=True, check=True)\n" % L,
+            "runs/alg/batch2.py": "import shlex, subprocess\nL = '%s'\nsubprocess.run(shlex.split(f'python3.12 -I {L} confirm 2106 执行中 --apply'))\n" % L,
             "runs/alg/batch3.py": "import subprocess, sys\nsubprocess.run([sys.executable, '-I', '%s'] + 'archive 2106 --apply'.split())\n" % L,
             "runs/alg/report.py": "import json, subprocess\nout = subprocess.run(['python3', '-I', '%s', 'query', 'open', '--json'], capture_output=True, text=True).stdout\n"
                                   "rows = json.loads(out or '[]')\nnames = []\nfor r in rows: print(r['id']); names.append(r['name'])\n"
@@ -984,17 +994,17 @@ class SixthRoundHookTest(ProjectCase):
             ("alg-p2", g + pyl, True), ("alg-p2", g + pyf, True),
             ("alg-p2", "TITLE=\"$(cat <<'EOF'\n周报\nEOF\n)\"\ncat > packages/drafts/alg/n.md <<'EOF'\n用 lark-cli docs +fetch 读原文\nEOF\n"
                        "python3 - <<'PY'\nprint(1)\nPY", False),
-            ("alg-p2", "TITLE=\"$(cat <<'EOF'\n周报\nEOF\n)\"\ncat > packages/drafts/alg/n.md <<'EOF'\npython3 -I %s register n.md --apply\nEOF\n"
+            ("alg-p2", "TITLE=\"$(cat <<'EOF'\n周报\nEOF\n)\"\ncat > packages/drafts/alg/n.md <<'EOF'\npython3.12 -I %s register n.md --apply\nEOF\n"
                        "python3 - <<'PY'\nprint(1)\nPY" % L, False),
             ("alg-p2", "X=\"$(python3 - <<'PY'\nimport subprocess\nsubprocess.run(['python3', '%s', 'archive', '2106', '--apply'])\nPY\n)\"" % L, True),
             ("alg-p2", "X=\"$(python3 - <<'PY'\nimport subprocess\nsubprocess.run(%r.split())\nPY\n)\"" % W, True),
-            ("alg-p2", "MSG=$(cat <<'EOF'\nfix\nEOF\n) && bash <<'SH'\npython3 -I %s archive 2106 --apply\nSH" % L, True),
-            ("alg-p2", "# drafts are written with cat <<EOF, not here\npython3 -I %s archive 2106 --apply" % L, True),
+            ("alg-p2", "MSG=$(cat <<'EOF'\nfix\nEOF\n) && bash <<'SH'\npython3.12 -I %s archive 2106 --apply\nSH" % L, True),
+            ("alg-p2", "# drafts are written with cat <<EOF, not here\npython3.12 -I %s archive 2106 --apply" % L, True),
             ("alg-p1", "ls runs/alg  # then cat <<'EOF' > notes\nmeegle workitem update --work-item-id 1 --project-key pk --fields '[]'", True),
             ("alg-p2", "grep -rn \"<<EOF\" runs/alg || true\n" + W, True),
-            ("alg-p2", "echo 'use <<EOF for drafts'\npython3 -I %s archive 2106 --apply" % L, True),
+            ("alg-p2", "echo 'use <<EOF for drafts'\npython3.12 -I %s archive 2106 --apply" % L, True),
             ("alg-p2", "git commit -q -m \"$(cat <<'EOF'\nSay \"use lark-cli docs +fetch first\nEOF\n)\"", False),
-            ("alg-p2", "ls runs/alg # list \\\npython3 -I %s archive 2106 --apply" % L, True),
+            ("alg-p2", "ls runs/alg # list \\\npython3.12 -I %s archive 2106 --apply" % L, True),
             ("alg-p2", "python3 - <<'PY'\nimport json\n# doc.json was saved earlier by lark-cli docs +fetch\n"
                        "print(json.load(open('runs/alg/doc.json'))['title'])\nPY", False),
             ("alg-p2", "python3 -m json.tool <<'EOF'\n{\"c\": \"lark-cli docs +update\"}\nEOF", False),
@@ -1006,7 +1016,7 @@ class SixthRoundHookTest(ProjectCase):
             ("alg-p2", "python3 runs/alg/batch.py", True), ("alg-p2", "python3 runs/alg/batch2.py", True),
             ("alg-p2", "python3 runs/alg/batch3.py", True),
             ("alg-p2", "python3 - <<'PY'\nimport subprocess\nL = '%s'\nfor i in (2106, 2107):\n"
-                       "    subprocess.run(f'python3 -I {L} archive {i} --apply', shell=True)\nPY" % L, True),
+                       "    subprocess.run(f'python3.12 -I {L} archive {i} --apply', shell=True)\nPY" % L, True),
             ("alg-p2", "python3 runs/alg/report.py", False),
         ])
 
@@ -1026,9 +1036,9 @@ class SixthRoundHookTest(ProjectCase):
     def test_arguments_are_not_subcommands(self):
         L = self.L
         self.check([
-            ("alg-p2", "python3 -I %s query open --json > /tmp/open.json && python3 - /tmp/open.json <<'PY'\n"
+            ("alg-p2", "python3.12 -I %s query open --json > /tmp/open.json && python3 - /tmp/open.json <<'PY'\n"
                        "import json, sys\nprint(len(json.load(open(sys.argv[1]))))\nPY" % L, False),
-            ("alg-p2", "python3 -I %s query open --json > runs/alg/open.json && python3 \"$CLAUDE_PROJECT_DIR/runs/alg/stats.py\" runs/alg/open.json" % L, False),
+            ("alg-p2", "python3.12 -I %s query open --json > runs/alg/open.json && python3 \"$CLAUDE_PROJECT_DIR/runs/alg/stats.py\" runs/alg/open.json" % L, False),
             ("alg-p2", "python3 \"$(git rev-parse --show-toplevel)/runs/alg/stats.py\" runs/alg/ledger-open.json", False),
             ("alg-p2", "for f in %s; do python3 $f archive 2106 --apply; done" % L, True),
             ("alg-p2", "python3 runs/alg/summarize_ledger.py runs/alg/open.json", False),
@@ -1044,19 +1054,19 @@ class SixthRoundHookTest(ProjectCase):
             ("alg-p2", "bash -o pipefail -c 'python3 %s archive --apply 1'" % L, True),
             ("alg-p2", "cat <<'EOF' | python3 -\nimport subprocess\nsubprocess.run(['python3', '-I', '%s', 'archive', '2106', '--apply'])\nEOF" % L, True),
             ("alg-p2", "cat <<'EOF' | python3 -\nimport subprocess\nsubprocess.run(%r.split())\nEOF" % W, True),
-            ("alg-p2", "cat <<'EOF' | bash\npython3 -I %s archive 2106 --apply\nEOF" % L, True),
-            ("alg-p2", "bash <<< \"python3 -I %s archive 2106 --apply\"" % L, True),
+            ("alg-p2", "cat <<'EOF' | bash\npython3.12 -I %s archive 2106 --apply\nEOF" % L, True),
+            ("alg-p2", "bash <<< \"python3.12 -I %s archive 2106 --apply\"" % L, True),
             ("alg-p2", "python3 - <<< \"import subprocess; subprocess.run(['python3', '%s', 'archive', '2106'])\"" % L, True),
             ("alg-p2", "python3 - <<< \"import subprocess; subprocess.run(%r.split())\"" % W, True),
             ("alg-p2", "grep ';' runs/alg/r.sh", False),
-            ("alg-p2", "source .venv/bin/activate && python3 -I %s query open" % L, False),
+            ("alg-p2", "source .venv/bin/activate && python3.12 -I %s query open" % L, False),
         ])
 
     def test_find_runners_and_inline_flags(self):
         L, W = self.L, self.LARK_W
         self.check([
             ("alg-p2", "find runs/alg -name 'analyze_*.py' -exec python3 {} runs/alg/ledger-open.json \;", False),
-            ("alg-p2", "find .claude/solo-lab/bin \\( -name ledger.py \\) -execdir python3 -I {} archive 2106 --apply \;", True),
+            ("alg-p2", "find .claude/solo-lab/bin \\( -name ledger.py \\) -execdir python3.12 -I {} archive 2106 --apply \;", True),
             ("alg-p2", "find runs/alg -name '*.py' -exec python3 {} runs/alg/data.json \;", False),
             ("alg-p2", "find runs/alg -name '*.py' -exec python3 {} --limit 5 \;", False),
             ("alg-p2", "find .claude -name 'ledger*' -exec python3 {} archive --apply 1 \;", True),
@@ -1082,7 +1092,7 @@ class SixthRoundHookTest(ProjectCase):
         self.check([
             ("pmo-scribe", "cat > /tmp/prev.md <<'EOF'\n没有标签\nEOF\n%s <<'EOF'\n[PMO+0] 记录\nEOF" % append, False),
             ("pmo-scribe", "cat <<'EOF' | %s\n[PMO+0] 记录\nEOF" % append, False),
-            ("pmo-scribe", "python3 -I %s register packages/drafts/alg/x.md --apply" % self.L, False),
+            ("pmo-scribe", "python3.12 -I %s register packages/drafts/alg/x.md --apply" % self.L, False),
         ])
 
 
@@ -1165,8 +1175,8 @@ class SeventhRoundTest(ProjectCase):
     def test_hook_still_sees_writes_after_arithmetic_and_crlf(self):
         L = self.L
         self.check([
-            ("alg-p2", "x=1; (( y = x << n ))\npython3 -I %s archive 2106 --apply" % L, True),
-            ("alg-p2", "cat > /tmp/a.md <<'EOF'\r\nhello\r\nEOF\r\npython3 -I %s archive 2106 --apply\r\n" % L, True),
+            ("alg-p2", "x=1; (( y = x << n ))\npython3.12 -I %s archive 2106 --apply" % L, True),
+            ("alg-p2", "cat > /tmp/a.md <<'EOF'\r\nhello\r\nEOF\r\npython3.12 -I %s archive 2106 --apply\r\n" % L, True),
             ("alg-p2", "x=1; (( y = x << n ))\nlark-cli docs +update --doc https://x.feishu.cn/wiki/A --command overwrite --content x --as user", True),
         ])
 
@@ -1314,9 +1324,9 @@ class SpecAndRoutingTest(ProjectCase):
         self.assertNotEqual(out.get("permissionDecision"), "deny")
 
     def test_router_reads_the_status_block(self):
-        _, out = self.guard("pmo-router", "Bash", {"command": "python3 -I .claude/solo-lab/bin/ledger.py status 2101"})
+        _, out = self.guard("pmo-router", "Bash", {"command": "python3.12 -I .claude/solo-lab/bin/ledger.py status 2101"})
         self.assertNotEqual(out.get("permissionDecision"), "deny")
-        _, out = self.guard("pmo-router", "Bash", {"command": "python3 -I .claude/solo-lab/bin/ledger.py next 2101"})
+        _, out = self.guard("pmo-router", "Bash", {"command": "python3.12 -I .claude/solo-lab/bin/ledger.py next 2101"})
         self.assertNotEqual(out.get("permissionDecision"), "deny")
         fake = fake_space.FakeSpace()
         lg = fake_space.SimLedger(self.tmp, "apply", fake)
@@ -1409,7 +1419,7 @@ class SpecAndRoutingTest(ProjectCase):
 
     def test_settings_allow_the_status_read(self):
         allow = json.loads(self.read(".claude/settings.json"))["permissions"]["allow"]
-        self.assertIn("Bash(python3 -I .claude/solo-lab/bin/ledger.py status *)", allow)
+        self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/ledger.py status *)", allow)
         self.assertFalse([r for r in allow if "ledger.py index" in r])
 
     def test_drafters_see_their_documents(self):
@@ -1606,7 +1616,7 @@ class PoolProjectCase(unittest.TestCase):
 
     def claim(self, role, name, sid, desk=None, hook_desk=None):
         """A child session's claim: guard, route.py claim (its Bash sees the desktop ID), then audit."""
-        cmd = "python3 -I %s claim %s --as %s" % (self.R, role, name)
+        cmd = "python3.12 -I %s claim %s --as %s" % (self.R, role, name)
         self.bash(sid, cmd, desk=hook_desk)
         code, out = self.route("claim", role, "--as", name, "--wait", "0", sid=sid, desk=desk)
         self.hook("audit.py", {"hook_event_name": "PostToolUse", "tool_name": "Bash", "session_id": sid,
@@ -1654,9 +1664,9 @@ class PoolSetupTest(PoolProjectCase):
         self.assertEqual(settings["hooks"]["PostToolUse"][0]["matcher"], "Bash|Monitor|Agent|Task")
         self.assertIn("Monitor", settings["hooks"]["PreToolUse"][0]["matcher"])
         allow = settings["permissions"]["allow"]
-        self.assertIn("Bash(python3 -I .claude/solo-lab/bin/route.py claim *)", allow)
-        self.assertIn("Bash(python3 -I .claude/solo-lab/bin/ledger.py register *)", allow)
-        self.assertNotIn("Bash(python3 -I .claude/solo-lab/bin/route.py release *)", allow)
+        self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/route.py claim *)", allow)
+        self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/ledger.py register *)", allow)
+        self.assertNotIn("Bash(python3.12 -I .claude/solo-lab/bin/route.py release *)", allow)
         self.assertIn("Edit(/.claude/state/**)", settings["permissions"]["ask"])
         policy = json.loads(self.read(".claude/hooks/policy.json"))
         self.assertNotIn("mode", policy)
@@ -1691,13 +1701,44 @@ class PoolSetupTest(PoolProjectCase):
             self.assertIn("- 验收：", self.read(".claude/agents/%s.md" % name))
         self.assertNotIn("- 验收：", self.read(".claude/agents/alg-p0.md"))
         lead = self.read(".claude/agents/alg-p2.md")
-        self.assertIn("先接单：把需求复述、承接范围、预计交付时间", lead)
-        self.assertIn("交付包发给入口 `PMO-p2-01`", lead)
+        # 1.0.12: a request to another sequence starts at the router, and the two +2 then talk to each other
+        self.assertIn("给路由 `PMO-p1-01` 发 `【通知】<你的会话名> → PMO-p1-01：跨序列需求包 <包路径>`", lead)
+        self.assertIn("你再直接给承接方 +2 发 `【委托 #<工作项 ID>】<你的会话名> → <承接方 +2 的会话名>：<包名> <包路径>`", lead)
+        self.assertIn("先接单：给 `PMO-p0-01` 发【登记请求】", lead)
+        self.assertIn("拿到【登记回执】后用【通知 #ID】把这三项告诉发起方", lead)
+        self.assertIn("委托方就是发起它的那个 +2：交付直接发给它，不经入口。", lead)
+        self.assertIn("改范围、改成功标准、改冻结项不在往来里谈定：写决策包交入口。", lead)
+        self.assertIn("本序列没开 +1 时，封闭任务直接委托 +0：需求包写执行关系", lead)
+        self.assertNotIn("本序列开池时只有你一个会话", lead)                  # this pool opens every sequence in full
+        for gone in ("交付包发给入口", "由入口转交", "由入口用【", "交给入口，由它请书记员"):
+            self.assertNotIn(gone, lead, gone)
+        own = self.read(".claude/agents/alg-p1.md")
+        self.assertIn("- 哪类活自己做：看一件事做到一半还需不需要新的信息或新的判断。", own)
+        self.assertIn("开跑一个批次并盯着、撤作业、合并和解冲突、命令被拦下以后的重试这类）你自己做，不派给 +0", own)
+        self.assertIn("和在途的 +0 有没有改同一批文件", own)
+        self.assertIn("任务中途第二次被要求转向", self.read(".claude/agents/alg-p0.md"))
+        self.assertIn("告诉委托方“这个任务不是封闭任务”", self.read(".claude/agents/alg-p0.md"))
+        router = self.read(".claude/agents/pmo-router.md")
+        for part in ("**跨序列需求的委托。**", "**协调记录。**", "packages/drafts/pmo/跨序列协调记录.md", "route.py cross <工作项 ID>",
+                     "【通知 #<工作项 ID>】PMO-p1-01 → <发起方 +2 的会话名>：已登记，可以委托", "都没有就一句话结束本轮，不给入口发消息"):
+            self.assertIn(part, router, part)
+        entry = self.read(".claude/agents/pmo-p2.md")
+        self.assertIn("**跨序列需求不经你转手。**", entry)
+        self.assertIn("看进展用 `route.py cross` 和路由的协调记录", entry)
+        for gone in ("各序列交来的包怎么转", "跨序列需求的接单和交付，登记请求都由你发给书记员"):
+            self.assertNotIn(gone, entry, gone)
+        self.assertIn("### 包的流向", self.read("org/org.md"))               # the table the entry's text no longer carries
+        self.assertIn("路由查重、登记后，发起方直接委托", self.read("org/org.md"))
+        # a command that was stopped is no reason to widen a session's permission mode
+        for part in ("不建议提升会话的权限模式", "两类之间的消息双向被扣", "研究员在被拦的那个会话里亲口说允许", "发消息得到“未送达”（undelivered）时不连续重发"):
+            self.assertIn(part, claude, part)
         self.assertIn("登记请求里把字段写成 `<字段>=@<本地文件>`，书记员上传到研究任务单下面并填上链接", lead)   # what the +2 writes itself
         self.assertIn("验收通过以后用承接方那份交付包文档的链接", lead)       # what it hands down
         self.assertIn("链接字段给的是 `@文件` 时不读内容", self.read(".claude/agents/pmo-scribe.md"))
         scribe = self.read(".claude/agents/pmo-scribe.md")
         self.assertIn("你也接任何会话的登记请求", scribe)
+        self.assertIn("新建由路由来提（它先查过重复和冲突；入口自己发起的由入口提）", scribe)
+        self.assertIn("输出里写着“回执另发一份给路由”的，把同一条回执也发给路由。", scribe)
         self.assertIn("【通知 #<任务 ID>】PMO-p0-01 → <那个 +2 的会话名>：研究任务走到“<节点>”", scribe)
         self.assertIn("接着请它归档这条研究任务", self.read(".claude/agents/pmo-p2.md"))
         self.assertIn("### 派发图", self.read("org/org.md"))
@@ -1753,17 +1794,24 @@ class PoolSetupTest(PoolProjectCase):
                 setup.build_plan(self.tmp, self.task_path, None)
 
     def test_liaison_opens_with_its_p2_unless_the_task_says_otherwise(self):
-        self.assertEqual(setup.load_pool_settings(None)["later"], ["liaison"])
+        self.assertEqual(setup.load_pool_settings(None)["later"], ["liaison", "product", "alg"])    # 产品 and 算法 too, from 1.0.12
         with open(self.task_path, encoding="utf-8") as f:
             task = json.load(f)
         del task["pool"]["later"]
         with open(self.task_path, "w", encoding="utf-8") as f:
             json.dump(task, f, ensure_ascii=False)
         doc = json.loads(setup.build_plan(self.tmp, self.task_path, None).files[".claude/solo-lab/pool-plan.json"][0])
-        self.assertEqual(doc["total"], 19)
-        self.assertEqual(next(t for t in doc["top"] if t["role"] == "liaison-p2")["children"], [])
+        self.assertEqual(doc["total"], 15)
+        self.assertEqual((doc["batches"], doc["rounds"]), ([["PMO-p2-01", "Product-p2-01", "Alg-p2-01", "RnD-p2-01"],
+                                                            ["Infra-p2-01", "Quality-p2-01", "Liaison-p2-01"]], [[1, 2]]))
+        for role in ("liaison-p2", "product-p2", "alg-p2"):
+            self.assertEqual(next(t for t in doc["top"] if t["role"] == role)["children"], [], role)
+        self.assertEqual(len(next(t for t in doc["top"] if t["role"] == "rnd-p2")["children"]), 1)
         few = setup.build_plan(self.tmp, self.task_path, "pmo,quality,alg")   # the default says nothing of a sequence that is off
-        self.assertEqual(json.loads(few.files[".claude/solo-lab/pool-plan.json"][0])["total"], 9)
+        self.assertEqual(json.loads(few.files[".claude/solo-lab/pool-plan.json"][0])["total"], 7)
+        lone = few.files[".claude/agents/alg-p2.md"][0]                        # a +2 that opens alone is told what to open, and when
+        self.assertIn("- 本序列开池时只有你一个会话：活自己做。有封闭任务（查文献、跑一段分析、独立复核这类）时补 +0", lone)
+        self.assertNotIn("本序列开池时只有你一个会话", few.files[".claude/agents/quality-p2.md"][0])
 
     def test_a_space_name_that_cannot_head_a_title_needs_a_label(self):
         with open(self.task_path, encoding="utf-8") as f:
@@ -1928,10 +1976,10 @@ class AnnounceTest(PoolProjectCase):
         self.assertTrue(text.startswith("把下面的清单原样发给研究员，一个字不改；发出去以后再运行下一条命令。\n\n将要新建（"), text[:80])
         self.assertIn("- 飞书项目空间 1 个：新项目，用模板创建\n- 飞书知识空间 1 个：新项目\n", text)
         self.assertIn("- 知识库节点 %d 个\n" % len(self.spec.node_keys()), text)
-        self.assertIn("- 桌面会话 19 个（外联只开 +2），侧栏分区 1 个：新项目\n", text)
-        self.assertIn("会话分 2 轮开，第 1 轮开完回一句“%s”" % setup.RESUME_WORDS, text)
+        self.assertIn("- 桌面会话 15 个（外联、产品、算法只开 +2），侧栏分区 1 个：新项目\n", text)
+        self.assertNotIn("轮开", text)                                              # the default pool opens in one round (1.0.12)
         self.assertIn("新建以外的动作", text)
-        self.assertIn("权限模式：本会话用 auto 模式时，开池不用你点。用 bypass 模式时，应用每开一个会话都要你点一次确认，这个池共 19 次。", text)
+        self.assertIn("权限模式：本会话用 auto 模式时，开池不用你点。用 bypass 模式时，应用每开一个会话都要你点一次确认，这个池共 15 次。", text)
         self.assertEqual(os.listdir(fresh), [])                                    # it only says, it writes nothing
         code, text = self.announce("--target", fresh, "--name", "另一个名字")
         self.assertIn("- 飞书项目空间 1 个：另一个名字，", text)
@@ -1942,12 +1990,13 @@ class AnnounceTest(PoolProjectCase):
         code, text = self.announce("--target", fresh, "--name", "demo", "--sequences", "pmo,quality,alg")
         self.assertEqual(code, 0, text)
         self.assertIn("- 知识库节点 %d 个\n" % len(self.spec.node_keys(["pmo", "quality", "alg"])), text)
-        self.assertIn("- 桌面会话 9 个，侧栏分区 1 个：demo\n", text)
+        self.assertIn("- 桌面会话 7 个（算法只开 +2），侧栏分区 1 个：demo\n", text)
         self.assertNotIn("轮开", text)                                              # one round: nothing to answer in between
         code, text = self.announce("--target", fresh, "--task", self.task_path)   # every sequence with its +1 and +0
         plan = json.loads(self.read(".claude/solo-lab/pool-plan.json"))
         self.assertIn("- 桌面会话 %d 个，侧栏分区 1 个：%s\n" % (plan["total"], plan["label"]), text)
         self.assertEqual(plan["total"], 21)
+        self.assertIn("会话分 2 轮开，第 1 轮开完回一句“%s”" % setup.RESUME_WORDS, text)   # a pool this large still takes two
 
     def test_an_initialised_directory_is_read_from_its_own_task_file(self):
         code, text = self.announce("--target", self.tmp, "--name", "别的名字")
@@ -2397,7 +2446,7 @@ class CheckLayersTest(PoolProjectCase):
 
 class PoolClaimTest(PoolProjectCase):
     def test_claim_needs_a_permit(self):
-        cmd = "python3 -I %s claim alg-p1 --as Alg-p1-01" % self.R
+        cmd = "python3.12 -I %s claim alg-p1 --as Alg-p1-01" % self.R
         _, out = self.bash("s-nobody", cmd)
         self.assertNotIn("permissionDecision", out)      # route.py checks the permit against the session's own IDs
         code, text = self.route("claim", "alg-p1", "--as", "Alg-p1-01", "--wait", "0", sid="s-nobody")
@@ -2424,7 +2473,7 @@ class PoolClaimTest(PoolProjectCase):
         self.assertEqual(self.route("expect", "Alg-p1-01", "--role", "alg-p1", "--desk", "d1", sid="s1")[0], 0)
         self.assertEqual(self.route("expect", "Quality-p1-01", "--role", "quality-p1", "--desk", "d2", sid="s1")[0], 1)
         self.assertEqual(self.route("expect", "PMO-p0-01", "--role", "pmo-scribe", "--desk", "d3", sid="s1")[0], 1)
-        cmd = "python3 -I %s expect Quality-p1-01 --role quality-p1 --desk d2" % self.R
+        cmd = "python3.12 -I %s expect Quality-p1-01 --role quality-p1 --desk d2" % self.R
         self.assertEqual(self.bash("s1", cmd)[1].get("permissionDecision"), "deny")
         self.assertEqual(self.route("expect", "PMO-p0-01", "--role", "pmo-scribe", "--desk", "d3", sid="s-entry")[0], 0)
         self.assertEqual(self.route("expect", "Rnd-p0-01", "--role", "rnd-p0", "--desk", "d4", sid="s-researcher")[0], 0)
@@ -2437,7 +2486,7 @@ class PoolClaimTest(PoolProjectCase):
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s5", "source": "startup"}, desk="d1")
         self.assertIn("本会话是 Alg-p1-01", out.get("additionalContext", ""))
         self.assertEqual(self.pool()["claims"]["Alg-p1-01"]["session_id"], "s5")
-        _, out = self.bash("s5", "python3 -I %s claim alg-p1 --as Alg-p1-01 --desk d9" % self.R, desk="d1")
+        _, out = self.bash("s5", "python3.12 -I %s claim alg-p1 --as Alg-p1-01 --desk d9" % self.R, desk="d1")
         self.assertEqual(out.get("permissionDecision"), "deny")
         code, text = self.route("claim", "alg-p1", "--as", "Alg-p1-01", "--wait", "0", sid="s5", desk="d1")
         self.assertEqual(code, 0)
@@ -2446,7 +2495,7 @@ class PoolClaimTest(PoolProjectCase):
     def test_two_step_claim_without_a_desktop_id_in_the_hook(self):
         self.opening("alg-p2", "Alg-p2-01", "s1")
         self.route("expect", "Alg-p1-01", "--role", "alg-p1", "--desk", "d1", sid="s1")
-        cmd = "python3 -I %s claim alg-p1 --as Alg-p1-01" % self.R
+        cmd = "python3.12 -I %s claim alg-p1 --as Alg-p1-01" % self.R
         _, out = self.bash("s6", cmd)
         self.assertNotEqual(out.get("permissionDecision"), "deny")        # a permit waits for this role
         code, text = self.route("claim", "alg-p1", "--as", "Alg-p1-01", "--wait", "0", sid="s6", desk="d1")
@@ -2473,18 +2522,18 @@ class PoolClaimTest(PoolProjectCase):
 
     def test_release_leaves_a_tombstone(self):
         self.started_pool()
-        _, out = self.bash("s-alg1", "python3 -I %s release Alg-p0-01" % self.R)
+        _, out = self.bash("s-alg1", "python3.12 -I %s release Alg-p0-01" % self.R)
         self.assertEqual(out.get("permissionDecision"), "deny")           # a claimed session cannot release
         self.assertEqual(self.route("release", "Alg-p0-01", sid="s-alg1")[0], 1)
-        _, out = self.bash("s-researcher", "python3 -I %s release Alg-p0-01" % self.R)
+        _, out = self.bash("s-researcher", "python3.12 -I %s release Alg-p0-01" % self.R)
         self.assertEqual(out.get("permissionDecision"), "ask")
         self.assertEqual(self.route("release", "Alg-p0-01", sid="s-researcher")[0], 0)
         pl = self.pool()
         self.assertNotIn("Alg-p0-01", pl["claims"])
         self.assertEqual(pl["tombstones"][-1]["name"], "Alg-p0-01")
-        _, out = self.bash("s-alg0", "python3 -I %s register packages/drafts/alg/x.md --apply" % self.L)
+        _, out = self.bash("s-alg0", "python3.12 -I %s register packages/drafts/alg/x.md --apply" % self.L)
         self.assertEqual(out.get("permissionDecision"), "deny")
-        _, out = self.bash("s-alg0", "python3 -I %s claim alg-p0 --as Alg-p0-01" % self.R)
+        _, out = self.bash("s-alg0", "python3.12 -I %s claim alg-p0 --as Alg-p0-01" % self.R)
         self.assertEqual(out.get("permissionDecision"), "deny")
         self.route("expect", "Alg-p0-01", "--role", "alg-p0", "--desk", "d-s-alg0", sid="s-alg2")
         self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-alg0", "source": "resume"}, desk="d-s-alg0")
@@ -2564,13 +2613,13 @@ class PoolOpenedByTheResearcherTest(PoolProjectCase):
         self.assertEqual(self.route("expect", "Alg-p1-01", "--role", "alg-p1", "--desk", "d-alg1", sid="s-alg2")[0], 0)
         _, out = self.claim("alg-p1", "Alg-p1-01", "s-alg1", desk="d-alg1")   # its very first claim already says what to open
         self.assertIn("- Alg-p0-01：name=alg-p0-01", out)
-        _, verdict = self.bash("s-alg1", "python3 -I %s expect Alg-p0-01 --role alg-p0 --desk d-alg0" % self.R, desk="d-alg1")
+        _, verdict = self.bash("s-alg1", "python3.12 -I %s expect Alg-p0-01 --role alg-p0 --desk d-alg0" % self.R, desk="d-alg1")
         self.assertNotEqual(verdict.get("permissionDecision"), "deny")
         code, out = self.route("expect", "Alg-p0-01", "--role", "alg-p0", "--desk", "d-alg0", sid="s-alg1")
         self.assertEqual(code, 0, out)
         self.assertEqual(self.claim("alg-p0", "Alg-p0-01", "s-alg0", desk="d-alg0")[0], 0)
         for role, name in (("rnd-p0", "RnD-p0-01"), ("alg-p1", "Alg-p1-02")):   # another sequence, its own rank
-            _, verdict = self.bash("s-alg1", "python3 -I %s expect %s --role %s --desk d-x" % (self.R, name, role), desk="d-alg1")
+            _, verdict = self.bash("s-alg1", "python3.12 -I %s expect %s --role %s --desk d-x" % (self.R, name, role), desk="d-alg1")
             self.assertEqual(verdict.get("permissionDecision"), "deny", name)
             self.assertEqual(self.route("expect", name, "--role", role, "--desk", "d-x", sid="s-alg1")[0], 1, name)
         self.assertEqual(sorted(self.pool()["claims"]), ["Alg-p0-01", "Alg-p1-01", "Alg-p2-01"])
@@ -2607,7 +2656,7 @@ class PoolOpenedByTheResearcherTest(PoolProjectCase):
 
     def test_only_the_researcher_starts_a_login(self):
         self.open_all()
-        cmd = "python3 -I /opt/plugins/solo-lab/scripts/setup.py login"
+        cmd = "python3.12 -I /opt/plugins/solo-lab/scripts/setup.py login"
         _, out = self.bash("s-alg2", cmd)
         self.assertEqual(out.get("permissionDecision"), "deny")
         self.assertIn("登录由研究员的会话发起", out.get("permissionDecisionReason", ""))
@@ -2615,7 +2664,7 @@ class PoolOpenedByTheResearcherTest(PoolProjectCase):
         self.assertNotEqual(out.get("permissionDecision"), "deny")
         _, out = self.bash("s-researcher", cmd, agent_id="a1")
         self.assertEqual(out.get("permissionDecision"), "deny")           # a subagent of the researcher's session
-        _, out = self.bash("s-alg2", "python3 -I /opt/plugins/solo-lab/scripts/setup.py check --target .")
+        _, out = self.bash("s-alg2", "python3.12 -I /opt/plugins/solo-lab/scripts/setup.py check --target .")
         self.assertEqual(out.get("permissionDecision"), "deny")           # every setup.py command is the researcher's
         self.assertIn("只由研究员的会话运行", out.get("permissionDecisionReason", ""))
 
@@ -2627,14 +2676,14 @@ class PoolOpenedByTheResearcherTest(PoolProjectCase):
         for args in ("feishu --target . --live --apply", "pool --target .", "check --target . --live",
                      "env --target . --apply", "login", "init --target . --task solo-lab.task.json --apply"):
             for mode in ("default", "bypassPermissions"):
-                _, out = self.bash("s-researcher", "python3 -I %s %s" % (real, args), permission_mode=mode)
+                _, out = self.bash("s-researcher", "python3.12 -I %s %s" % (real, args), permission_mode=mode)
                 self.assertNotIn(out.get("permissionDecision"), ("deny", "ask"), (args, mode, out))
-            _, out = self.bash("s-alg2", "python3 -I %s %s" % (real, args))
+            _, out = self.bash("s-alg2", "python3.12 -I %s %s" % (real, args))
             self.assertEqual(out.get("permissionDecision"), "deny", args)
         space_py = shlex.quote(os.path.join(ROOT, "scripts", "space.py"))
-        _, out = self.bash("s-alg2", "python3 -I %s export --space x --out .claude/settings.json" % space_py)
+        _, out = self.bash("s-alg2", "python3.12 -I %s export --space x --out .claude/settings.json" % space_py)
         self.assertEqual(out.get("permissionDecision"), "deny")
-        _, out = self.bash("s-alg2", "python3 -I .claude/solo-lab/bin/space.py check --target .")
+        _, out = self.bash("s-alg2", "python3.12 -I .claude/solo-lab/bin/space.py check --target .")
         self.assertNotEqual(out.get("permissionDecision"), "deny")           # reading the space is for every session
 
     def test_a_setup_script_that_is_not_the_recorded_one_is_not_trusted(self):
@@ -2647,7 +2696,7 @@ class PoolOpenedByTheResearcherTest(PoolProjectCase):
         m["plugin_scripts"][real] = "0" * 64                                 # another build of the plugin
         with open(manifest, "w", encoding="utf-8") as f:
             json.dump(m, f)
-        _, out = self.bash("s-researcher", "python3 -I %s feishu --target . --live" % shlex.quote(real), permission_mode="bypassPermissions")
+        _, out = self.bash("s-researcher", "python3.12 -I %s feishu --target . --live" % shlex.quote(real), permission_mode="bypassPermissions")
         self.assertEqual(out.get("permissionDecision"), "deny")
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -2786,7 +2835,7 @@ class PoolWithoutP1Test(PoolProjectCase):
 
 
 class PoolGuardTest(PoolProjectCase):
-    W = "python3 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"
+    W = "python3.12 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"
 
     def setUp(self):
         super().setUp()
@@ -2800,13 +2849,13 @@ class PoolGuardTest(PoolProjectCase):
         self.assertEqual(self.decision("s-researcher", self.W, permission_mode="bypassPermissions"), "deny")
         self.assertEqual(self.decision("s-alg2", self.W), "deny")
         self.assertEqual(self.decision("s-scribe", self.W), "allow")
-        self.assertNotEqual(self.decision("s-alg2", "python3 -I .claude/solo-lab/bin/ledger.py query open"), "deny")
+        self.assertNotEqual(self.decision("s-alg2", "python3.12 -I .claude/solo-lab/bin/ledger.py query open"), "deny")
         _, out = self.bash("s-alg2", "meegle comment add --work-item-id 1 --content hi")
         self.assertEqual(out.get("permissionDecision"), "allow")
         self.assertIn("[Alg+2]", out.get("updatedInput", {}).get("command", ""))
 
     def test_the_scribe_uploads_a_local_file_for_a_link_field(self):
-        L = "python3 -I .claude/solo-lab/bin/ledger.py"
+        L = "python3.12 -I .claude/solo-lab/bin/ledger.py"
         update = L + " update 2101 --set 需求文档=@packages/drafts/product/prd.md --apply"
         confirm = L + " confirm 2101 --by Alg-p2-01 --set 上下文文档=@packages/drafts/alg/context.md --apply"
         for command in (update, confirm):
@@ -2843,12 +2892,12 @@ class PoolGuardTest(PoolProjectCase):
 
     def test_claim_commands_must_be_plain(self):
         R = self.R
-        for cmd in ("FOO=1 python3 -I %s claim alg-p1 --as Alg-p1-01" % R,
-                    "python3 -I %s claim alg-p1 --as Alg-p1-01 | cat" % R,
-                    "env python3 -I %s expect Alg-p0-02 --role alg-p0 --desk d" % R,
+        for cmd in ("FOO=1 python3.12 -I %s claim alg-p1 --as Alg-p1-01" % R,
+                    "python3.12 -I %s claim alg-p1 --as Alg-p1-01 | cat" % R,
+                    "env python3.12 -I %s expect Alg-p0-02 --role alg-p0 --desk d" % R,
                     "python3 %s claim alg-p1" % R):
             self.assertEqual(self.decision("s-alg1", cmd), "deny", cmd)
-        self.assertEqual(self.decision("s-alg1", "python3 -I %s claim alg-p1 --as Alg-p1-01" % R, agent_id="a", agent_type="Explore"), "deny")
+        self.assertEqual(self.decision("s-alg1", "python3.12 -I %s claim alg-p1 --as Alg-p1-01" % R, agent_id="a", agent_type="Explore"), "deny")
 
     def test_state_and_config_are_not_edited(self):
         for rel in (".claude/state/pool.json", ".claude/hooks/guard.py", ".claude/settings.json", ".claude/agents/alg-p1.md"):
@@ -2907,7 +2956,7 @@ class AskAndIdentityFlagTest(ProjectCase):
     """A session nobody claimed is the researcher's: asked before a ledger write. lark-cli calls get the identity flag."""
 
     def test_researcher_session_asks_and_bypass_denies(self):
-        cmd = {"command": "python3 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"}
+        cmd = {"command": "python3.12 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"}
         _, out = self.guard("", "Bash", cmd, agent_id=None)
         self.assertEqual(out.get("permissionDecision"), "ask")
         data = {"tool_name": "Bash", "tool_input": cmd, "cwd": self.tmp, "session_id": "s1", "permission_mode": "bypassPermissions"}
@@ -3379,9 +3428,150 @@ class DispatchGraphTest(unittest.TestCase):
         self.assertIsNone(rx.search("【备注】随便写写"))
 
 
+class CrossSequenceTest(PoolProjectCase):
+    """1.0.12: a request to another sequence starts at the router and then goes between the two +2. Until then
+    each of its messages passed through the entry: 283 of the 1217 messages a real pool sent in a day, and
+    not one reached the router."""
+
+    def setUp(self):
+        super().setUp()
+        self.started_pool()
+
+    def receipt(self, item, kind="cross_request", draft="packages/drafts/alg/20261120-需求包-评测集.md"):
+        path = os.path.join(self.tmp, "packages", "sent", "%s.json" % item)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"work_item_id": item, "type": kind, "draft": draft, "status": "registered"}, f, ensure_ascii=False)
+
+    def messages(self):
+        events = [json.loads(x) for x in self.read(".claude/logs/dispatch.jsonl").splitlines()]
+        return [e for e in events if e.get("event") in ("message", "message_misaddressed")]
+
+    def told(self, sid, text):
+        return self.prompt(sid, text)[1].get("additionalContext", "")
+
+    def test_two_p2_talk_to_each_other(self):
+        self.receipt("2201")
+        resume = self.spec.term("msg", "resume")
+        self.assertNotIn("派发图", self.told("s-q2", "【委托 #2201】Alg-p2-01 → Quality-p2-01：需求包 packages/drafts/alg/x.md"))
+        self.assertEqual(self.pool()["owners"]["2201"], "Quality-p2-01")
+        back = self.told("s-alg2", "【交付 #2201】Quality-p2-01 → Alg-p2-01：交付包 y.md")
+        self.assertNotIn("派发图", back)
+        self.assertNotIn("负责会话是", back)
+        self.assertNotIn("派发图", self.told("s-q2", "【%s #2201】Alg-p2-01 → Quality-p2-01：验收没过，改第 2 条" % resume))
+        self.assertEqual([m["in_graph"] for m in self.messages()[-3:]], [True, True, True])
+        self.assertIn("派发图", self.told("s-q2", "【委托 #2201】Alg-p1-01 → Quality-p2-01：需求包 x.md"))   # a +1 does not reach across
+        self.assertIs(self.messages()[-1]["in_graph"], False)
+
+    def test_a_p2_hands_work_to_its_own_p0(self):
+        self.receipt("2204", kind="same_seq")
+        text = self.told("s-alg0", "【委托 #2204】Alg-p2-01 → Alg-p0-01：需求包 x.md\n会话名：Alg-p0-2204")
+        self.assertNotIn("派发图", text)
+        policy = json.loads(self.read(".claude/hooks/policy.json"))
+        self.assertEqual(policy["agents"]["alg-p2"]["spawn"], ["alg-p1"])       # whom it opens is still the hierarchy's
+        self.assertEqual(policy["dispatch"]["kinds"]["report"]["along"], ["assign", "direct"])
+
+    def test_a_request_is_settled_when_it_is_delivered_to_whoever_asked(self):
+        # the entry passed this one on before 1.0.12; its delivery now goes to the +2 that asked for it
+        self.receipt("2202")
+        self.prompt("s-q2", "【委托 #2202】PMO-p2-01 → Quality-p2-01：需求包 x.md")
+        self.assertEqual(pool_lib.open_items(self.tmp, "PMO-p2-01"), ([("2202", "Quality-p2-01")], []))
+        self.prompt("s-alg2", "【交付 #2202】Quality-p2-01 → Alg-p2-01：交付包 y.md")
+        self.assertEqual(pool_lib.open_items(self.tmp, "PMO-p2-01"), ([], []))
+        self.assertEqual(pool_lib.open_items(self.tmp, "Quality-p2-01"), ([], []))
+        # a delivery the graph does not let through settles nothing
+        self.prompt("s-alg1", "【委托 #2203】Alg-p2-01 → Alg-p1-01：需求包 x.md")
+        self.prompt("s-q2", "【交付 #2203】Alg-p1-01 → Quality-p2-01：交付包 y.md")
+        self.assertEqual(pool_lib.open_items(self.tmp, "Alg-p1-01"), ([], [("2203", "Alg-p2-01")]))
+
+    def test_route_cross_lists_what_was_said(self):
+        self.receipt("2201")
+        self.receipt("2205", kind="same_seq", draft="packages/drafts/alg/20261120-需求包-消融.md")
+        self.prompt("s-q2", "【委托 #2201】Alg-p2-01 → Quality-p2-01：需求包 packages/drafts/alg/x.md")
+        self.prompt("s-alg2", "【通知 #2201】Quality-p2-01 → Alg-p2-01：已接单，11-28 交付")
+        self.prompt("s-scribe", "【登记请求 #2201】Quality-p2-01 → PMO-p0-01：确认节点")
+        self.prompt("s-alg1", "【委托 #2205】Alg-p2-01 → Alg-p1-01：需求包 x.md")
+        code, out = self.route("cross", sid="s-entry")
+        self.assertEqual(code, 0, out)
+        self.assertIn("最近 7 天有往来的跨序列需求 1 条", out)
+        self.assertIn("- #2201 需求包-评测集：Alg-p2-01 → Quality-p2-01，往来 2 条；最近一条：", out)   # the scribe's traffic is left out
+        self.assertIn("【通知 #2201】Quality-p2-01 → Alg-p2-01：已接单，11-28 交付", out)
+        self.assertNotIn("#2205", out)
+        self.assertNotIn("小时没有往来", out)
+        self.assertIn("packages/drafts/pmo/跨序列协调记录.md（还没有）", out)
+        _, out = self.route("cross", "#2201", sid="s-entry")
+        self.assertIn("#2201 需求包-评测集：往来 2 条", out)
+        self.assertEqual(out.count("\n- "), 2)
+        self.assertIn("【委托 #2201】Alg-p2-01 → Quality-p2-01", out)
+        _, out = self.route("cross", "2205", sid="s-entry")
+        self.assertIn("登记回执里它不是跨序列需求", out)
+        log = os.path.join(self.tmp, ".claude", "logs", "dispatch.jsonl")       # the same talk, ten days ago
+        old = (datetime.datetime.now().astimezone() - datetime.timedelta(days=10)).isoformat(timespec="seconds")
+        lines = [json.dumps(dict(json.loads(x), ts=old), ensure_ascii=False) for x in self.read(".claude/logs/dispatch.jsonl").splitlines()]
+        with open(log, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        _, out = self.route("cross", sid="s-entry")
+        self.assertIn("跨序列需求 0 条", out)
+        self.assertIn("- 无", out)
+        _, out = self.route("cross", "--days", "30", sid="s-entry")
+        self.assertIn("#2201 需求包-评测集", out)
+        self.assertIn("小时没有往来", out)
+        with open(os.path.join(self.tmp, "packages", "drafts", "pmo", "跨序列协调记录.md"), "w", encoding="utf-8") as f:
+            f.write("# 跨序列协调记录\n")
+        self.assertNotIn("还没有", self.route("cross", sid="s-entry")[1])
+
+    def test_any_session_may_read_the_talk(self):
+        settings = json.loads(self.read(".claude/settings.json"))
+        self.assertIn("Bash(python3.12 -I %s cross)" % self.R, settings["permissions"]["allow"])
+        self.assertIn("Bash(python3.12 -I %s cross *)" % self.R, settings["permissions"]["allow"])
+        for sid in ("s-alg2", "s-alg0", "s-entry"):
+            self.assertIsNone(self.bash(sid, "python3.12 -I %s cross 2201" % self.R)[1].get("permissionDecision"), sid)
+
+
+class PythonVersionTest(unittest.TestCase):
+    """1.0.12: the plugin runs under Python 3.12 and nothing older, and its commands name python3.12: on macOS
+    python3 is the system's 3.9, the name the researcher's own packages hang on, so it is left alone."""
+
+    def test_setup_turns_an_older_interpreter_away(self):
+        with self.assertRaises(setup.SetupError) as e:
+            setup.need_python((3, 9, 6))
+        self.assertIn("现在是 3.9.6", str(e.exception))
+        self.assertIn("python3.12 -I <插件目录>/scripts/setup.py", str(e.exception))
+        setup.need_python((3, 12, 0))
+        setup.need_python()                                        # the tests themselves run under 3.12 or later
+        with mock.patch.object(setup.sys, "version_info", (3, 11, 9, "final", 0)), contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(setup.main(["precheck"]), 2)          # before anything else is looked at
+        self.assertIn("现在是 3.11.9", out.getvalue())
+
+    def test_every_command_the_plugin_writes_names_the_interpreter(self):
+        tmp = tempfile.mkdtemp(prefix="solo-lab-python-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        with contextlib.redirect_stdout(io.StringIO()):
+            plan = setup.build_plan(tmp, TASK, None)
+        settings = json.loads(plan.files[".claude/settings.json"][0])
+        commands = [h["command"] for groups in settings["hooks"].values() for g in groups for h in g["hooks"]]
+        self.assertTrue(commands)
+        for command in commands:
+            self.assertTrue(command.startswith("python3.12 -I -B "), command)
+        rules = [r for kind in ("allow", "ask", "deny") for r in settings["permissions"][kind] if "solo-lab/bin" in r]
+        self.assertTrue(rules)
+        for rule in rules:
+            self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/", rule)
+        for rel, (content, _, _) in plan.files.items():
+            if rel.endswith(".md"):
+                self.assertNotRegex(content, r"python3 -I", rel)   # a role text that says python3 would run the system's 3.9
+
+    def test_the_precheck_says_whether_the_interpreter_is_there(self):
+        with mock.patch.object(setup.shutil, "which", return_value=None):
+            self.assertEqual(setup.python_on_path(), (False, "PATH 里找不到 python3.12：hook 和角色说明里的命令都用它；先装一个，比如 brew install python@3.12"))
+        with mock.patch.object(setup.shutil, "which", return_value="/x/python3.12"), \
+                mock.patch.object(setup, "run", return_value=(0, "Python 3.12.13\n", "")):
+            self.assertEqual(setup.python_on_path(), (True, "Python 3.12.13（/x/python3.12）"))
+
+
 class PoolReviewIdentityTest(PoolProjectCase):
     """Fixes from the adversarial review of 0.5.0: identity and hard rules."""
-    W = "python3 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"
+    W = "python3.12 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"
 
     def setUp(self):
         super().setUp()
@@ -3413,18 +3603,18 @@ class PoolReviewIdentityTest(PoolProjectCase):
 
     def test_claim_commands_are_found_by_parsing(self):
         R = self.R
-        for cmd in ("python3 -I %s --offline release PMO-p0-01" % R, "bash -c 'python3 -I %s release PMO-p0-01'" % R):
+        for cmd in ("python3.12 -I %s --offline release PMO-p0-01" % R, "bash -c 'python3.12 -I %s release PMO-p0-01'" % R):
             self.assertEqual(self.decision("s-researcher", cmd), "deny", cmd)
-        self.assertEqual(self.decision("s-researcher", "python3 -I %s 'release' PMO-p0-01" % R), "ask")   # same as the plain form
-        self.assertEqual(self.decision("s-alg1", "python3 -I %s 'release' PMO-p0-01" % R), "deny")
-        self.assertEqual(self.decision("s-alg2", "python3 -I %s --offline expect PMO-p0-02 --role pmo-scribe --session s-alg1" % R), "deny")
+        self.assertEqual(self.decision("s-researcher", "python3.12 -I %s 'release' PMO-p0-01" % R), "ask")   # same as the plain form
+        self.assertEqual(self.decision("s-alg1", "python3.12 -I %s 'release' PMO-p0-01" % R), "deny")
+        self.assertEqual(self.decision("s-alg2", "python3.12 -I %s --offline expect PMO-p0-02 --role pmo-scribe --session s-alg1" % R), "deny")
         for cmd in ('grep -n "route.py claim" CLAUDE.md', "echo '研究员请运行 route.py release Alg-p0-01'",
-                    "cat > packages/drafts/alg/n.md <<'EOF'\npython3 -I %s expect Alg-p0-02 --role alg-p0 --desk d\nEOF" % R):
+                    "cat > packages/drafts/alg/n.md <<'EOF'\npython3.12 -I %s expect Alg-p0-02 --role alg-p0 --desk d\nEOF" % R):
             self.assertIsNone(self.decision("s-alg2", cmd), cmd)
 
     def test_a_cd_to_this_project_in_front_of_a_claim_is_the_same_command(self):
         self.route("expect", "RnD-p2-01", "--role", "rnd-p2", "--desk", "d-rnd", sid="s-researcher")
-        plain = "python3 -I %s claim rnd-p2 --as RnD-p2-01" % self.R
+        plain = "python3.12 -I %s claim rnd-p2 --as RnD-p2-01" % self.R
         for front in ('cd "%s" && ' % self.tmp, "cd '%s' && " % self.tmp, "cd %s && " % self.tmp, 'cd "%s/" &&  ' % self.tmp):
             self.assertIsNone(self.decision("s-term", front + plain), front)
         for cmd in ('cd "%s" ; %s' % (self.tmp, plain), "cd /tmp && " + plain, 'cd "%s" && %s | tail -3' % (self.tmp, plain),
@@ -3433,14 +3623,14 @@ class PoolReviewIdentityTest(PoolProjectCase):
             verdict = self.bash("s-term", cmd)[1]
             self.assertEqual(verdict.get("permissionDecision"), "deny", cmd)
             self.assertIn("前面最多带一句 cd 到本项目目录", verdict.get("permissionDecisionReason", ""), cmd)
-        plain = "python3 -I %s expect Alg-p0-02 --role alg-p0 --desk d-x" % self.R
+        plain = "python3.12 -I %s expect Alg-p0-02 --role alg-p0 --desk d-x" % self.R
         self.assertIsNone(self.decision("s-alg2", 'cd "%s" && %s' % (self.tmp, plain)))       # expect is read the same way
 
     def test_claim_with_an_asserted_desk_or_an_old_session_asks(self):
         self.route("expect", "RnD-p2-01", "--role", "rnd-p2", "--desk", "d-rnd", sid="s-researcher")
-        cmd = "python3 -I %s claim rnd-p2 --as RnD-p2-01 --desk d-rnd" % self.R
+        cmd = "python3.12 -I %s claim rnd-p2 --as RnD-p2-01 --desk d-rnd" % self.R
         self.assertEqual(self.decision("s-term", cmd), "ask")              # no desktop ID in the hook to compare with
-        cmd = "python3 -I %s claim rnd-p2 --as RnD-p2-01" % self.R
+        cmd = "python3.12 -I %s claim rnd-p2 --as RnD-p2-01" % self.R
         self.assertIsNone(self.decision("s-term", cmd))                    # without --desk route.py uses the session's own IDs
         code, text = self.route("claim", "rnd-p2", "--as", "RnD-p2-01", "--wait", "0", sid="s-term")
         self.assertEqual(code, 1)                                          # and finds no permit for them
@@ -3810,7 +4000,7 @@ class FirstReviewTest(ProjectCase):
 
 class PoolSecondReviewTest(PoolProjectCase):
     """Fixes from the second adversarial review of 0.5.0."""
-    W = "python3 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"
+    W = "python3.12 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"
 
     def setUp(self):
         super().setUp()
@@ -3836,7 +4026,7 @@ class PoolSecondReviewTest(PoolProjectCase):
                     "env -S 'git stash'", "tcsh -c 'git stash'", "xcrun git stash", "gh pr checkout 123"):
             self.assertEqual(self.decision("s-alg1", cmd), "deny", cmd)
         R = self.R
-        for cmd in ('out="$(python3 -I %s release PMO-p0-01)"' % R, "python3 -X utf8 %s release PMO-p0-01" % R,
+        for cmd in ('out="$(python3.12 -I %s release PMO-p0-01)"' % R, "python3 -X utf8 %s release PMO-p0-01" % R,
                     "python3 -W ignore -I %s release PMO-p0-01" % R):
             self.assertEqual(self.decision("s-researcher", cmd), "deny", cmd)
 
@@ -3846,7 +4036,7 @@ class PoolSecondReviewTest(PoolProjectCase):
             self.assertIsNone(self.decision("s-alg1", cmd), cmd)
 
     def test_identity_variables_stay_put(self):
-        cmd = "env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_HOST_SESSION_ID python3 -I %s notify PMO-p0-01 --text x" % self.R
+        cmd = "env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_HOST_SESSION_ID python3.12 -I %s notify PMO-p0-01 --text x" % self.R
         self.assertEqual(self.decision("s-alg1", cmd), "deny")
         self.assertEqual(self.decision("s-alg1", "CLAUDE_CODE_SESSION_ID=s-scribe %s" % self.W), "deny")
         self.assertIsNone(self.decision("s-alg1", "echo $CLAUDE_CODE_SESSION_ID"))
@@ -4006,7 +4196,7 @@ class SecondReviewSetupTest(ProjectCase):
 
 class PoolThirdReviewTest(PoolProjectCase):
     """Fixes from the third, narrow review of 0.5.0."""
-    W = "python3 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"
+    W = "python3.12 -I .claude/solo-lab/bin/ledger.py register packages/drafts/alg/x.md --apply"
 
     def setUp(self):
         super().setUp()
@@ -4032,7 +4222,7 @@ class PoolThirdReviewTest(PoolProjectCase):
                     'echo "later: \\$(git stash)" >> NOTES.md',
                     "gh pr create --body 'Do not run `git pull` here'",
                     "rg -n -F '`route.py release`' docs/ CLAUDE.md",
-                    "# then ask the researcher to run `route.py release Alg-p0-01`\npython3 -I %s pool" % self.R):
+                    "# then ask the researcher to run `route.py release Alg-p0-01`\npython3.12 -I %s pool" % self.R):
             for sid in ("s-alg1", "s-researcher"):
                 self.assertIsNone(self.decision(sid, cmd), (sid, cmd))
         self.assertEqual(self.decision("s-alg1", 'git commit -m "$(git stash)"'), "deny")
@@ -4050,9 +4240,9 @@ class PoolThirdReviewTest(PoolProjectCase):
                     "C='git stash'; bash -c \"$C\"",
                     "git --git-dir=/tmp/other/.git checkout -f main"):
             self.assertEqual(self.decision("s-alg1", cmd), "deny", cmd)
-        for cmd in ("find . -maxdepth 0 -exec sh -c 'python3 -I %s release PMO-p0-01' \\;" % self.R,
+        for cmd in ("find . -maxdepth 0 -exec sh -c 'python3.12 -I %s release PMO-p0-01' \\;" % self.R,
                     "python3 -m cProfile -o /dev/null %s release PMO-p0-01" % self.R,
-                    "X=%s; python3 -I $X pool; python3 -I $X release Alg-p0-01" % self.R):
+                    "X=%s; python3.12 -I $X pool; python3.12 -I $X release Alg-p0-01" % self.R):
             self.assertEqual(self.decision("s-researcher", cmd), "deny", cmd)
 
     def test_git_in_other_trees_is_fine(self):
@@ -4069,13 +4259,13 @@ class PoolThirdReviewTest(PoolProjectCase):
         self.assertEqual(self.decision("s-alg1", "git -C repo checkout other"), "deny")
 
     def test_a_repeated_option_is_refused(self):
-        cmd = "python3 -I %s claim pmo-scribe --desk= --desk d-scribe --wait 0" % self.R
+        cmd = "python3.12 -I %s claim pmo-scribe --desk= --desk d-scribe --wait 0" % self.R
         self.assertEqual(self.decision("s-term", cmd), "deny")
-        cmd = "python3 -I %s expect Alg-p0-02 --role alg-p0 --role pmo-scribe --desk d-x" % self.R
+        cmd = "python3.12 -I %s expect Alg-p0-02 --role alg-p0 --role pmo-scribe --desk d-x" % self.R
         self.assertEqual(self.decision("s-alg2", cmd), "deny")
 
     def test_identity_variables_in_other_forms(self):
-        tail = "python3 -I %s notify PMO-p2-01 --text x" % self.R
+        tail = "python3.12 -I %s notify PMO-p2-01 --text x" % self.R
         for prefix in ("unset -v CLAUDE_CODE_SESSION_ID CLAUDE_CODE_HOST_SESSION_ID; ", 'env -i PATH="$PATH" ',
                        'env -u "CLAUDE_CODE_SESSION_ID" -u "CLAUDE_CODE_HOST_SESSION_ID" ',
                        "unset CLAUDE_CODE_{,HOST_}SESSION_ID; ", "export -n CLAUDE_CODE_SESSION_ID CLAUDE_CODE_HOST_SESSION_ID; "):
@@ -4222,7 +4412,7 @@ class BracketPathTest(PoolProjectCase):
 
     def test_a_cd_to_a_path_with_brackets_is_still_this_project(self):
         self.route("expect", "RnD-p2-01", "--role", "rnd-p2", "--desk", "d-rnd", sid="s-researcher")
-        cmd = 'cd "%s" && python3 -I %s claim rnd-p2 --as RnD-p2-01' % (self.tmp, self.R)
+        cmd = 'cd "%s" && python3.12 -I %s claim rnd-p2 --as RnD-p2-01' % (self.tmp, self.R)
         self.assertIsNone(self.bash("s-term", cmd)[1].get("permissionDecision"), cmd)
 
     def test_pool_views_read_sessions_and_receipts(self):
@@ -4527,7 +4717,7 @@ class HookScopeTest(PoolProjectCase):
     OWNED = ("rm .claude/state/gates.json", "echo '{}' > .claude/state/gates.json", "cp /tmp/forged.json .claude/state/gates.json",
              "mv .claude/state/gates.json /tmp/g.json", "rm .claude/state/pool.json", "echo x > .claude/hooks/policy.json",
              "sed -i '' 's/x/y/' .claude/settings.json", "cat > .claude/hooks/guard.py <<'EOF'\nimport sys\nEOF", "rm -rf .claude")
-    LEDGER = "python3 -I .claude/solo-lab/bin/ledger.py archive 2101 --apply"
+    LEDGER = "python3.12 -I .claude/solo-lab/bin/ledger.py archive 2101 --apply"
     DOCS = "lark-cli docs +update --doc x --command append --content hi --as user"
     MEEGLE = "meegle workitem update --params '{}'"
     WRAPS = ("%s", "function f { %s; }; f", "function f\n{\n  %s\n}\nf", "f() { %s; }; f", "command %s", "command -p %s", "command -- %s",
@@ -4599,7 +4789,7 @@ class HookScopeTest(PoolProjectCase):
         for cat in listed["categories"]:
             self.assertFalse({"match", "paths", "how"} & set(cat), cat["name"])
         allow = json.loads(self.read(".claude/settings.json"))["permissions"]["allow"]
-        self.assertIn("Bash(python3 -I .claude/solo-lab/bin/ledger.py revise *)", allow)
+        self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/ledger.py revise *)", allow)
 
     def test_the_commands_1_0_4_stopped_get_no_answer(self):
         for cmd in self.LISTED + self.PROTECTED + self.OWNED:
@@ -4656,8 +4846,8 @@ class HookScopeTest(PoolProjectCase):
             out = self.bash("s-scribe", cmd)[1]
             self.assertEqual(out.get("permissionDecision"), "deny", cmd)
             self.assertIn("带 --yes 的命令只能由研究员本人执行", out["permissionDecisionReason"], cmd)
-        for cmd in ("command -v lark-cli", "command -V meegle", "python3 -I .claude/solo-lab/bin/ledger.py status 2101",
-                    "function f { python3 -I .claude/solo-lab/bin/ledger.py query queue; }; f"):
+        for cmd in ("command -v lark-cli", "command -V meegle", "python3.12 -I .claude/solo-lab/bin/ledger.py status 2101",
+                    "function f { python3.12 -I .claude/solo-lab/bin/ledger.py query queue; }; f"):
             self.assertNotIn("permissionDecision", self.bash("s-alg1", cmd)[1], cmd)                  # reads and lookups
         read = self.READ
         for cmd in (read, "command -p " + read, "env -S %s" % shlex.quote(read), "env -vS %s" % shlex.quote(read)):
@@ -4731,11 +4921,11 @@ class HookScopeTest(PoolProjectCase):
         # nothing else on the line: the allow stands, with cd, other Feishu and ledger calls, and redirects that write no file
         for sid, cmd in (("s-alg1", read), ("s-alg1", "cd repo && " + read), ("s-alg1", "pushd repo && %s; popd" % read),
                          ("s-alg1", read + "; meegle workitem get --work-item-id 2101"), ("s-alg1", read + " 2>&1"),
-                         ("s-alg1", read + " 2>/dev/null"), ("s-alg1", read + " && python3 -I %s get 2101" % self.L),
+                         ("s-alg1", read + " 2>/dev/null"), ("s-alg1", read + " && python3.12 -I %s get 2101" % self.L),
                          ("s-alg1", "timeout 30 env LANG=C " + read), ("s-alg1", "lark-cli docs +fetch --help"),
                          ("s-alg1", comment), ("s-entry", send), ("s-entry", "cd %s && %s" % (shlex.quote(self.tmp), send)),
                          ("s-scribe", ledger_write), ("s-scribe", "cd %s && %s" % (shlex.quote(self.tmp), ledger_write)),
-                         ("s-scribe", ledger_write + " 2>&1"), ("s-scribe", "%s && python3 -I %s get 2101" % (ledger_write, self.L)),
+                         ("s-scribe", ledger_write + " 2>&1"), ("s-scribe", "%s && python3.12 -I %s get 2101" % (ledger_write, self.L)),
                          ("s-scribe", "pushd repo && %s; popd" % self.MEEGLE), ("s-scribe", scribe_doc), ("s-researcher", read)):
             self.assertEqual(self.bash(sid, cmd)[1].get("permissionDecision"), "allow", (sid, cmd))
         out = self.bash("s-alg1", comment)[1]                                       # the rewrite goes with the allow
@@ -4752,9 +4942,9 @@ class HookScopeTest(PoolProjectCase):
         import importlib
         fc = importlib.import_module("feishu_cmd")
         fc.TRUSTED = {os.path.join(self.tmp, self.L)}
-        for cmd, plain in ((read, True), ("cd repo && " + read, True), (read + " 2>&1", True), ("python3 -I %s get 1" % self.L, True),
+        for cmd, plain in ((read, True), ("cd repo && " + read, True), (read + " 2>&1", True), ("python3.12 -I %s get 1" % self.L, True),
                            (read + "; ls", False), ("sudo " + read, False), (read + " > x", False), ("echo $(%s)" % read, False),
-                           ("python3 -I tools/ledger.py get 1", False), ("npx -y @larksuite/cli docs +fetch --doc x", True),
+                           ("python3.12 -I tools/ledger.py get 1", False), ("npx -y @larksuite/cli docs +fetch --doc x", True),
                            ("echo 'unclosed", False)):
             self.assertEqual(fc.parse(cmd, self.tmp).plain, plain, cmd)
 
@@ -4828,8 +5018,8 @@ class HookScopeTest(PoolProjectCase):
                         "pushd %s && git checkout main && popd", "pushd %s && git pull; popd; git status",
                         "pushd . && cd %s && git stash && popd && git log -1"):
                 self.assertEqual(self.bash("s-alg1", cmd % other), (0, {}), cmd)               # git in another tree is not the rule's
-            for cmd in ("function r { python3 -I .claude/solo-lab/bin/route.py release Alg-p1-01; }; r",
-                        "command -p python3 -I .claude/solo-lab/bin/route.py release Alg-p1-01"):
+            for cmd in ("function r { python3.12 -I .claude/solo-lab/bin/route.py release Alg-p1-01; }; r",
+                        "command -p python3.12 -I .claude/solo-lab/bin/route.py release Alg-p1-01"):
                 out = self.bash("s-alg1", cmd)[1]                                     # a claim command is seen behind the wrapper
                 self.assertEqual(out.get("permissionDecision"), "deny", cmd)
                 self.assertIn("route.py release 要写成单条简单命令", out["permissionDecisionReason"], cmd)
@@ -4864,7 +5054,7 @@ class HookScopeTest(PoolProjectCase):
                       self.read("CLAUDE.md"))
 
     def test_revise_is_the_scribes(self):
-        cmd = "python3 -I .claude/solo-lab/bin/ledger.py revise 2140 packages/drafts/infra/v2.md --note '去掉沙箱' --apply"
+        cmd = "python3.12 -I .claude/solo-lab/bin/ledger.py revise 2140 packages/drafts/infra/v2.md --note '去掉沙箱' --apply"
         self.assertEqual(self.bash("s-scribe", cmd)[1].get("permissionDecision"), "allow")      # revise is the scribe's, like every write
         self.assertEqual(self.bash("s-alg2", cmd)[1].get("permissionDecision"), "deny")
         self.assertEqual(self.bash("s-researcher", cmd)[1].get("permissionDecision"), "ask")
@@ -4885,7 +5075,7 @@ class HookScopeTest(PoolProjectCase):
         read. A ledger.py write command without --apply prints what it would do and writes nothing: until
         1.0.10 the entry could not preview a revision and had to ask the scribe. --help is a read wherever it
         stands. What may carry --apply out of the hook's sight still counts as a write."""
-        L = "python3 -I .claude/solo-lab/bin/ledger.py"
+        L = "python3.12 -I .claude/solo-lab/bin/ledger.py"
         for sid in ("s-entry", "s-alg2", "s-alg1"):
             for preview in (L + " revise 2140 packages/drafts/alg/v2.md --note '只读预览'", L + " archive 2140",
                             L + " register packages/drafts/alg/x.md", "cd %s && %s confirm 2140 --by Alg-p2-01" % (shlex.quote(self.tmp), L)):
@@ -4898,7 +5088,7 @@ class HookScopeTest(PoolProjectCase):
         guard = importlib.import_module("guard")
         self.assertIsNone(guard.ledger_write(L + " revise 2140 v2.md --note x", self.tmp))
         self.assertEqual(guard.ledger_write(L + " archive 2140 --ap", self.tmp), "archive")
-        R = "python3 -I .claude/solo-lab/bin/route.py"
+        R = "python3.12 -I .claude/solo-lab/bin/route.py"
         for helped in (R + " expect --help", "%s expect --help; %s pool" % (R, R), "%s claim -h | head -5" % R):
             self.assertNotEqual(self.bash("s-alg1", helped)[1].get("permissionDecision"), "deny", helped)
         out = self.bash("s-alg1", "%s expect Alg-p0-02 --role alg-p0 --card; %s pool" % (R, R))[1]
@@ -4958,7 +5148,7 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
     alone, with the command that reads each; the entry keeps the 状态包 current; CLAUDE.md asks the summary to
     keep the IDs."""
 
-    CMD = "python3 -I .claude/solo-lab/bin/ledger.py status"
+    CMD = "python3.12 -I .claude/solo-lab/bin/ledger.py status"
 
     def receipt(self, item_id, **values):
         path = os.path.join(self.tmp, "packages", "sent", "%s.json" % item_id)
@@ -5493,7 +5683,7 @@ class TextsAfterTheGatesTest(PoolProjectCase):
             places["mechanisms.md"] = next(x for x in f.read().splitlines() if x.startswith("- **升到 1.0.5。**"))
         places["docs/使用说明.md"] = next(x for x in places["docs/使用说明.md"].splitlines() if x.startswith("**升到 1.0.5。**"))
         for rel, text in places.items():
-            for part in ("python3 -I .claude/solo-lab/bin/space.py snapshot --target . --apply", "setup.py feishu --target <项目目录> --live",
+            for part in ("python3.12 -I .claude/solo-lab/bin/space.py snapshot --target . --apply", "setup.py feishu --target <项目目录> --live",
                          "核对后加 `--apply`", "任何会话", "重新绑定"):
                 self.assertIn(part, text, rel)
             self.assertIn("研究员的会话" if rel != "docs/使用说明.md" else "初始化会话", text, rel)

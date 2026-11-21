@@ -1636,9 +1636,10 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
         if not d.rel:
             raise LedgerError("同序列需求要写关系：下发或执行")
         rank = re.search(r"-p([0-2])-", d.author or "")
-        expected = {"2": "assign", "1": "execute"}.get(rank.group(1)) if rank else None
-        if expected != d.rel:                       # +2 发下发关系的包，+1 发执行关系的包
-            raise LedgerError("关系“%s”和发出方 %s 的职级对不上：+2 发的同序列需求是下发，+1 发的是执行；退回作者改包头" % (
+        # +2 发下发关系的包，+1 发执行关系的包；本序列没开 +1 时 +2 直接委托 +0，写的也是执行关系（1.0.12）
+        expected = {"2": ("assign", "execute"), "1": ("execute",)}.get(rank.group(1), ()) if rank else ()
+        if d.rel not in expected:
+            raise LedgerError("关系“%s”和发出方 %s 的职级对不上：+2 发给 +1 的同序列需求是下发，本序列没开 +1、直接发给 +0 的是执行；+1 发的是执行；退回作者改包头" % (
                 spec.term("rel", d.rel), d.author))
         required += [("relation", spec.term("rel", d.rel)), ("owner_session", d.receiver or "待委托")]
     if wid == "cross_request":
@@ -2902,7 +2903,7 @@ def archive(lg, item_id, moved=False):
             # not confirmed to get it there: the researcher terminates it on the web page (the researcher,
             # 2026-11-20). The message says how to ask, since this is where a session learns that it must.
             raise LedgerError("#%s 还没走到最后一步“%s”：现在在“%s”。前面的步骤确认完再归档。\n这条工作项要是建错了、或者不做了，不要为了归档去确认前面的步骤，"
-                              "也不用写决策包：运行 python3 -I .claude/solo-lab/bin/route.py todo add --for %s --terminate --text '<为什么不要它了>'，"
+                              "也不用写决策包：运行 python3.12 -I .claude/solo-lab/bin/route.py todo add --for %s --terminate --text '<为什么不要它了>'，"
                               "记进研究员任务清单，由研究员在网页上终止" % (
                 item_id, (last or {}).get("name") or "归档", "、".join(n["name"] for n in nodes if n["status"] == "doing") or "流程之外", item_id))
     key = "archive/%s" % (seq or "<序列>")
@@ -3442,6 +3443,15 @@ def main(argv=None):
     return 0
 
 
+def also_to_router(lg, item_id):
+    """One more line for the scribe once it has written on a 跨序列需求: the receipt goes to the router too. From
+    1.0.12 the two +2 of such a request talk to each other and ask the scribe themselves, the entry is not in
+    between; the router keeps the record of who waits for whom, and a receipt is what wakes it. The type is
+    read from the registration receipt (packages/sent/<ID>.json): nothing more is asked of the space."""
+    if lg.mode == "apply" and item_id and receipt_of(lg, str(item_id).lstrip("#")).get("type") == "cross_request":
+        print("跨序列需求：这条回执另发一份给路由 %s（请求方就是它的不用再发）。" % lg.spec.rules["naming"]["fixed_sessions"]["pmo-router"])
+
+
 def run_command(lg, args):
     if args.cmd == "get":
         if args.raw:
@@ -3461,15 +3471,19 @@ def run_command(lg, args):
     elif args.cmd == "register":
         if args.existing:
             raise LedgerError(EXISTING_GONE % item_id_of(args.existing))
-        register(lg, args.draft, args.source, pairs=args.set, resume=args.resume, doc=args.doc, task=args.task)
+        also_to_router(lg, register(lg, args.draft, args.source, pairs=args.set, resume=args.resume, doc=args.doc, task=args.task))
     elif args.cmd == "reply":
         reply(lg, args.draft, args.doc)
+        also_to_router(lg, (Draft(lg.spec, args.draft).linked or [None])[0])
     elif args.cmd == "confirm":
         confirm(lg, args.id, args.by, args.set, args.node, args.decision, args.type, args.option, args.executor)
+        also_to_router(lg, args.id)
     elif args.cmd == "revise":
         revise(lg, args.id, args.draft, args.note)
+        also_to_router(lg, args.id)
     elif args.cmd == "rollback":
         rollback(lg, args.id, args.to, args.reason, args.by, args.decision, args.type)
+        also_to_router(lg, args.id)
     elif args.cmd == "update":
         update(lg, args.id, args.set, args.type)
     elif args.cmd == "comment":
@@ -3480,6 +3494,7 @@ def run_command(lg, args):
         append(lg, args.id, args.file)
     elif args.cmd == "archive":
         archive(lg, args.id, args.moved)
+        also_to_router(lg, args.id)
     elif args.cmd == "relink":
         relink(lg, args.id)
     elif args.cmd == "ensure-node":

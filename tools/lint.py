@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Lint for the Solo-Lab plugin repository. Standard library only, no Feishu access.
 
-    python3 -I tools/lint.py [--root <another checkout of this repository>]
+    python3.12 -I tools/lint.py [--root <another checkout of this repository>]
 
 Each rule comes from a defect that reached a release and was met in a project. A rule looks for what caused
 the defect, not for the one place it showed: the next of its kind is to stop here. The exit code is 1 when a

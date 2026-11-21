@@ -177,7 +177,7 @@ class CodexTest(unittest.TestCase):
     def test_layout_rules_and_eight_project_entrypoints(self):
         self.assertFalse((self.root / ".claude").exists())
         self.assertFalse((self.root / "CLAUDE.md").exists())
-        self.assertEqual(self.plan.manifest["upstream_version"], "1.0.11")
+        self.assertEqual(self.plan.manifest["upstream_version"], "1.0.12")
         self.assertEqual(len(self.pool.slots), 21)
         priority = [s["role"] for s in self.pool.config["slots"] if s["priority"]]
         self.assertEqual(priority, list(codex_setup.PRIORITY_ROLES))

@@ -5,7 +5,7 @@
   "pool": {
     "p1": 1,
     "p0": 1,
-    "later": ["liaison"],
+    "later": ["liaison", "product", "alg"],
     "max_sessions": 30
   },
   "editable_paths": [

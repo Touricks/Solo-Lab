@@ -7,15 +7,15 @@ description: 读懂项目绑定的飞书项目空间：运行 space.py snapshot 
 
 插件不内置流程。这个项目有哪些工作项类型、每类怎么走、每一步谁负责、要交什么，都在飞书项目空间里。`space.py snapshot` 把空间的结构读成两份文件：`feishu/space.json` 给脚本用，`feishu/space.md` 给人看。本技能做两件事：把快照读新，再照快照把空间讲清楚。
 
-只想知道一条工作项走到哪一步、还缺什么，不用本技能，跑 `python3 -I .claude/solo-lab/bin/ledger.py next <工作项 ID>`。
+只想知道一条工作项走到哪一步、还缺什么，不用本技能，跑 `python3.12 -I .claude/solo-lab/bin/ledger.py next <工作项 ID>`。
 
 ## 先重读
 
 在项目目录里运行：
 
 ```bash
-python3 -I .claude/solo-lab/bin/space.py snapshot --target .           # 预览：读飞书，不写文件
-python3 -I .claude/solo-lab/bin/space.py snapshot --target . --apply   # 写入 feishu/space.json 和 feishu/space.md
+python3.12 -I .claude/solo-lab/bin/space.py snapshot --target .           # 预览：读飞书，不写文件
+python3.12 -I .claude/solo-lab/bin/space.py snapshot --target . --apply   # 写入 feishu/space.json 和 feishu/space.md
 ```
 
 预览只跑只读的 meegle 命令。它打印两样东西：和上一份快照相比的变化，每条以“变化：”开头；各流程的表。照变化决定下一步：
@@ -31,7 +31,7 @@ python3 -I .claude/solo-lab/bin/space.py snapshot --target . --apply   # 写入 
 写入以后跑一遍约定核对，它只看本地的快照和绑定，不读飞书：
 
 ```bash
-python3 -I .claude/solo-lab/bin/space.py check --target .
+python3.12 -I .claude/solo-lab/bin/space.py check --target .
 ```
 
 最后一行以“通过”结尾就接着讲。列出问题的，报给入口，用技能 `solo-lab:space-bind` 处理。
@@ -52,9 +52,9 @@ python3 -I .claude/solo-lab/bin/space.py check --target .
 讲的依据是快照，用下面的命令看，或者直接读 `feishu/space.md`：
 
 ```bash
-python3 -I .claude/solo-lab/bin/space.py show --target . flows     # 每个流程一张表：步、节点、负责角色、完成时必填
-python3 -I .claude/solo-lab/bin/space.py show --target . fields    # 整份结构：流程，加每个类型的角色、状态、新建时必填和字段表
-python3 -I .claude/solo-lab/bin/space.py show --target . binding   # 约定的槽位各绑到了哪个类型，字段、角色、状态各绑上几个
+python3.12 -I .claude/solo-lab/bin/space.py show --target . flows     # 每个流程一张表：步、节点、负责角色、完成时必填
+python3.12 -I .claude/solo-lab/bin/space.py show --target . fields    # 整份结构：流程，加每个类型的角色、状态、新建时必填和字段表
+python3.12 -I .claude/solo-lab/bin/space.py show --target . binding   # 约定的槽位各绑到了哪个类型，字段、角色、状态各绑上几个
 ```
 
 照这个顺序讲：
@@ -99,7 +99,7 @@ python3 -I .claude/solo-lab/bin/space.py show --target . binding   # 约定的�
 核对一个模板空间合不合约定，不需要项目目录。这条命令只读飞书，什么都不写：
 
 ```bash
-python3 -I <插件目录>/scripts/space.py check --space <空间名、simple_name 或 project_key>
+python3.12 -I <插件目录>/scripts/space.py check --space <空间名、simple_name 或 project_key>
 ```
 
 退出码 0 是通过，1 是有问题并逐条列出，2 是命令没跑成。流程图要靠工作项才读得到，核对要在每个流程都有一条样例工作项的时候跑。
@@ -107,11 +107,11 @@ python3 -I <插件目录>/scripts/space.py check --space <空间名、simple_nam
 给模板写结构说明时，先把模板空间读成一份快照文件，再从它生成说明。快照文件里有空间的各种键，放在仓库之外；生成的说明不带任何键：
 
 ```bash
-python3 -I <插件目录>/scripts/space.py export --space <空间名> --out <space.json>
+python3.12 -I <插件目录>/scripts/space.py export --space <空间名> --out <space.json>
 ```
 
 ```bash
-python3 -I <插件目录>/scripts/space.py show --snapshot <space.json> structure
+python3.12 -I <插件目录>/scripts/space.py show --snapshot <space.json> structure
 ```
 
 `<插件目录>` 是插件根目录，也就是本技能目录往上两级。

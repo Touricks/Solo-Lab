@@ -22,30 +22,30 @@ model: {{model}}
 
 ```bash
 # 登记：需求包、决策包、研究任务单、反馈。建工作项、上传成主文档、写字段、补“状态包”和“交接记录”
-python3 -I .claude/solo-lab/bin/ledger.py register <草稿路径>
+python3.12 -I .claude/solo-lab/bin/ledger.py register <草稿路径>
 # 修订：已经登记的需求包、决策包（版本号加一）和研究任务单的下一版，原位换掉主文档开头，交接记录追加一行“第 N 版（日期）：<改了什么>”
-python3 -I .claude/solo-lab/bin/ledger.py revise <工作项 ID> <新草稿路径> --note '<改了什么>'
+python3.12 -I .claude/solo-lab/bin/ledger.py revise <工作项 ID> <新草稿路径> --note '<改了什么>'
 # 答复（交付包）：上传到它答复的需求的主文档下，链接写进“交付包”字段
-python3 -I .claude/solo-lab/bin/ledger.py reply <草稿路径>
+python3.12 -I .claude/solo-lab/bin/ledger.py reply <草稿路径>
 # 看一条工作项走到哪一步、这一步谁负责、还缺什么
-python3 -I .claude/solo-lab/bin/ledger.py next <工作项 ID>
+python3.12 -I .claude/solo-lab/bin/ledger.py next <工作项 ID>
 # 确认当前这一步：--by 写提出请求的会话名（研究员交代的写 研究员），必填字段用 --set 传
-python3 -I .claude/solo-lab/bin/ledger.py confirm <工作项 ID> --by <会话名> --set <字段名>=<值>
+python3.12 -I .claude/solo-lab/bin/ledger.py confirm <工作项 ID> --by <会话名> --set <字段名>=<值>
 # 确认决策的“决定”：--option 记下研究员选的选项（可以不加；表里一个都没选写 无；选项名带空格要加引号），--executor 把执行方改成一个会话；可逆的决策到期没定，按到期默认确认
-python3 -I .claude/solo-lab/bin/ledger.py confirm <决策 ID> --by 研究员 [--option '<选项>'] [--executor <会话名>] --set 决定内容=<…> --set 决定人=研究员
-python3 -I .claude/solo-lab/bin/ledger.py confirm <决策 ID> --by 到期默认
+python3.12 -I .claude/solo-lab/bin/ledger.py confirm <决策 ID> --by 研究员 [--option '<选项>'] [--executor <会话名>] --set 决定内容=<…> --set 决定人=研究员
+python3.12 -I .claude/solo-lab/bin/ledger.py confirm <决策 ID> --by 到期默认
 # 退回到已完成的某一步，必须写原因；研究任务的回退要带研究员批准的决策
-python3 -I .claude/solo-lab/bin/ledger.py rollback <工作项 ID> --to <节点名> --reason '<原因>' --by <会话名>
-python3 -I .claude/solo-lab/bin/ledger.py rollback <研究任务 ID> --to <节点名> --reason '<原因>' --decision <决策工作项 ID>
+python3.12 -I .claude/solo-lab/bin/ledger.py rollback <工作项 ID> --to <节点名> --reason '<原因>' --by <会话名>
+python3.12 -I .claude/solo-lab/bin/ledger.py rollback <研究任务 ID> --to <节点名> --reason '<原因>' --decision <决策工作项 ID>
 # 归档：把主文档的整棵子树移到归档节点，再确认最后一步
-python3 -I .claude/solo-lab/bin/ledger.py archive <工作项 ID>
+python3.12 -I .claude/solo-lab/bin/ledger.py archive <工作项 ID>
 # 改字段、加评论、替换状态包、追加交接记录
-python3 -I .claude/solo-lab/bin/ledger.py update <工作项 ID> --set <字段名>=<值>
-python3 -I .claude/solo-lab/bin/ledger.py comment <工作项 ID> --text '<内容>'
-python3 -I .claude/solo-lab/bin/ledger.py status-block <工作项 ID> --file <状态包文件>
-python3 -I .claude/solo-lab/bin/ledger.py append <工作项 ID> --file <交接记录文件>
+python3.12 -I .claude/solo-lab/bin/ledger.py update <工作项 ID> --set <字段名>=<值>
+python3.12 -I .claude/solo-lab/bin/ledger.py comment <工作项 ID> --text '<内容>'
+python3.12 -I .claude/solo-lab/bin/ledger.py status-block <工作项 ID> --file <状态包文件>
+python3.12 -I .claude/solo-lab/bin/ledger.py append <工作项 ID> --file <交接记录文件>
 # 建知识库节点（feishu/binding.md 里列的缺的节点）
-python3 -I .claude/solo-lab/bin/ledger.py ensure-node <键，比如 feedback 或 archive/alg>
+python3.12 -I .claude/solo-lab/bin/ledger.py ensure-node <键，比如 feedback 或 archive/alg>
 ```
 
 命令的完整用法、台账结构和出错时怎么办，在技能 `solo-lab:ledger` 里。
@@ -66,8 +66,8 @@ python3 -I .claude/solo-lab/bin/ledger.py ensure-node <键，比如 feedback 或
 - 草稿的包头里“关联工作项”写着“待建”的，登记后脚本把工作项 ID 写回草稿，在回执里告诉请求方。脚本只改这一行；输出里有“草稿在命令运行期间改过”的，把这句原样写进回执。这一行写了别的内容，脚本会停下：退回作者改成“待建”。已经登记的文档里这一行还是占位的，用 `ledger.py relink <工作项 ID>` 原位修正。
 - 需求包要挂到一条研究任务上，决策包和反馈的这一栏是选填。空间里只有一条没归档的研究任务时脚本自动填；不止一条时，需求包的包头要写“所属研究任务：#<ID>”，或者登记时加 `--task <ID>`，决策包和反馈没写就空着。研究任务都归档以后登记的反馈也空着。
 - 同序列需求登记后停在“待开工”。登记请求写了“开工”的，登记完接着 `confirm <ID> --by <承接方的会话名>`；没写的等请求方说开工再确认。
-- 执行关系的需求包挂在来源工作项的主文档下：登记请求里的来源工作项用 `--source <ID>` 传；没写的，退回请求方要。关系要和发出方的职级一致（+2 发下发，+1 发执行），对不上 `register` 会停下，退回作者改。
-- 跨序列需求登记后，“提出”这一步随登记确认，工作项停在“待接单”。承接方接单时填需求复述、承接范围和预计交付时间；不接的，回滚到“提出”并写原因，状态回到“已退回”。接单和交付的登记请求由入口来提，`--by` 写承接方 +2 的会话名。“序列”字段脚本填的是承接序列：这条需求归承接方，发起序列和承接序列另有字段。
+- 执行关系的需求包挂在来源工作项的主文档下：登记请求里的来源工作项用 `--source <ID>` 传；没写的，退回请求方要。关系要和发出方的职级一致（+2 发下发，本序列没开 +1、直接发给 +0 的写执行；+1 发执行），对不上 `register` 会停下，退回作者改。
+- 跨序列需求登记后，“提出”这一步随登记确认，工作项停在“待接单”。承接方接单时填需求复述、承接范围和预计交付时间；不接的，回滚到“提出”并写原因，状态回到“已退回”。新建由路由来提（它先查过重复和冲突；入口自己发起的由入口提），别的会话直接来提的，退回请它先交路由；接单和交付由承接方 +2 自己提，验收由发起方 +2 提。输出里写着“回执另发一份给路由”的，把同一条回执也发给路由。“序列”字段脚本填的是承接序列：这条需求归承接方，发起序列和承接序列另有字段。
 - 确认节点前，请求里要写清是谁提的。负责这一步的是哪个角色，`ledger.py next <ID>` 会列出来：角色是序列名的，由该序列的 +2 提；是发出方、承接方的，由工作项上记的那个会话或它所在序列的 +2 提；是研究员的，要研究员交代。提的人不对，脚本会停下，把请求退回去。
 - 研究任务的节点确认以后，输出的最后一行写着新的这一步由谁负责。回执照常发给请求方；负责方是某个序列的 +2 时，另给它发一条 `【通知 #<任务 ID>】{{session}} → <那个 +2 的会话名>：研究任务走到“<节点>”，这一步由你们序列负责`。新的一步是归档时不用发，等入口来提。
 - 确认决策的“决定”这一步，登记请求要写“由 研究员 提出”，并带研究员的原话。原话是别的会话转述的，请求里还要写明研究员是在哪个会话里说的。缺了就退回请求方补上，不照转述确认。

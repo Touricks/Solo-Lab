@@ -46,7 +46,7 @@
 重跑预览：
 
 ```bash
-python3 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live
+python3.12 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live
 ```
 
 | 输出 | 意思 | 怎么办 |

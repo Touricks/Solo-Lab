@@ -26,11 +26,11 @@
 ## 绑定
 
 ```bash
-python3 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live
+python3.12 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live
 ```
 
 ```bash
-python3 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live --apply
+python3.12 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live --apply
 ```
 
 不加 `--apply` 是预览：只读飞书，不写文件，末尾打印 `feishu/binding.md` 的全文。它读的是项目里的 `spec/task.json`，所以要先做过 `init --apply`。
@@ -69,7 +69,7 @@ python3 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live --ap
 | 什么时候 | 谁 | 命令 |
 | --- | --- | --- |
 | 首条研究任务登记以后 | 初始化会话 | `setup.py feishu --target <项目目录> --live --apply`，`org/phases.md` 一起更新 |
-| 某个流程登记了第一条工作项，或者空间配置改过 | 任何会话 | `python3 -I .claude/solo-lab/bin/space.py snapshot --target . --apply`，只更新快照，见技能 `solo-lab:space-read` |
+| 某个流程登记了第一条工作项，或者空间配置改过 | 任何会话 | `python3.12 -I .claude/solo-lab/bin/space.py snapshot --target . --apply`，只更新快照，见技能 `solo-lab:space-read` |
 | 状态改名、槽位有增减 | 研究员的会话 | 重新绑定：`setup.py feishu --live`，核对后加 `--apply` |
 
 推进节点时 `ledger.py` 每一步都现读这条工作项的节点，不依赖快照。快照用来把字段名和选项名换成空间里的键，也用来讲清空间。
@@ -87,7 +87,7 @@ python3 -I "$PLUGIN/scripts/setup.py" feishu --target <项目目录> --live --ap
 ## .env
 
 ```bash
-python3 -I "$PLUGIN/scripts/setup.py" env --target <项目目录> --apply
+python3.12 -I "$PLUGIN/scripts/setup.py" env --target <项目目录> --apply
 ```
 
 它在项目目录的 `.env` 里写两行，方便研究员和别的工具找到这两个地方：
@@ -109,7 +109,7 @@ FEISHU_WIKI_URL=https://<租户域名>/wiki/space/<space_id>
 1. **准备新空间。** 用模板创建。绑定之前可以先只读核对一遍，最后一行是“这个空间符合约定：用它建出来的项目空间，绑定不用 --map。”才往下做：
 
    ```bash
-   python3 -I "$PLUGIN/scripts/setup.py" template --space <新空间的名字、simple_name 或 project_key>
+   python3.12 -I "$PLUGIN/scripts/setup.py" template --space <新空间的名字、simple_name 或 project_key>
    ```
 
 2. **改任务文件。** `feishu.meegle_space` 写新空间。新旧空间同名时写新空间的 simple_name 或 project_key，不写名字。重跑 `init --apply`。

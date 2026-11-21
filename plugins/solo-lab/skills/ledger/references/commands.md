@@ -1,6 +1,6 @@
 # ledger.py 命令
 
-脚本在项目的 `.claude/solo-lab/bin/ledger.py`，插件里的原件在 `scripts/ledger.py`。在项目目录里运行，照 `python3 -I .claude/solo-lab/bin/ledger.py <子命令> …` 的写法，项目权限只放行这种写法。
+脚本在项目的 `.claude/solo-lab/bin/ledger.py`，插件里的原件在 `scripts/ledger.py`。在项目目录里运行，照 `python3.12 -I .claude/solo-lab/bin/ledger.py <子命令> …` 的写法，项目权限只放行这种写法。
 
 它读三样东西：
 
@@ -62,7 +62,7 @@
 ### get：读一条工作项
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py get <工作项 ID> [--raw]
+python3.12 -I .claude/solo-lab/bin/ledger.py get <工作项 ID> [--raw]
 ```
 
 ```text
@@ -84,7 +84,7 @@ python3 -I .claude/solo-lab/bin/ledger.py get <工作项 ID> [--raw]
 ### next：这一步谁负责、还缺什么
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py next <工作项 ID>
+python3.12 -I .claude/solo-lab/bin/ledger.py next <工作项 ID>
 ```
 
 输出的样子和读法见 `SKILL.md` 的“推进之前先问空间”。几种特别的情况：
@@ -100,8 +100,8 @@ python3 -I .claude/solo-lab/bin/ledger.py next <工作项 ID>
 ### query 和 mql：按条件查
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py query <查询名> [--sequence <序列标识>] [--json]
-python3 -I .claude/solo-lab/bin/ledger.py mql <查询名> [--sequence <序列标识>]
+python3.12 -I .claude/solo-lab/bin/ledger.py query <查询名> [--sequence <序列标识>] [--json]
+python3.12 -I .claude/solo-lab/bin/ledger.py mql <查询名> [--sequence <序列标识>]
 ```
 
 | 查询名 | 查什么 | 条件 |
@@ -125,7 +125,7 @@ python3 -I .claude/solo-lab/bin/ledger.py mql <查询名> [--sequence <序列标
 ### trace：沿来源工作项往回查
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py trace <工作项 ID>
+python3.12 -I .claude/solo-lab/bin/ledger.py trace <工作项 ID>
 ```
 
 每行一个工作项：`#<ID>  <类型>  <状态>  <名称>`。从给的这一条开始，顺着“来源工作项”往回，查到没有来源工作项的那一条为止，最多 20 条。
@@ -133,7 +133,7 @@ python3 -I .claude/solo-lab/bin/ledger.py trace <工作项 ID>
 ### status：读状态包
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py status <工作项 ID>
+python3.12 -I .claude/solo-lab/bin/ledger.py status <工作项 ID>
 ```
 
 打印主文档里“状态包”一节。路由拿它、工作项的名称和字段去匹配没带工作项 ID 的信息。反馈的主文档没有这一节。
@@ -145,7 +145,7 @@ python3 -I .claude/solo-lab/bin/ledger.py status <工作项 ID>
 ### register：登记草稿，新建工作项
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py register <草稿路径> [--task <研究任务 ID>] [--source <来源工作项 ID>] [--set <字段>=<值>] [--resume] [--doc <文档链接>|new]
+python3.12 -I .claude/solo-lab/bin/ledger.py register <草稿路径> [--task <研究任务 ID>] [--source <来源工作项 ID>] [--set <字段>=<值>] [--resume] [--doc <文档链接>|new]
 ```
 
 | 草稿 | 脚本怎么认 | 建成 |
@@ -185,7 +185,7 @@ python3 -I .claude/solo-lab/bin/ledger.py register <草稿路径> [--task <研�
 | 登记的是 | 之后 |
 | --- | --- |
 | 同序列需求 | 停在“待开工”。登记请求写了“开工”的，接着 `confirm <ID> --by <承接方的会话名>`；排队还没委托的等请求方说开工再确认 |
-| 跨序列需求 | “提出”是发出方自己的一步，必填项新建时已经填好，随登记确认，停在“待接单” |
+| 跨序列需求 | “提出”是发出方自己的一步，必填项新建时已经填好，随登记确认，停在“待接单”。输出里多一行“回执另发一份给路由”，之后在它上面的每次写入也有 |
 | 决策，渠道是决策队列 | 停在“待决定”，等研究员定 |
 | 决策，渠道是研究员主动发起 | 脚本打印接着要跑的 `confirm <ID> --by 研究员 --set 决定内容=… --set 决定人=研究员`；包的“决定”一节没写全的，退回作者补上 |
 | 研究任务、反馈 | 跑 `next <ID>` 看第一步要什么 |
@@ -219,7 +219,7 @@ python3 -I .claude/solo-lab/bin/ledger.py register <草稿路径> [--task <研�
 ### revise：修订已经登记的包
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py revise <工作项 ID> <新草稿路径> --note '<改了什么>'
+python3.12 -I .claude/solo-lab/bin/ledger.py revise <工作项 ID> <新草稿路径> --note '<改了什么>'
 ```
 
 - 新草稿是需求包或决策包的下一版：主文档开头到“状态包”之前那部分改好的样子，包头“版本”写上一版加 1，“关联工作项”写这条工作项的 ID 或“待建”。`--note` 必填，进交接记录。
@@ -238,7 +238,7 @@ python3 -I .claude/solo-lab/bin/ledger.py revise <工作项 ID> <新草稿路径
 ### reply：登记交付包
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py reply <草稿路径> [--doc <文档链接>|new]
+python3.12 -I .claude/solo-lab/bin/ledger.py reply <草稿路径> [--doc <文档链接>|new]
 ```
 
 - 只收交付包。包头的“关联工作项”写它答复的那条需求的 ID，比如 `#2103`；这条需求要是同序列需求或跨序列需求。
@@ -251,8 +251,8 @@ python3 -I .claude/solo-lab/bin/ledger.py reply <草稿路径> [--doc <文档链
 ### confirm：确认当前这一步
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py confirm <工作项 ID> --by <会话名> [--set <字段>=<值>] [--option <选项>] [--executor <会话名>] [--node <节点>] [--decision <决策工作项 ID>] [--type <类型槽位>]
-python3 -I .claude/solo-lab/bin/ledger.py confirm <决策 ID> --by 到期默认
+python3.12 -I .claude/solo-lab/bin/ledger.py confirm <工作项 ID> --by <会话名> [--set <字段>=<值>] [--option <选项>] [--executor <会话名>] [--node <节点>] [--decision <决策工作项 ID>] [--type <类型槽位>]
+python3.12 -I .claude/solo-lab/bin/ledger.py confirm <决策 ID> --by 到期默认
 ```
 
 | 参数 | 用途 |
@@ -307,8 +307,8 @@ python3 -I .claude/solo-lab/bin/ledger.py confirm <决策 ID> --by 到期默认
 ### rollback：退回到已完成的一步
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py rollback <工作项 ID> --to <节点> --reason '<原因>' --by <会话名> [--type <类型槽位>]
-python3 -I .claude/solo-lab/bin/ledger.py rollback <工作项 ID> --to <节点> --reason '<原因>' --decision <决策工作项 ID>
+python3.12 -I .claude/solo-lab/bin/ledger.py rollback <工作项 ID> --to <节点> --reason '<原因>' --by <会话名> [--type <类型槽位>]
+python3.12 -I .claude/solo-lab/bin/ledger.py rollback <工作项 ID> --to <节点> --reason '<原因>' --decision <决策工作项 ID>
 ```
 
 | 参数 | 用途 |
@@ -347,7 +347,7 @@ python3 -I .claude/solo-lab/bin/ledger.py rollback <工作项 ID> --to <节点> 
 ### archive：归档
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py archive <工作项 ID> [--moved]
+python3.12 -I .claude/solo-lab/bin/ledger.py archive <工作项 ID> [--moved]
 ```
 
 1. 核对工作项已经走到最后一步；已经是“归档”的直接返回。决策是“已终止”的不用归档，移出本地决策状态里的待定决策就返回。
@@ -362,7 +362,7 @@ python3 -I .claude/solo-lab/bin/ledger.py archive <工作项 ID> [--moved]
 ### update：改字段
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py update <工作项 ID> --set <字段>=<值> [--type <类型槽位>]
+python3.12 -I .claude/solo-lab/bin/ledger.py update <工作项 ID> --set <字段>=<值> [--type <类型槽位>]
 ```
 
 - 写了阻塞原因，同时把阻塞开始日期写成当天，除非这条命令里另外传了日期。阻塞原因清空时，阻塞开始日期一起清空。
@@ -371,7 +371,7 @@ python3 -I .claude/solo-lab/bin/ledger.py update <工作项 ID> --set <字段>=<
 ### comment：加评论
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py comment <工作项 ID> --text '<内容>'
+python3.12 -I .claude/solo-lab/bin/ledger.py comment <工作项 ID> --text '<内容>'
 ```
 
 开头没有会话标签的，脚本自动补上。
@@ -379,7 +379,7 @@ python3 -I .claude/solo-lab/bin/ledger.py comment <工作项 ID> --text '<内容
 ### relink：修正主文档里的“关联工作项”
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py relink <工作项 ID>
+python3.12 -I .claude/solo-lab/bin/ledger.py relink <工作项 ID>
 ```
 
 主文档是带着占位（“待建”这一类）建出来的时候用。脚本找到主文档开头“关联工作项”那一行，原位换成工作项 ID，文档身份和链接不变。那一行已经写着这个 ID 的，不改。
@@ -387,7 +387,7 @@ python3 -I .claude/solo-lab/bin/ledger.py relink <工作项 ID>
 ### status-block：替换状态包
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py status-block <工作项 ID> --file <状态包文件>
+python3.12 -I .claude/solo-lab/bin/ledger.py status-block <工作项 ID> --file <状态包文件>
 ```
 
 把主文档里从“状态包”标题到“交接记录”标题之前的内容，整段换成文件的内容。文件不是以 `## 状态包` 开头的，脚本补上这个标题。
@@ -395,7 +395,7 @@ python3 -I .claude/solo-lab/bin/ledger.py status-block <工作项 ID> --file <�
 ### append：追加交接记录
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py append <工作项 ID> --file <交接记录文件>
+python3.12 -I .claude/solo-lab/bin/ledger.py append <工作项 ID> --file <交接记录文件>
 ```
 
 文件第一行要带会话标签，比如 `[Alg+1]`。内容追加到主文档末尾，“交接记录”是主文档的最后一节。
@@ -403,8 +403,8 @@ python3 -I .claude/solo-lab/bin/ledger.py append <工作项 ID> --file <交接�
 ### ensure-node：建知识库节点
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py ensure-node <键>
-python3 -I .claude/solo-lab/bin/ledger.py ensure-node all
+python3.12 -I .claude/solo-lab/bin/ledger.py ensure-node <键>
+python3.12 -I .claude/solo-lab/bin/ledger.py ensure-node all
 ```
 
 - 键是节点树里的位置，比如 `feedback`、`same_seq/alg`、`archive/alg`，全部的键见 `structure.md` 的节点树。
@@ -539,7 +539,7 @@ lark-cli 只读当前目录、`/tmp`、`~/files` 下的 `@文件`，所以 `ledg
 | --- | --- | --- |
 | “…”这一步的负责方是…：加 --by <提出请求的会话名>；… | 没写 `--by` | 写上提出请求的会话名 |
 | “…”这一步的负责方是…，… 不能请书记员确认这一步；… / … 不能请书记员回滚；… | 提的会话不是负责方 | 退回请求方，让负责的会话来提 |
-| 节点“…”的负责角色（…）不在约定里，判断不了谁能推进这一步：先跑 space.py check | 这个节点的角色没绑到约定里，或者节点不止一个负责角色 | 跑 `python3 -I .claude/solo-lab/bin/space.py check --target .` 看问题，报给研究员 |
+| 节点“…”的负责角色（…）不在约定里，判断不了谁能推进这一步：先跑 space.py check | 这个节点的角色没绑到约定里，或者节点不止一个负责角色 | 跑 `python3.12 -I .claude/solo-lab/bin/space.py check --target .` 看问题，报给研究员 |
 | #… 的“…”…要先填：…（用 --set <字段名>=<值> 传） | 这一步的必填字段没填全 | 向请求方要这些字段的值，用 `--set` 传 |
 | …空间还要求别的东西（…），命令行填不了：… | 节点要的东西在字段以外 | 请研究员在网页上看这个节点 |
 | “…”是最后一步，要先把主文档移到归档节点：用 ledger.py archive … | 拿 `confirm` 确认归档节点 | 改用 `archive` |

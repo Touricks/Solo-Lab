@@ -4,7 +4,7 @@ hook adds for it, and the guard's gate on the wrap-up tool and AskUserQuestion i
 agent session started; and what the inbox hook says of the local decision state (1.0.4): the
 frozen actions, the decisions past their expiry time. Standard library only, no Feishu access.
 
-    python3 -I -B tests/test_delivery.py
+    python3.12 -I -B tests/test_delivery.py
 """
 import ast
 import contextlib
@@ -29,7 +29,7 @@ import setup  # noqa: E402
 WRAPUP = "mcp__ccd_turn__wrap_up"
 WOKEN = "本轮由其他 agent 会话叫醒"
 QUEUED = "本轮登记了待定决策"
-LIST_DUE = ("先回答研究员，再跑 python3 -I .claude/solo-lab/bin/ledger.py query queue，把待决定的决策和等研究员执行的决策附在末尾，"
+LIST_DUE = ("先回答研究员，再跑 python3.12 -I .claude/solo-lab/bin/ledger.py query queue，把待决定的决策和等研究员执行的决策附在末尾，"
             "每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接，改过版的在事项后面写版本号；"
             "route.py pool 里的研究员任务清单和补位请求一起列，它们不算决策；清单里飞书项目的工作项合成一件事说，补位请求写明启动卡在哪个会话里。都没有就不附。")
 QUEUED_TEXT = ("本轮登记了待定决策 #%s：在这一行状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和主文档链接，"
@@ -673,7 +673,7 @@ class GatesInboxTest(DeliveryCase):
                                                                   for k in range(40)]))
         text = [p for p in self.context("s-alg1", "继续").split("\n\n") if p.startswith(FROZEN_HEAD)][0]
         self.assertLessEqual(len(text), 700)
-        self.assertTrue(text.endswith("……（全文看 python3 -I .claude/solo-lab/bin/ledger.py query queue 列的决策包）"), text[-80:])
+        self.assertTrue(text.endswith("……（全文看 python3.12 -I .claude/solo-lab/bin/ledger.py query queue 列的决策包）"), text[-80:])
 
     def test_a_revised_decision_is_not_announced_again(self):
         """The scribe's 【登记回执】 for a revision mentions nothing, even when the decision now jumps the queue and was

@@ -190,7 +190,7 @@ URGENT_AMONG = "其中 #%s 是插队的：本轮可以在收尾里问研究员�
 SIDE_REPORT = "回报里说它在等研究员、带着提问的，不转告研究员：被其他 agent 会话叫醒的轮次，它收尾里的提问已被 hook 去掉。"
 FIRST_TALK = "研究员来谈了。"           # no earlier message of theirs on record, in a new session or one from before 1.0.3
 BACK_AFTER = "研究员隔了 %d 分钟回来。"
-LIST_DUE = ("先回答研究员，再跑 python3 -I .claude/solo-lab/bin/ledger.py query queue，"
+LIST_DUE = ("先回答研究员，再跑 python3.12 -I .claude/solo-lab/bin/ledger.py query queue，"
             "把待决定的决策和等研究员执行的决策附在末尾，每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接，"
             "改过版的在事项后面写版本号；route.py pool 里的研究员任务清单和补位请求一起列，它们不算决策；清单里飞书项目的工作项合成一件事说，补位请求写明启动卡在哪个会话里。都没有就不附。")
 SOURCE_SHOWN = 80                     # characters of the sender's title shown
@@ -198,10 +198,10 @@ SOURCE_SHOWN = 80                     # characters of the sender's title shown
 GATES_FILE = "gates.json"
 FROZEN = "待定决策冻结的动作，决策定下以前谁都不做（hook 不拦，要自己守住），选项中立的准备照常做：%s。"
 FROZEN_SHOWN = 700                    # characters of the frozen line at most
-MORE_FROZEN = "……（全文看 python3 -I .claude/solo-lab/bin/ledger.py query queue 列的决策包）"
+MORE_FROZEN = "……（全文看 python3.12 -I .claude/solo-lab/bin/ledger.py query queue 列的决策包）"
 DUE_DEFAULT = "#%s 已到期：请书记员按到期默认确认（ledger.py confirm %s --by 到期默认），书记员确认后通知执行方 %s 照到期默认动作办（%s）；已经请过的不再请。"
 MAX_DUE = 5                           # lines about decisions past their expiry, at most, a turn
-MORE_DUE = "另有 %d 条已到期的待定决策，见 python3 -I .claude/solo-lab/bin/ledger.py query queue。"
+MORE_DUE = "另有 %d 条已到期的待定决策，见 python3.12 -I .claude/solo-lab/bin/ledger.py query queue。"
 DUE_WAIT = "#%s 已到期，继续等，研究员来谈时排在最前；不推给研究员，不提醒截止。"
 WAITING_FIRST = "已经到期、继续等研究员的决策（%s）排在清单最前，不提截止。"
 
@@ -429,10 +429,13 @@ def pool_prompt(data, policy, root):
         msg["from"] = pool.resolve(policy, pl, msg["from"]) if msg.get("from") else None
         mine = pool.addressed_to(policy, pl, msg, me)
         hits = pool.receive_checks(policy, root, pl, msg, me)
+        sender = pl["claims"].get(msg["from"]) if msg["from"] else None
         pool.log_event(root, {"event": "message" if mine else "message_misaddressed", "kind": msg["kind"],
                               "id": msg["id"], "from": msg["from"], "to": me["name"] if mine else msg.get("to"),
                               "header_to": msg.get("to"), "seen_by": me["name"], "session_id": sid,
-                              "line": msg["line"], "wrapped": wrapper is not None, "soft_hits": hits})
+                              "line": msg["line"], "wrapped": wrapper is not None, "soft_hits": hits,
+                              # does the dispatch graph let the sender send this to me (pool.all_open_items)
+                              "in_graph": bool(sender) and pool.kind_allowed(policy, msg["kind"], sender["role"], me["role"])})
         if msg["kind"] == "assign" and msg.get("id") and mine:
             with pool.locked(root) as locked_pool:
                 locked_pool["owners"][msg["id"]] = me["name"]

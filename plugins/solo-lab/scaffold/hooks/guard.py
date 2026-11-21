@@ -189,9 +189,9 @@ def check_lark(inv, c, who, policy, data, soft, rewritable):
         return Verdict("allow", "查看帮助"), None
     mine = key in pol.get("lark_high_risk", ())      # the scribe's wiki +node-delete: a document goes to the recycle bin
     if c["yes"] and not mine:
-        return Verdict("deny", "带 --yes 的命令只能由研究员本人执行。不要自己加 --yes；把完整命令记进研究员任务清单：python3 -I .claude/solo-lab/bin/route.py todo add --text '<完整命令，和为什么要跑>'。"), None
+        return Verdict("deny", "带 --yes 的命令只能由研究员本人执行。不要自己加 --yes；把完整命令记进研究员任务清单：python3.12 -I .claude/solo-lab/bin/route.py todo add --text '<完整命令，和为什么要跑>'。"), None
     if c["tier"] == "high-risk-write" and not mine:
-        return Verdict("deny", "%s 是 high-risk-write，只能由研究员本人执行。把完整命令记进研究员任务清单：python3 -I .claude/solo-lab/bin/route.py todo add --text '<完整命令，和为什么要跑>'。" % key), None
+        return Verdict("deny", "%s 是 high-risk-write，只能由研究员本人执行。把完整命令记进研究员任务清单：python3.12 -I .claude/solo-lab/bin/route.py todo add --text '<完整命令，和为什么要跑>'。" % key), None
     if c["dry_run"]:
         return Verdict("allow", "--dry-run 只预览"), None
     new_args = None
@@ -223,7 +223,7 @@ def check_meegle(inv, c, who, data, soft, rewritable):
     if c["help"]:
         return Verdict("allow", "查看帮助"), None
     if c["tier"] == "admin":
-        return Verdict("deny", "%s 属于登录、诊断上报或配置类命令，只能由研究员本人执行。确实要跑的，把完整命令记进研究员任务清单：python3 -I .claude/solo-lab/bin/route.py todo add --text '<完整命令，和为什么要跑>'。" % key), None
+        return Verdict("deny", "%s 属于登录、诊断上报或配置类命令，只能由研究员本人执行。确实要跑的，把完整命令记进研究员任务清单：python3.12 -I .claude/solo-lab/bin/route.py todo add --text '<完整命令，和为什么要跑>'。" % key), None
     if c["dry_run"]:
         return Verdict("allow", "--dry-run 只预览"), None
     if c["tier"] == "read":
@@ -951,7 +951,7 @@ def check_pool_command(data, who, policy, root, command):
              and argv[2].endswith(".claude/solo-lab/bin/route.py") and argv[3] == sub
              and not re.search(r"[;&|`$<>\n]", text))
     if not plain:
-        return Verdict("deny", "route.py %s 要写成单条简单命令：python3 -I .claude/solo-lab/bin/route.py %s …；"
+        return Verdict("deny", "route.py %s 要写成单条简单命令：python3.12 -I .claude/solo-lab/bin/route.py %s …；"
                                "前面最多带一句 cd 到本项目目录（cd <项目目录> &&），不带环境变量赋值、包装命令或 --offline 这类全局选项，"
                                "后面不接管道。" % (sub, sub))
     args = argv[4:]
@@ -1105,7 +1105,7 @@ def check_git(data, who, command, root):
     if not sub:
         return None
     reason = ("（%s）不能在共享工作区里运行 git %s：会话池的会话共用这个目录，切分支、stash、reset、pull 这类命令会丢掉"
-              "或混进别的会话还没提交的改动。要研究员来做的，把完整命令记进研究员任务清单：python3 -I .claude/solo-lab/bin/route.py todo add --text '<完整命令，和为什么要跑>'。" % (who.label, sub))
+              "或混进别的会话还没提交的改动。要研究员来做的，把完整命令记进研究员任务清单：python3.12 -I .claude/solo-lab/bin/route.py todo add --text '<完整命令，和为什么要跑>'。" % (who.label, sub))
     return refuse(who, data, reason)
 
 

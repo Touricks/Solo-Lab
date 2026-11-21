@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Time an initialisation by stage: python3 -I onboarding.py begin | start <阶段> | end <阶段> | finish | status
+"""Time an initialisation by stage: python3.12 -I onboarding.py begin | start <阶段> | end <阶段> | finish | status
 
 The clock belongs to the project, not to a session: the initialising session and the scribe
 both write it. What a stage counts as is fixed here, so no session decides it:

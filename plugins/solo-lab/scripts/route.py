@@ -135,7 +135,10 @@ def classify_text(spec, root, text, offline):
     return out
 
 
-def classify_draft(spec, root, path):
+def classify_draft(spec, root, path, pool_run=True):
+    """pool_run: the session pool of the desktop app, where from 1.0.12 a request to another sequence is
+    checked and registered by the router and then goes between the two +2. False keeps the older way, in
+    which the entry passes every package on (the Codex adapter still works like that)."""
     with open(path, encoding="utf-8") as f:
         text = f.read()
     errors, _ = orgspec.lint_text(spec, text)
@@ -160,6 +163,16 @@ def classify_draft(spec, root, path):
                              "研究员定了，书记员确认“决定”这一步，决策到“待执行”；" + carry])
     route = next((r for r in spec.rules["package_routes"] if r["pkg"] == d.pid and (r["rel"] or None) == d.rel), None)
     steps, hop = [], None
+    if pool_run and d.pid == "request" and d.rel == "cross":
+        hop = "%s-p2" % to_seq if to_seq else None
+        steps = ["路由对照台账查重复和冲突：ledger.py query cross、ledger.py query open --sequence <承接序列>；所属研究任务冻结的字段和待定决策“冻结的动作”",
+                 "没有问题：请书记员 register（“提出”随登记确认，停在待接单），把工作项 ID 用【%s #ID】回给发起方，由它直接委托 %s" % (notice, hop),
+                 "和进行中的工作重复、或者碰到冻结项：不登记，把是哪一条回给发起方；要研究员定的报入口"]
+        return result(spec, "R7", "%s（%s → %s）" % (spec.pkg(d.pid) + "（%s）" % spec.term("rel", d.rel),
+                                                  route["from"] if route else "?", route["to"] if route else "?"),
+                      next_hop="pmo-router", steps=steps)
+    if pool_run and d.pid == "delivery" and d.rel == "cross":
+        return result(spec, None, "跨序列的%s不经过入口和路由：承接方请书记员上传答复、确认“执行”，再直接交付给发起方 +2" % spec.pkg(d.pid), next_hop=None)
     if d.pid == "request" and d.rel == "cross":
         hop = "%s-p2" % to_seq if to_seq else None
         steps = ["书记员 register，建跨序列需求（“提出”随登记确认，停在待接单）", "请 %s 接单：复述需求、承接范围、预计交付时间" % hop]
@@ -1145,6 +1158,67 @@ def audit_cmd(spec, root, hours=24):
     return 0
 
 
+CROSS_DAYS = 7                 # route.py cross lists the requests that had traffic within this many days
+CROSS_QUIET_HOURS = 48         # and says so when the last message about one is older than this
+CROSS_RECORD = "packages/drafts/pmo/跨序列协调记录.md"
+CROSS_SKIP = ("register_request", "register_receipt")     # the scribe's traffic: the ledger has what it wrote
+
+
+def cross_cmd(root, item=None, days=CROSS_DAYS):
+    """What the sessions said to each other about the 跨序列需求, from the dispatch log: one line a request, or
+    every message of one. Read-only, and nothing is asked of Feishu. From 1.0.12 the two +2 of such a request
+    talk to each other without the entry or the router in between, so this is where the router (and the entry,
+    when the researcher asks) sees what went on: the log keeps the first line of each message, the rest is in
+    the package the line names. Which items are 跨序列需求 is read from the registration receipts
+    (packages/sent/<ID>.json); their state and deadline are the ledger's (ledger.py query cross)."""
+    if not need_pool(root):
+        return 0
+    files = pool.receipt_files(root)
+    seen = {}
+
+    def receipt(key):
+        return pool.registration_receipt(root, key, files, seen)
+
+    def title(key):
+        name = os.path.basename(str(receipt(key).get("draft") or ""))
+        return re.sub(r"^\d{8}-|\.md$", "", name) or "（本地没有登记回执）"
+    talk = {}
+    for rec in pool.read_events(root):
+        if rec.get("event") in ("message", "message_misaddressed") and rec.get("id") and rec.get("kind") not in CROSS_SKIP:
+            talk.setdefault(str(rec["id"]), []).append(rec)
+
+    def line(rec):
+        at = pool.parse_time(rec.get("ts"))
+        return "%s %s" % (at.strftime("%m-%d %H:%M") if at else "?", str(rec.get("line") or "")[:160])
+    if item:
+        key = str(item).lstrip("#")
+        rows = talk.get(key, [])
+        kind = "" if receipt(key).get("type") == "cross_request" else "（登记回执里它不是跨序列需求）"
+        print("#%s %s%s：往来 %d 条（不算和书记员之间的登记请求、登记回执）。" % (key, title(key), kind, len(rows)))
+        for rec in rows:
+            print("- " + line(rec))
+        return 0
+    at = pool.now()
+    since = at - datetime.timedelta(days=days)
+    rows = []
+    for key, recs in talk.items():
+        last = pool.parse_time(recs[-1].get("ts"))
+        if receipt(key).get("type") == "cross_request" and last and last >= since:
+            rows.append((last, key, recs))
+    print("最近 %d 天有往来的跨序列需求 %d 条（状态和期限看 ledger.py query cross）：" % (days, len(rows)))
+    for last, key, recs in sorted(rows, reverse=True):
+        asked = next((r for r in recs if r.get("kind") == "assign"), None)
+        who = "%s → %s，" % (asked.get("from") or "?", asked.get("seen_by") or asked.get("to") or "?") if asked else ""
+        quiet = int((at - last).total_seconds() // 3600)
+        print("- #%s %s：%s往来 %d 条%s；最近一条：%s" % (
+            key, title(key), who, len(recs), "，已经 %d 小时没有往来" % quiet if quiet >= CROSS_QUIET_HOURS else "", line(recs[-1])))
+    if not rows:
+        print("- 无")
+    print("看一条的全部往来：route.py cross <工作项 ID>。日志只记每条消息的首行，内容在首行写的包里。")
+    print("路由的协调记录：%s%s" % (CROSS_RECORD, "" if os.path.isfile(os.path.join(root, CROSS_RECORD)) else "（还没有）"))
+    return 0
+
+
 def prune_cmd(root, apply=False):
     """Take what is over out of pool.json: the work items that are archived, terminated or deleted leave the
     table of owners, and those the researcher was asked to terminate or delete leave the 研究员任务清单. A work
@@ -1312,6 +1386,9 @@ def main(argv=None):
     p.add_argument("--note", help="done 时写：研究员的话，或者核对到的结果")
     p = sub.add_parser("audit")
     p.add_argument("--hours", type=int, default=24)
+    p = sub.add_parser("cross")
+    p.add_argument("id", nargs="?", help="只看这条工作项的全部往来")
+    p.add_argument("--days", type=int, default=CROSS_DAYS, help="不写工作项时：列出最近几天有往来的跨序列需求")
     p = sub.add_parser("listen")
     p.add_argument("--max-events", type=int,
                    help="lark-cli 收到这么多条事件就退出；别人发给机器人的私聊、群消息也算数，不只算收进收件箱的")
@@ -1323,7 +1400,7 @@ def main(argv=None):
         print("Codex 的会话操作使用 codex_runtime.py；本入口只复用 classify 的业务路由")
         return 2
     if args.cmd == "classify":
-        out = classify_text(spec, root, args.text, args.offline) if args.text else classify_draft(spec, root, args.draft)
+        out = classify_text(spec, root, args.text, args.offline) if args.text else classify_draft(spec, root, args.draft, pool_run=not codex)
         if codex:
             out = json.loads(json.dumps(out, ensure_ascii=False).replace("route.py notify", "entry 技能的通知流程"))
         print(json.dumps(out, ensure_ascii=False, indent=2))
@@ -1353,6 +1430,8 @@ def main(argv=None):
         return todo_cmd(spec, root, args.action, args.n, args.text, args.item, args.done_when, args.note, args.kind)
     if args.cmd == "audit":
         return audit_cmd(spec, root, args.hours)
+    if args.cmd == "cross":
+        return cross_cmd(root, args.id, args.days)
     ap.print_help()
     return 2
 

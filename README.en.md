@@ -46,7 +46,7 @@ Once the plugin is installed, task-related documents are kept in four places
 
 | Component | Content |
 | --- | --- |
-| Claude Desktop | A section named after the Feishu Project space appears in the sidebar: 19 sessions by default, each taking one role |
+| Claude Desktop | A section named after the Feishu Project space appears in the sidebar: 15 sessions by default, each taking one role |
 | Local directory | Task-related files (code, task package drafts, third-party libraries and so on) |
 | Feishu Project | The task ledger, with five types of work item: research task, same-sequence request, cross-sequence request, decision and feedback.<br>Once opened, each type of work item follows its node workflow |
 | Feishu Wiki | Task documents. It keeps the task packages of every stage |
@@ -117,7 +117,7 @@ Responsibilities of the seven sequences
 | Claude | 2.1.219 |  |
 | Lark-cli & Feishu | 1.0.98 | Reads and writes Feishu Docs and Feishu Wiki |
 | Meegle-cli & Feishu Project/Meegle/Meego | 1.0.27 | Reads and writes Feishu Project |
-| Python | 3.9.6 | Runs the plugin |
+| Python | 3.12.13 | Runs the plugin. `python3.12` has to be on the PATH: the plugin's hooks and script commands use that name, not `python3` |
 
 Download links:
 
@@ -139,7 +139,7 @@ claude plugin install solo-lab@solo-lab
 
 The phrase means "initialise this directory with solo-lab".
 
-- The app lets a session open at most 10 further sessions after each message from the user, so the pool has to be opened in two rounds. Partway through its work, the initialisation session stops and waits for the user to send one more message, so that it can go on building the initial session pool:
+- The default pool opens in one round and needs no further message. Only a pool made larger in the task file is opened in two rounds: the app lets a session open at most 10 further sessions after each message from the user, so the initialisation session then stops partway and waits for the user to send one more message before it goes on:
 
 ```text
 继续开池
@@ -154,7 +154,7 @@ After initialisation the user should be able to see:
 - A newly created Feishu Project space, named after the project by default.
 - A research task named after the project already exists in the Feishu Project space, stopped at the first step.
 - A Feishu knowledge space (wiki) with the same name
-- 19 new sessions in Claude Desktop, in the project session that holds the initialisation session.
+- 15 new sessions in Claude Desktop, in the project session that holds the initialisation session.
 - A new `.env` in the local project directory, recording the links to Feishu Project and Feishu Wiki.
 
 ## Usage
@@ -220,4 +220,4 @@ A few tips:
 
 ## Version
 
-v1.0.11
+v1.0.12

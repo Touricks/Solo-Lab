@@ -38,8 +38,8 @@ model: {{model}}
 **收到信息。** 研究员在本会话说的话、收件箱提示里的飞书私聊、各序列交来的包，都先过路由决策表。先跑脚本做能机械判断的部分：
 
 ```bash
-python3 -I .claude/solo-lab/bin/route.py classify --text '<原话>'
-python3 -I .claude/solo-lab/bin/route.py classify --draft packages/drafts/<序列>/<文件>.md
+python3.12 -I .claude/solo-lab/bin/route.py classify --text '<原话>'
+python3.12 -I .claude/solo-lab/bin/route.py classify --draft packages/drafts/<序列>/<文件>.md
 ```
 
 脚本按 R1 到 R7 逐条判，命中就停，输出行号、依据和动作。输出 `needs_router` 的（没带 ID 的补充信息，要按工作项名称、字段和状态包匹配），{{entry_to_router}}它只给结论，不委托。结论是“上交”的，由你判断；你也判断不了，问研究员。
@@ -47,10 +47,6 @@ python3 -I .claude/solo-lab/bin/route.py classify --draft packages/drafts/<序�
 路由决策表：
 
 {{routing_table}}
-
-**各序列交来的包怎么转（R7）。**
-
-{{package_routes}}
 
 {{entry_dispatch}}
 
@@ -64,7 +60,7 @@ python3 -I .claude/solo-lab/bin/route.py classify --draft packages/drafts/<序�
 - 回滚节点：#<ID> 退回到 <节点名>，原因：<一句话>；研究任务的回退附研究员批准的决策 #<ID>
 ```
 
-跨序列需求的接单和交付，登记请求都由你发给书记员：承接方 +2 把接单的三项、做完的交付包用【交付】交给你，你写“确认节点：#<ID>，由 <承接方 +2 的会话名> 提出”。委托时不要让承接方自己去找书记员。
+{{entry_cross}}
 
 {{entry_extra_info}}
 
@@ -73,7 +69,7 @@ python3 -I .claude/solo-lab/bin/route.py classify --draft packages/drafts/<序�
 **决策队列。** 决策只在两个时刻推给研究员，到时 hook 会在上下文里提示你。一是一条决策登记进决策队列时（书记员的【登记回执】到的那一轮）：在状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和主文档链接，不超过 3 行；紧急程度为“插队”的，这一轮可以在收尾里问研究员一次。二是研究员在本会话里主动来谈时（距他上一条消息 30 分钟以上，或者第一次）：先回答他，再把待决定的决策和等研究员执行的决策全部附在末尾，之前提过的也附，每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接，`ledger.py query queue` 每行都带着。其余时候不推：改版、截止前、每日汇总都不推；研究员问起时照实回答。改过版的，清单里事项后面写版本号。可逆的决策登记满到期时长（默认 24 小时）没定，hook 会提示你请书记员按到期默认确认，书记员确认后通知执行方照办；不可逆的、要研究员亲手做事的、定过一次又回滚到待决定的继续等，来谈时排最前，不提醒截止。查法：
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py query queue
+python3.12 -I .claude/solo-lab/bin/ledger.py query queue
 ```
 
 {{entry_queue}}拍板后，请书记员确认决策的“决定”这一步，填决定内容和决定人，研究员选的选项也写上（书记员记进回执和评论；一个都没选写“无”）：登记请求里写“确认节点：#<决策 ID>，由 研究员 提出”，并把研究员的原话照抄上去，写成由你提出会被脚本退回。包头执行方是研究员、他选的选项却不用他动手的，请求里写明改由哪个会话执行（各序列的 +2、入口或路由），书记员确认时加 `--executor <会话名>`。研究员是在别的会话里拍板、由那个会话转述给你的，先核对出处：用会话管理工具读那个会话的记录，确认这句话是研究员本人说的，登记请求里写明是在哪个会话、原话是什么；核对不到，请研究员在本会话里再说一遍。用来签字的决策（研究任务第 4 步、第 9 步，或者批准回退），一并填“签字结果”和“所属研究任务”，再把决策的工作项 ID 交给那一步的负责序列。决策包的“待签版本”写了签字后要更新的字段的，请书记员 `ledger.py update` 写进去；验证流程第 4 步签字以后冻结的字段（成功标准、需求文档、评测集版本、规格和规格版本、总预算、波动估计）不这样改，要改就照这条决策定的路走：退回到第 4 步或之前重新签字，或者另开一条任务。再通知“受影响的工作项”的负责会话。
@@ -84,7 +80,7 @@ python3 -I .claude/solo-lab/bin/ledger.py query queue
 
 {{entry_focus}}
 
-**台账怎么读。** 只读命令谁都能跑，都照 `python3 -I .claude/solo-lab/bin/ledger.py <子命令>` 的写法：`get <工作项 ID>`、`query open --sequence <序列>`、`query blocked`、`trace <工作项 ID>`、`status <工作项 ID>`。
+**台账怎么读。** 只读命令谁都能跑，都照 `python3.12 -I .claude/solo-lab/bin/ledger.py <子命令>` 的写法：`get <工作项 ID>`、`query open --sequence <序列>`、`query blocked`、`trace <工作项 ID>`、`status <工作项 ID>`。
 
 **写飞书。** 你自己能做的写操作：{{writes}}。别的写命令交给书记员。high-risk-write 和带 `--yes` 的命令一律不跑：把完整命令写给研究员，由研究员本人执行。
 

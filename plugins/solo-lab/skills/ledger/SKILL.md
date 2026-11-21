@@ -15,19 +15,19 @@ description: 读写智能体组织的台账（飞书项目）和任务包文档�
 ## 读：谁都能用
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py get <工作项 ID>            # 类型、流程、状态、名称和有值的字段
-python3 -I .claude/solo-lab/bin/ledger.py next <工作项 ID>           # 走到哪一步、这一步谁负责、还缺什么
-python3 -I .claude/solo-lab/bin/ledger.py query queue               # 决策队列：待决定的决策（已到期、继续等研究员的标“待决定（已到期，继续等研究员）”，排在最前），和研究员定了、执行方是研究员、还没归档的（标“待执行”），每行带版本、紧急程度、回复期限、执行方、研究员要做的事和主文档链接
-python3 -I .claude/solo-lab/bin/ledger.py query blocked             # 阻塞原因非空的研究任务和需求，每行带阻塞原因和主文档链接
-python3 -I .claude/solo-lab/bin/ledger.py query verifying           # 待验收的同序列需求
-python3 -I .claude/solo-lab/bin/ledger.py query open --sequence alg # 进行中的同序列需求，只看算法序列
-python3 -I .claude/solo-lab/bin/ledger.py query cross               # 进行中的跨序列需求
-python3 -I .claude/solo-lab/bin/ledger.py query tasks               # 没归档的研究任务
-python3 -I .claude/solo-lab/bin/ledger.py query recent              # 近 7 天更新过的同序列需求
-python3 -I .claude/solo-lab/bin/ledger.py query source:<工作项 ID>   # 由某个工作项引出的工作项
-python3 -I .claude/solo-lab/bin/ledger.py trace <工作项 ID>          # 沿来源工作项往回查
-python3 -I .claude/solo-lab/bin/ledger.py status <工作项 ID>         # 主文档的状态包
-python3 -I .claude/solo-lab/bin/ledger.py mql queue                 # 只打印 MQL，不查
+python3.12 -I .claude/solo-lab/bin/ledger.py get <工作项 ID>            # 类型、流程、状态、名称和有值的字段
+python3.12 -I .claude/solo-lab/bin/ledger.py next <工作项 ID>           # 走到哪一步、这一步谁负责、还缺什么
+python3.12 -I .claude/solo-lab/bin/ledger.py query queue               # 决策队列：待决定的决策（已到期、继续等研究员的标“待决定（已到期，继续等研究员）”，排在最前），和研究员定了、执行方是研究员、还没归档的（标“待执行”），每行带版本、紧急程度、回复期限、执行方、研究员要做的事和主文档链接
+python3.12 -I .claude/solo-lab/bin/ledger.py query blocked             # 阻塞原因非空的研究任务和需求，每行带阻塞原因和主文档链接
+python3.12 -I .claude/solo-lab/bin/ledger.py query verifying           # 待验收的同序列需求
+python3.12 -I .claude/solo-lab/bin/ledger.py query open --sequence alg # 进行中的同序列需求，只看算法序列
+python3.12 -I .claude/solo-lab/bin/ledger.py query cross               # 进行中的跨序列需求
+python3.12 -I .claude/solo-lab/bin/ledger.py query tasks               # 没归档的研究任务
+python3.12 -I .claude/solo-lab/bin/ledger.py query recent              # 近 7 天更新过的同序列需求
+python3.12 -I .claude/solo-lab/bin/ledger.py query source:<工作项 ID>   # 由某个工作项引出的工作项
+python3.12 -I .claude/solo-lab/bin/ledger.py trace <工作项 ID>          # 沿来源工作项往回查
+python3.12 -I .claude/solo-lab/bin/ledger.py status <工作项 ID>         # 主文档的状态包
+python3.12 -I .claude/solo-lab/bin/ledger.py mql queue                 # 只打印 MQL，不查
 ```
 
 - 命令里的工作项 ID 写数字，不带 `#`：shell 把 `#` 开头的词当注释。
@@ -38,7 +38,7 @@ python3 -I .claude/solo-lab/bin/ledger.py mql queue                 # 只打印 
 ## 推进之前先问空间
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py next 2101
+python3.12 -I .claude/solo-lab/bin/ledger.py next 2101
 ```
 
 ```text
@@ -103,7 +103,7 @@ python3 -I .claude/solo-lab/bin/ledger.py next 2101
 ### 确认节点
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py confirm 2101 --by Alg-p2-01 --set 实验轮次=1 --set 实验方案=<文档链接>
+python3.12 -I .claude/solo-lab/bin/ledger.py confirm 2101 --by Alg-p2-01 --set 实验轮次=1 --set 实验方案=<文档链接>
 ```
 
 - `--by` 写提出请求的会话名，它要是这一步的负责方；研究员交代的写 `--by 研究员`；“开工”写承接方的会话名。
@@ -111,6 +111,7 @@ python3 -I .claude/solo-lab/bin/ledger.py confirm 2101 --by Alg-p2-01 --set 实�
 - 脚本先做完全部核对，再写字段、确认节点，然后回读：节点要是已完成，并打印现在走到哪一步、什么状态。
 - 最后一步不用 `confirm`，用 `archive`。
 - 决策确认了“决定”这一步，输出的最后一行是“执行方：<研究员或会话名>。”，取自登记回执，也就是决策包包头的“执行方”；这次确认加了 `--executor` 的，是改成的那个会话。书记员接着通知执行方：执行方是会话的，把决定内容发给它，请它照决定执行，执行完马上请书记员归档；它就是这次的请求方的，写进回执，不另发。执行方是研究员的，不另发，入口按清单列给研究员。
+- 在跨序列需求上每写一次（登记、上传答复、确认、回滚、修订、归档），输出里多一行“跨序列需求：这条回执另发一份给路由 PMO-p1-01”：把同一条回执也发给路由，请求方就是路由的不用再发。这类需求由两个 +2 直接往来、各自来提登记请求，路由靠这份回执得知进展；新建由路由来提，入口自己发起的由入口提。
 - 确认决策的“决定”时，可以加 `--option` 写研究员选的选项（选项表第一列的名字；带空格的加引号，比如 `--option '本机 Docker'`），表里一个都没选写 `--option 无`。它只是记录：脚本核对选项名，记进回执的 `option`，再加一条评论，带上这个选项列的不可逆的动作；不加也能确认。hook 不看它，不可逆事项清单里的命令 hook 都不拦。
 - 确认决策的“决定”时，可以加 `--executor <会话名>` 改执行方：包头“执行方”写的是研究员、研究员选的选项却不用他动手时用。只收各序列的 +2、入口和路由，过和包头一样的检查；要改成研究员的，脚本拒绝，请发出方写下一版，`revise` 以后再确认。生效以后回执的 `executor` 是这个会话、`researcher_action` 是 null，空间里有“执行方”“研究员要做的事”两个字段的随这一步写成会话名和“无”，再加一条评论；之后照执行方是会话的规矩走，`query queue` 不再把它列成等研究员执行。这条决策回滚到“待决定”时，执行方改回包头写的。
 - `confirm <ID> --by 到期默认`：可逆的决策登记满到期时长还没定，按包头的到期默认动作记成决定。脚本核对它还在待决定、在本地决策状态里、执行方是会话又不用研究员亲手做事、可逆、没有回滚过（研究员定过一次、又回滚到待决定的决策不再走到期默认，一直等研究员）、登记满到期时长、到期默认动作指向选项表里的一个选项，有一样不满足就停下，什么都不写。都满足时，决定内容写“到期默认：<选项>：<做法>（登记后 <时长>内研究员没有决定）”，决定人填研究员（这个字段只能填人），再加一条同样内容的评论。到期时长写在 `org/decisions.md` 插件那一节，研究员可以改，脚本每次现读，改了马上生效；读不到按 24 小时。不要带 `--set`、`--option`、`--executor`、`--decision`。
@@ -118,7 +119,7 @@ python3 -I .claude/solo-lab/bin/ledger.py confirm 2101 --by Alg-p2-01 --set 实�
 ### 修订
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py revise 2140 packages/drafts/infra/20261122-决策包-隔离方式-v2.md --note '去掉同账号沙箱：沙箱规则调不完'
+python3.12 -I .claude/solo-lab/bin/ledger.py revise 2140 packages/drafts/infra/20261122-决策包-隔离方式-v2.md --note '去掉同账号沙箱：沙箱规则调不完'
 ```
 
 - 发出方写了已经登记的需求包或决策包的下一版：新草稿是主文档开头到“状态包”之前那部分改好的样子，包头“版本”比上一版大 1，“关联工作项”写这条工作项的 ID 或“待建”。研究任务单也用它：不写“版本”，脚本自己数；过了第一步也能修订，输出里提醒一句后面各步定下的文档不跟着变（`register --existing` 停用了）。交付包不用它（改好后包头“版本”加 1，用 `reply` 重新交）。修订稿没有“# <包名>：<事项>”标题行的，事项照旧。
@@ -134,8 +135,8 @@ python3 -I .claude/solo-lab/bin/ledger.py revise 2140 packages/drafts/infra/2026
 ### 回滚
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py rollback 2103 --to 执行 --reason '第 2 条验收标准没有证据' --by Product-p2-01
-python3 -I .claude/solo-lab/bin/ledger.py rollback 2101 --to 设计实验方案 --reason '第 1 轮方案漏了对照组' --decision 2110
+python3.12 -I .claude/solo-lab/bin/ledger.py rollback 2103 --to 执行 --reason '第 2 条验收标准没有证据' --by Product-p2-01
+python3.12 -I .claude/solo-lab/bin/ledger.py rollback 2101 --to 设计实验方案 --reason '第 1 轮方案漏了对照组' --decision 2110
 ```
 
 - `--to` 写一个已完成的节点，名字或节点 ID 都行。`--reason` 必填，原因进操作记录。
@@ -149,7 +150,7 @@ python3 -I .claude/solo-lab/bin/ledger.py rollback 2101 --to 设计实验方案 
 ### 归档
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py archive 2103
+python3.12 -I .claude/solo-lab/bin/ledger.py archive 2103
 ```
 
 - 工作项要已经走到最后一步：`next` 的“书记员推进”一行写着 `archive`。
@@ -199,8 +200,8 @@ python3 -I .claude/solo-lab/bin/ledger.py archive 2103
 走到哪一步和卡没卡住是两回事，所以阻塞记在工作项的两个字段里：阻塞原因、阻塞开始日期。没有“阻塞”这个状态。
 
 ```bash
-python3 -I .claude/solo-lab/bin/ledger.py update 2103 --set blocked_reason='等基础设施批 GPU 配额'  # 同时写阻塞开始日期
-python3 -I .claude/solo-lab/bin/ledger.py update 2103 --set blocked_reason=                       # 解除：两个字段一起清空
+python3.12 -I .claude/solo-lab/bin/ledger.py update 2103 --set blocked_reason='等基础设施批 GPU 配额'  # 同时写阻塞开始日期
+python3.12 -I .claude/solo-lab/bin/ledger.py update 2103 --set blocked_reason=                       # 解除：两个字段一起清空
 ```
 
 研究任务、同序列需求、跨序列需求有这两个字段。`query blocked` 列出阻塞原因非空的，`next` 的最后一行也会显示。阻塞原因用 `update` 写，不随 `confirm` 写。

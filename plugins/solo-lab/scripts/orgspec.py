@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Read the organisation rules of the solo-lab plugin.
 
-    python3 -I scripts/orgspec.py check            # validate rules.json, contract.json and irreversible.json
-    python3 -I scripts/orgspec.py show packages    # print one rendered section
-    python3 -I scripts/orgspec.py lint <file>...   # check package drafts and docs for stale names
+    python3.12 -I scripts/orgspec.py check            # validate rules.json, contract.json and irreversible.json
+    python3.12 -I scripts/orgspec.py show packages    # print one rendered section
+    python3.12 -I scripts/orgspec.py lint <file>...   # check package drafts and docs for stale names
 
 orgspec/rules.json holds the rules with stable English identifiers; Chinese names
 live only in orgspec/terms.zh.json. Prose in rules.json may contain tokens such as
@@ -26,6 +26,17 @@ PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ORGSPEC_DIR = os.path.join(PLUGIN_ROOT, "orgspec")
 TOKEN = re.compile(r"\{(pkg|rel|wi|seq|rank|node|field|role|channel|abbrev|state|sign):([a-z0-9_]+)\}")
 RANK_NUM = {"p0": 0, "p1": 1, "p2": 2}
+# The dispatch graph's groups of edges (rules.json dispatch). assign is the hierarchy, and the roles a role
+# opens and hands work to are read from it alone (dispatch_targets); direct holds the edges beside it: a +2 to
+# the +2 of another sequence (跨序列需求, 1.0.12: until then every such message went through the entry), and a +2
+# to its own +0 where the sequence opened no +1.
+DISPATCH_GROUPS = ("assign", "direct")
+
+
+def edge_groups(rule):
+    """The groups of edges a message kind travels along: one name or a list of them."""
+    along = rule.get("along")
+    return [along] if isinstance(along, str) else list(along or [])
 
 
 class OrgSpecError(Exception):
@@ -128,7 +139,8 @@ class OrgSpec:
             names = {"pmo-router": "项目管理 +1（路由）", "pmo-scribe": "项目管理 +0（书记员）"}
             return names.get(x) or "%s %s" % (self.term("seq", seq), rank_cn.get(rank, rank))
         scope = {"same_sequence": "同序列", "other_sequences": "别的序列", None: ""}
-        rows = [[end(e["from"]), end(e["to"]), scope[e.get("scope")]] for e in d["assign"]]
+        rows = [[end(e["from"]), end(e["to"]), scope[e.get("scope")] + ("（%s）" % e["note"] if e.get("note") else "")]
+                for group in DISPATCH_GROUPS for e in d.get(group, [])]
         kinds = []
         for kind, rule in d["kinds"].items():
             if rule.get("along"):
@@ -388,7 +400,7 @@ class OrgSpec:
         d = self.rules.get("dispatch") or {}
         roles = {self.role_name(x["id"], r) for x in self.rules["sequences"] for r in (0, 1, 2)}
         ends = roles | {"p0", "p1", "p2"}
-        for group in ("assign",):
+        for group in DISPATCH_GROUPS:
             for e in d.get(group, []):
                 for end in (e.get("from"), e.get("to")):
                     if end not in ends:
@@ -401,8 +413,9 @@ class OrgSpec:
             for key in ("to", "from"):
                 if rule.get(key) and rule[key] not in roles:
                     problems.append("dispatch.kinds.%s 的 %s 不是角色：%s" % (kind, key, rule[key]))
-            if rule.get("along") and rule["along"] not in d:
-                problems.append("dispatch.kinds.%s 沿用的 %s 不存在" % (kind, rule["along"]))
+            for group in edge_groups(rule):
+                if group not in d:
+                    problems.append("dispatch.kinds.%s 沿用的 %s 不存在" % (kind, group))
         if not d.get("kinds"):
             problems.append("规则文件缺 dispatch（派发图）")
         return problems + self.validate_irreversible()
