@@ -296,8 +296,8 @@ class RegisterTest(LedgerCase):
         self.assertEqual(self.receipt(task)["version"], 3)
 
     def test_the_sheet_init_writes_registers_as_it_is(self):
-        import setup
-        path = self.write(setup.first_task_sheet({"name": "约束优化器", "description": "面向代码的约束优化器"}), "first.md")
+        import setup_core
+        path = self.write(setup_core.first_task_sheet({"name": "约束优化器", "description": "面向代码的约束优化器"}), "first.md")
         task = self.quiet(workitem.register, self.lg(), path)
         self.assertEqual(self.state(task), "确定目标")
         self.assertEqual(self.fake.item(task)["name"], "约束优化器")
@@ -2541,7 +2541,7 @@ class DecisionStateTest(LedgerCase):
 
     def test_the_expiry_time_comes_from_decisions_md(self):
         import pool
-        import setup
+        import setup_core
         path = os.path.join(self.tmp, "org", "decisions.md")
         os.makedirs(os.path.dirname(path), exist_ok=True)
 
@@ -2549,7 +2549,7 @@ class DecisionStateTest(LedgerCase):
             with open(path, "w", encoding="utf-8") as f:
                 f.write(text)
         self.assertEqual(ledger_core.expiry_hours(self.tmp), (24, "默认", None))
-        text = setup.render(setup.scaffold("org/decisions.md.tmpl"), {"deviations": setup.deviations_text(self.spec)})
+        text = setup_core.render(setup_core.scaffold("org/decisions.md.tmpl"), {"deviations": setup_core.deviations_text(self.spec)})
         self.assertIn("- 可逆决策的到期时长：登记后 24 小时。研究员可以改这一行的数字", text)       # the plugin's section, as init writes it
         write(text)
         self.assertEqual(ledger_core.expiry_hours(self.tmp), (24, "org/decisions.md", None))

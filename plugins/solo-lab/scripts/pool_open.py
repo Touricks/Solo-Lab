@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The sessions an initialisation opens. Run as pool.py open, where the plugin is installed: the list comes
-from what setup.py knows about the project.
+from what setup_core.py knows about the project.
 
     python3.12 -I scripts/pool.py open --target DIR [--manual]
     python3.12 -I scripts/pool.py open --target DIR --wait SECONDS [--batch N]
@@ -22,7 +22,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import setup  # noqa: E402
+import setup_core  # noqa: E402
 
 TURN_RUNNING = ("busy", "unknown", "uncertain")       # a session whose turn is not over, as far as the hooks know
 
@@ -37,12 +37,12 @@ def own_mode(target):
 def pool_checklist(target, manual=False):
     """`pool.py open`: how to open the pool, and the claims so far. Reads only."""
     import pool
-    plan = setup.load_json_file(os.path.join(target, ".claude", "solo-lab", "pool-plan.json"))
-    policy = setup.load_json_file(os.path.join(target, ".claude", "hooks", "policy.json")) or {}
+    plan = setup_core.load_json_file(os.path.join(target, ".claude", "solo-lab", "pool-plan.json"))
+    policy = setup_core.load_json_file(os.path.join(target, ".claude", "hooks", "policy.json")) or {}
     if not policy.get("agents") or not plan:
         print("这个项目还没有开池清单：先跑 init --apply。")
         return 2
-    if plan.get("version") != setup.PLAN_VERSION:
+    if plan.get("version") != setup_core.PLAN_VERSION:
         print("开池清单是旧版插件生成的：重跑 init --apply。")
         return 2
     pl, ok = pool.load(target)
@@ -59,9 +59,9 @@ def pool_checklist(target, manual=False):
     print("开池清单：%s（共 %d 个会话，总上限 %d）。会话标题的前缀和侧栏分区的名字：%s" % (
         plan["project"], plan["total"], plan["max_sessions"], label))
     print("会话按委托的方向一层开一层：+2 开本序列的 +1，+1 开 +0。侧栏里谁开的就嵌在谁下面。")
-    for above in setup.plan_entries(plan):
+    for above in setup_core.plan_entries(plan):
         for child in above["children"]:
-            if setup.model_tier(child["model"]) > setup.model_tier(above["model"]) >= 0:
+            if setup_core.model_tier(child["model"]) > setup_core.model_tier(above["model"]) >= 0:
                 print("注意：%s 的模型 %s 高于开它的 %s（%s）。会话的模型不能高于开它的会话，高出的不生效，它会沿用 %s 的模型；"
                       "要它用 %s，把任务文件 models 里 %s 的模型也调高。" % (
                           child["name"], child["model"], above["name"], above["model"], above["name"], child["model"], above["role"]))
@@ -73,14 +73,14 @@ def pool_checklist(target, manual=False):
             print("%d. %s（%s，%s）：%s" % (i, top["name"], top["model"], "已认领" if top["name"] in claimed else "未认领", top["opening"]))
             for line in tree(top):
                 print(line)
-            if ok and top["name"] not in claimed and any(e["name"] in claimed for e in setup.plan_entries({"top": top["children"]})):
+            if ok and top["name"] not in claimed and any(e["name"] in claimed for e in setup_core.plan_entries({"top": top["children"]})):
                 print("   它下面的会话还在，换会话时粘贴重建句：%s" % top["rebuild"])
         print("每个 +2 认领以后，照认领输出把自己的标题改成“[%s] <会话名>”，归入侧栏分区“%s”；它下面的会话跟着它走。" % (label, label))
-        if bool(setup.feishu_gaps(target, setup.enabled_sequences(target))) or not setup.registered_tasks(target):
+        if bool(setup_core.feishu_gaps(target, setup_core.enabled_sequences(target))) or not setup_core.registered_tasks(target):
             print("书记员由路由开出，开局句里带着初始化的两件写入。它没做的话，把这段话发给它：%s" % plan["scribe_first"].lstrip("。"))
     else:
         batches, rounds = plan["batches"], plan["rounds"]
-        left = [e["name"] for e in setup.plan_entries(plan) if e["name"] not in claimed]
+        left = [e["name"] for e in setup_core.plan_entries(plan) if e["name"] not in claimed]
         if pool.mode_class(own_mode(target)) == "bypass" and left:
             # measured 2026-11-13: in bypass mode the app asks the user before every start_session, in whichever session calls it
             print("注意：本会话是 bypass 模式。这个模式下，应用对每一次开会话都要研究员点一次确认，卡片弹在发起的那个会话里：本会话开 +2、"
@@ -96,7 +96,7 @@ def pool_checklist(target, manual=False):
         print("研究员的会话（做初始化的这个会话）只开下面这 %d 个 +2，分 %d 批、%d 轮开：" % (len(tops), len(batches), len(rounds)))
         print("- 为什么分批、分轮：会话自己开出的会话（+2 开的 +1、+1 开的 +0），应用有两条上限，所有序列合在一起算：同时最多 %d 个在跑；"
               "研究员每发一条消息以后最多开出 %d 个。所以一批只开一两个序列，等这一批的会话都认领、首轮都结束再开下一批；"
-              "一轮开到 %d 个上下就停下，请研究员回一句话，再开下一轮。" % (setup.AUTO_RUNNING, setup.MESSAGE_STARTS, setup.ROUND_BUDGET))
+              "一轮开到 %d 个上下就停下，请研究员回一句话，再开下一轮。" % (setup_core.AUTO_RUNNING, setup_core.MESSAGE_STARTS, setup_core.ROUND_BUDGET))
         print("- 每一批做三件事，顺序不能换：1. 用会话管理工具 start_session 把这一批的 +2 都开出来；2. 马上对它们各调一次 detach_session，"
               "把它们移到顶层，和本会话同级；3. 用返回的桌面会话 ID 逐个运行它们的 expect。+2 要等预登记才能认领，认领以后才往下开，"
               "所以先移到顶层、后预登记。")
@@ -106,7 +106,7 @@ def pool_checklist(target, manual=False):
               "并写明下一步。超时的时候照它说的办：有首轮还没结束的，重跑一次再等；只是没认领的，接着往下做，最后一并处理。")
         if len(rounds) > 1:
             print("- 一轮的最后一批等完、后面还有下一轮：不要接着开。结束本轮，请研究员回一句“%s”；他回话以后再开下一轮。"
-                  "研究员每发一条消息，应用才重新给 %d 个名额，下一轮的 +2 要等他回话以后才开。" % (setup.RESUME_WORDS, setup.MESSAGE_STARTS))
+                  "研究员每发一条消息，应用才重新给 %d 个名额，下一轮的 +2 要等他回话以后才开。" % (setup_core.RESUME_WORDS, setup_core.MESSAGE_STARTS))
         print("- 最后一批等完：侧栏里没有叫“%s”的分区就用 create_section 建一个；用 move_sessions 把这 %d 个 +2 连同本会话归进去，它们下面的会话跟着走。"
               "再运行 pool.py open --target <项目目录> --wait 240：它等到 %d 个会话都认领、书记员的首轮结束才返回，没等到就列出还差谁。"
               "本会话的标题是应用自动起的，就用 set_session_title 改成“[%s] Initialization”：它是做初始化的会话，不是入口。" % (
@@ -115,14 +115,14 @@ def pool_checklist(target, manual=False):
               "请研究员点开那个会话，说一句“照认领输出开出下一级”。")
         print("- model 填不进去就不填，开好以后再改；模型高于本会话的不生效（会话的模型不能高于开它的会话），记进交接。")
         for top in tops:
-            below = sum(1 for _ in setup.plan_entries({"top": top["children"]}))
-            if below > setup.OPEN_BUDGET:
+            below = sum(1 for _ in setup_core.plan_entries({"top": top["children"]}))
+            if below > setup_core.OPEN_BUDGET:
                 print("注意：%s 下面要开 %d 个会话，一批最多容得下 %d 个：多出来的会被应用拒绝，pool --wait 会列出来，"
-                      "到时请研究员在上一级的会话里说一句“照认领输出开出下一级”。" % (top["name"], below, setup.OPEN_BUDGET))
+                      "到时请研究员在上一级的会话里说一句“照认领输出开出下一级”。" % (top["name"], below, setup_core.OPEN_BUDGET))
         number = 0
         for r, numbers in enumerate(rounds, 1):
             print("")
-            print("第 %d 轮（%s）" % (r, "研究员说完初始化那句话以后" if r == 1 else "研究员回一句“%s”以后" % setup.RESUME_WORDS))
+            print("第 %d 轮（%s）" % (r, "研究员说完初始化那句话以后" if r == 1 else "研究员回一句“%s”以后" % setup_core.RESUME_WORDS))
             for b in numbers:
                 print("第 %d 批" % b)
                 for top in (t for t in tops if t["name"] in batches[b - 1]):
@@ -164,18 +164,18 @@ def pool_wait(target, seconds, batch=None, every=5):
     until every planned session has claimed and the scribe's first turn is over with the nodes
     in place. 0 when that is so; 1 with what is still missing."""
     import pool
-    policy = setup.load_json_file(os.path.join(target, ".claude", "hooks", "policy.json")) or {}
-    plan = setup.load_json_file(os.path.join(target, ".claude", "solo-lab", "pool-plan.json")) or {}
-    if not policy or plan.get("version") != setup.PLAN_VERSION:
+    policy = setup_core.load_json_file(os.path.join(target, ".claude", "hooks", "policy.json")) or {}
+    plan = setup_core.load_json_file(os.path.join(target, ".claude", "solo-lab", "pool-plan.json")) or {}
+    if not policy or plan.get("version") != setup_core.PLAN_VERSION:
         print("这个项目没有开池清单，或者清单是旧版插件生成的：重跑 init --apply。")
         return 2
     batches = plan["batches"]
     if batch is not None and not 1 <= batch <= len(batches):
         print("没有第 %d 批：开池清单一共 %d 批。" % (batch, len(batches)))
         return 2
-    opened_by = {c["name"]: e["name"] for e in setup.plan_entries(plan) for c in e["children"]}
+    opened_by = {c["name"]: e["name"] for e in setup_core.plan_entries(plan) for c in e["children"]}
     tops = plan["top"] if batch is None else [t for t in plan["top"] if t["name"] in batches[batch - 1]]
-    entries = list(setup.plan_entries({"top": tops}))
+    entries = list(setup_core.plan_entries({"top": tops}))
     scribe_role = policy.get("scribe_role")
     deadline = time.time() + max(0, seconds)
     while True:
@@ -201,10 +201,10 @@ def pool_wait(target, seconds, batch=None, every=5):
             then = "这是最后一批。接着把 +2 和本会话归入分区，再运行 pool.py open --target <项目目录> --wait 240。"
         elif batch == mine[-1]:                            # the round is over: the next one needs a message from the researcher
             used = sum(1 for b in mine for t in plan["top"] if t["name"] in batches[b - 1]
-                       for _ in setup.plan_entries({"top": t["children"]}))
+                       for _ in setup_core.plan_entries({"top": t["children"]}))
             then = ("这一轮到此为止：研究员每发一条消息，应用最多让会话自己开出 %d 个会话，这一轮用了 %d 个。现在结束本轮，"
                     "请研究员回一句“%s”；他回话以后再开第 %d 批：%s。" % (
-                        setup.MESSAGE_STARTS, used, setup.RESUME_WORDS, batch + 1, "、".join(batches[batch])))
+                        setup_core.MESSAGE_STARTS, used, setup_core.RESUME_WORDS, batch + 1, "、".join(batches[batch])))
         else:
             then = "接着开第 %d 批：%s。" % (batch + 1, "、".join(batches[batch]))
         if not missing and not running:
@@ -240,12 +240,12 @@ def pool_wait(target, seconds, batch=None, every=5):
     if scribe["status"] == "waiting_researcher":
         print(line + "书记员停在一个确认框上，等研究员批准：请研究员到侧栏点开它处理，再重跑这条命令。")
         return 1
-    gaps = setup.feishu_gaps(target, setup.enabled_sequences(target))
+    gaps = setup_core.feishu_gaps(target, setup_core.enabled_sequences(target))
     if gaps:
         print(line + "书记员的首轮已结束，但是%s。" % gaps[0])
         print(read + "，照技能里“书记员回话里的情况”处理。")
         return 1
-    tasks = setup.registered_tasks(target)
+    tasks = setup_core.registered_tasks(target)
     if tasks:
         print(line + "书记员的首轮已结束：知识库节点都在，首条研究任务已登记（#%s）。" % tasks[0][0].get("work_item_id", "?"))
     else:
@@ -257,12 +257,12 @@ def pool_wait(target, seconds, batch=None, every=5):
 def main(args):
     """`pool.py open`, with the arguments pool_cmd.py parsed."""
     try:
-        setup.need_python()
+        setup_core.need_python()
         if args.batch is not None and args.wait is None:
-            raise setup.SetupError("--batch 要和 --wait 一起用：pool.py open --target <项目目录> --wait 180 --batch <第几批>")
+            raise setup_core.SetupError("--batch 要和 --wait 一起用：pool.py open --target <项目目录> --wait 180 --batch <第几批>")
         if args.wait is not None:
             return pool_wait(os.path.abspath(args.target), args.wait, args.batch)
         return pool_checklist(os.path.abspath(args.target), args.manual)
-    except (setup.SetupError, ValueError, OSError) as e:
+    except (setup_core.SetupError, ValueError, OSError) as e:
         print("出错：%s" % e)
         return 2

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Bind a project to its Feishu space, and check a space against the contract. Run as space.py feishu and
-space.py template, where the plugin is installed: they need what setup.py knows about the project, and
+space.py template, where the plugin is installed: they need what setup_core.py knows about the project, and
 space.py itself is loaded by the ledger scripts.
 
     python3.12 -I scripts/space.py feishu --target DIR [--map ID=NAME ...] [--live] [--apply]
@@ -34,7 +34,7 @@ import orgspec  # noqa: E402
 import ledger_core  # noqa: E402
 import pool as pool_state  # noqa: E402
 import space  # noqa: E402
-import setup  # noqa: E402
+import setup_core  # noqa: E402
 
 def old_owners_out(target):
     """A project that moved to another space: the work items its sessions answer for (pool.json owners) are
@@ -85,7 +85,7 @@ def binding_doc(spec, contract, ids, snap, problems=None, notes=(), changes=(), 
             lines += ["空间由模板建出来，缺的东西要在模板里补：把上表报给模板维护者，模板更新后重建或补齐空间，再重跑 `space.py feishu --live`。"
                       "空间里已经有、只是名字不同的，用 `--map <类型槽位>=<空间里的类型名>` 或 `--map <类型槽位>.<字段槽位>=<空间里的字段名>` 指认。", ""]
     if notes or changes:
-        lines += ["## 提醒", "", setup.bullets(list(notes) + ["空间结构和上次读到的不一样：%s" % c for c in changes]), ""]
+        lines += ["## 提醒", "", setup_core.bullets(list(notes) + ["空间结构和上次读到的不一样：%s" % c for c in changes]), ""]
     rows = []
     nodes = (ids.get("wiki") or {}).get("nodes") or {}
     renames = False
@@ -122,13 +122,13 @@ def binding_doc(spec, contract, ids, snap, problems=None, notes=(), changes=(), 
 
 
 def cli_json(cmd, timeout=60):
-    code, out, err = setup.run(cmd, timeout)
+    code, out, err = setup_core.run(cmd, timeout)
     if code != 0:
-        raise setup.SetupError("%s 失败（退出码 %s）：%s" % (" ".join(cmd[:4]), code, (err or out or "")[-300:]))
+        raise setup_core.SetupError("%s 失败（退出码 %s）：%s" % (" ".join(cmd[:4]), code, (err or out or "")[-300:]))
     try:
         return json.loads(out)
     except ValueError:
-        raise setup.SetupError("%s 的输出不是 JSON" % " ".join(cmd[:4]))
+        raise setup_core.SetupError("%s 的输出不是 JSON" % " ".join(cmd[:4]))
 
 
 def search_hits(data, wanted):
@@ -147,7 +147,7 @@ def find_project(data, wanted, fix=None):
     if len(hits) != 1:
         cands = "；".join("%s（simple_name %s，project_key %s）" % (p.get("name"), p.get("simple_name"), p.get("project_key"))
                           for p in projects or []) or "无"
-        raise setup.SetupError("按“%s”找到 %d 个飞书项目空间，要正好一个。候选：%s。%s" % (wanted, len(hits), cands, fix or (
+        raise setup_core.SetupError("按“%s”找到 %d 个飞书项目空间，要正好一个。候选：%s。%s" % (wanted, len(hits), cands, fix or (
             "把准确的 simple_name 或 project_key 写进 init --task 用的任务文件的 feishu.meegle_space，重跑 init --apply"
             "（spec/task.json 跟着更新；手改过它的，init 会写成 spec/task.json.new，对照合并），再重跑这条命令")))
     return hits[0]
@@ -157,7 +157,7 @@ def optional_read(what, fn):
     """Run one optional read-back step; a failure becomes a reminder, not an abort."""
     try:
         return fn()
-    except setup.SetupError as e:
+    except setup_core.SetupError as e:
         print("提醒：没能读回%s：%s" % (what, e))
         return None
 
@@ -181,7 +181,7 @@ def old_space_items(spec, project_key, old):
             rows = query("SELECT `work_item_id`, `name`, `work_item_status` FROM `%s`.`%s` WHERE %s LIMIT 20" % (
                 project_key, tkey, ledger_core._not_in(done + stop)))
             anything = rows or query("SELECT `work_item_id` FROM `%s`.`%s` LIMIT 1" % (project_key, tkey))
-        except (setup.SetupError, ledger_core.LedgerError) as e:
+        except (setup_core.SetupError, ledger_core.LedgerError) as e:
             print("提醒：没能查旧空间里的%s：%s" % (name, e))
             unchecked.append(name)
             continue
@@ -209,10 +209,10 @@ def read_back(spec, contract, ids, task_feishu, maps, switch=None, old_snap=None
     m = ids["meegle"]
     wanted = str(task_feishu.get("meegle_space") or "").strip() or m.get("project_key")
     if not wanted:
-        raise setup.SetupError("ids.json 里没有 project_key，研究任务里也没写飞书项目空间：把空间名写进 init --task 用的任务文件的 feishu.meegle_space，重跑 init --apply，再重跑这条命令")
+        raise setup_core.SetupError("ids.json 里没有 project_key，研究任务里也没写飞书项目空间：把空间名写进 init --task 用的任务文件的 feishu.meegle_space，重跑 init --apply，再重跑这条命令")
     data = cli_json(["meegle", "project", "search", "--project-key", wanted, "--format", "json"])
     if not search_hits(data, wanted)[1] and not m.get("project_key"):
-        raise setup.SetupError("没有叫“%s”的飞书项目空间，什么都没写。用模板建一个：%s；建好以后重跑这条命令。" % (
+        raise setup_core.SetupError("没有叫“%s”的飞书项目空间，什么都没写。用模板建一个：%s；建好以后重跑这条命令。" % (
             wanted, template_hint(contract, task_feishu, wanted)))
     if not search_hits(data, wanted)[1] and m.get("project_key") and wanted == m.get("space_name"):
         print("提醒：按“%s”找不到空间，可能在飞书里改了名；接着用上次绑定的空间（simple_name %s，project_key %s）。"
@@ -234,7 +234,7 @@ def read_back(spec, contract, ids, task_feishu, maps, switch=None, old_snap=None
             m.pop(k, None)
     m.update({"project_key": hit.get("project_key"), "simple_name": hit.get("simple_name"),
               "space_name": hit.get("name") or m.get("space_name")})
-    snap, binding, problems, notes = setup.read_space(
+    snap, binding, problems, notes = setup_core.read_space(
         contract, {"project_key": m["project_key"], "simple_name": m.get("simple_name"), "name": m.get("space_name")},
         maps, space.binding_of(ids))
     space.apply_binding(ids, contract, binding)
@@ -314,7 +314,7 @@ def switch_md(switch):
         lines += ["旧空间里还有工作项：%s。插件搬不了工作项，它们留在旧空间当档案，台账以后不再读写；没办完的要不要在新空间重建，"
                   "由研究员逐条决定。研究员确认以后，写入时加 `--leave-old-items`。" % "、".join(switch["held"]), ""]
         if switch["open"]:
-            lines += ["没办完的（每种类型最多列 20 条）：", "", setup.bullets(switch["open"]), ""]
+            lines += ["没办完的（每种类型最多列 20 条）：", "", setup_core.bullets(switch["open"]), ""]
     if switch["unchecked"]:
         lines += ["没查成旧空间里的%s有没有工作项。确认旧空间已经删了，或者里面的工作项可以留在原处，写入时加 `--leave-old-items`。"
                   % "、".join(switch["unchecked"]), ""]
@@ -333,35 +333,35 @@ def feishu(target, maps, live, apply, leave_old=False):
     org/phases.md from the flows it read."""
     spec = orgspec.OrgSpec()
     contract = orgspec.Contract(spec)
-    whole = setup.load_json_file(os.path.join(target, "spec", "task.json")) or {}
+    whole = setup_core.load_json_file(os.path.join(target, "spec", "task.json")) or {}
     task = dict(whole.get("feishu") or {})
     task.setdefault("wiki_space", whole.get("name"))          # the knowledge space is named after the project
     try:
         maps = space.parse_maps(contract, maps)
     except space.SpaceError as e:
-        raise setup.SetupError(str(e))
+        raise setup_core.SetupError(str(e))
     fd_dir = os.path.join(target, "feishu")
     ids_path = os.path.join(fd_dir, "ids.json")
-    raw = setup.load_json_file(ids_path) or {}
+    raw = setup_core.load_json_file(ids_path) or {}
     ids, notes = normalise_ids(raw)
-    snap = setup.load_json_file(os.path.join(fd_dir, "space.json"))
+    snap = setup_core.load_json_file(os.path.join(fd_dir, "space.json"))
     problems, space_notes, changes, switch = None, [], [], {}
     if live:
         try:
             snap, problems, space_notes, changes = read_back(spec, contract, ids, task, maps, switch, snap, create=apply)
-        except setup.SetupError:
+        except setup_core.SetupError:
             raise
         except Exception as e:                       # an output shape nobody expected
-            raise setup.SetupError("读回时遇到没见过的输出（%s: %s）；什么都没写" % (type(e).__name__, e))
+            raise setup_core.SetupError("读回时遇到没见过的输出（%s: %s）；什么都没写" % (type(e).__name__, e))
         if switch and apply and not leave_old and (switch["held"] or switch["unchecked"]):
             why = ("旧空间“%s”里还有工作项（%s）" % (switch["old"].get("space_name", ""), "、".join(switch["held"]))
                    if switch["held"] else "没查成旧空间里的%s有没有工作项" % "、".join(switch["unchecked"]))
-            raise setup.SetupError(why + "，什么都没写。插件搬不了工作项，换空间以后它们留在旧空间，台账不再读写。先去掉 --apply 预览，"
+            raise setup_core.SetupError(why + "，什么都没写。插件搬不了工作项，换空间以后它们留在旧空间，台账不再读写。先去掉 --apply 预览，"
                              "看 binding.md 的“换空间”一节；研究员确认这些工作项可以留在旧空间以后，再加 --leave-old-items 写入")
     else:
         moved = ledger_core.other_space({"feishu": task}, ids.get("meegle") or {})
         if moved:
-            raise setup.SetupError("任务文件里的飞书项目空间是“%s”，上次绑定的是“%s”：加 --live 从空间读一遍再绑定" % (
+            raise setup_core.SetupError("任务文件里的飞书项目空间是“%s”，上次绑定的是“%s”：加 --live 从空间读一遍再绑定" % (
                 moved, ids["meegle"]["space_name"]))
         if snap is not None:
             binding, problems = space.bind(contract, snap, space.binding_of(ids), maps)
@@ -369,7 +369,7 @@ def feishu(target, maps, live, apply, leave_old=False):
             problems += more
             space.apply_binding(ids, contract, binding)
         elif maps:
-            raise setup.SetupError("还没读过空间，--map 没法核对：先跑 space.py feishu --live")
+            raise setup_core.SetupError("还没读过空间，--map 没法核对：先跑 space.py feishu --live")
     blank = snap is not None and not (ids.get("meegle") or {}).get("types")
     stamp = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
     if apply and snap is not None:
@@ -388,15 +388,15 @@ def feishu(target, maps, live, apply, leave_old=False):
                                                     old.get("project_key", ""), new.get("space_name"),
                                                     new.get("simple_name"), new.get("project_key")))
     binding_path = os.path.join(fd_dir, "binding.md")
-    files = {ids_path: setup.dump_json(ids),
-             binding_path: binding_doc(spec, contract, ids, snap, problems, space_notes, changes, switch, setup.enabled_sequences(target))}
+    files = {ids_path: setup_core.dump_json(ids),
+             binding_path: binding_doc(spec, contract, ids, snap, problems, space_notes, changes, switch, setup_core.enabled_sequences(target))}
     if snap is not None:
         files[os.path.join(fd_dir, "space.json")] = space.dump_json(snap)
         files[os.path.join(fd_dir, "space.md")] = space.to_markdown(snap, contract, space.binding_of(ids)) + "\n"
         if not blank:
-            files[os.path.join(target, "org", "phases.md")] = setup.phases_md(spec, snap, space.binding_of(ids))
+            files[os.path.join(target, "org", "phases.md")] = setup_core.phases_md(spec, snap, space.binding_of(ids))
     for p, content in files.items():
-        current = setup.read_text(p) if os.path.isfile(p) else None
+        current = setup_core.read_text(p) if os.path.isfile(p) else None
         state = "相同" if current == content else ("新建" if current is None else "更新")
         print("[%s] %s" % (state, os.path.relpath(p, target)))
     if problems is None:
@@ -442,20 +442,20 @@ def check_template(target, name):
     spec = orgspec.OrgSpec()
     contract = orgspec.Contract(spec)
     if not name:
-        task = (setup.load_json_file(os.path.join(target, "spec", "task.json")) or {}).get("feishu") or {} if target else {}
+        task = (setup_core.load_json_file(os.path.join(target, "spec", "task.json")) or {}).get("feishu") or {} if target else {}
         name = str(task.get("template_space") or "").strip()
     if not name:
-        raise setup.SetupError("要核对哪个空间：用 --space 给出它的名字、simple_name 或 project_key")
+        raise setup_core.SetupError("要核对哪个空间：用 --space 给出它的名字、simple_name 或 project_key")
     hit = find_project(cli_json(["meegle", "project", "search", "--project-key", name, "--format", "json"]), name,
                        "把空间的准确名字、simple_name 或 project_key 用 --space 传进来")
-    snap, binding, problems, notes = setup.read_space(contract, hit, {})
+    snap, binding, problems, notes = setup_core.read_space(contract, hit, {})
     held = []
     for wid, slot in binding["types"].items():
         mql = "SELECT `work_item_id` FROM `%s`.`%s` LIMIT 1" % (hit.get("project_key"), slot["type_key"])
         try:
             rows = ledger_core.query_rows(cli_json(["meegle", "workitem", "query", "--project-key", hit.get("project_key"),
                                                "--mql", mql, "--format", "json"]))
-        except (setup.SetupError, ledger_core.LedgerError) as e:
+        except (setup_core.SetupError, ledger_core.LedgerError) as e:
             print("提醒：没能查%s里有没有工作项：%s" % (spec.term("wi", wid), e))
             continue
         if rows:
@@ -489,12 +489,12 @@ def main(argv=None):
     p.add_argument("--target", help="项目目录：从它的 spec/task.json 读 feishu.template_space")
     args = ap.parse_args(argv)
     try:
-        setup.need_python()
+        setup_core.need_python()
         if args.cmd == "feishu":
             return feishu(os.path.abspath(args.target), args.map, args.live, args.apply, args.leave_old_items)
         if args.cmd == "template":
             return check_template(os.path.abspath(args.target) if args.target else None, args.space)
-    except (setup.SetupError, ValueError, OSError) as e:
+    except (setup_core.SetupError, ValueError, OSError) as e:
         print("出错：%s" % e)
         return 2
     ap.print_help()

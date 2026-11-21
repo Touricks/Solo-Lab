@@ -735,7 +735,7 @@ def main(argv=None):
     p.add_argument("--batch", type=int, metavar="N", help="和 --wait 一起用：只等第 N 批的会话认领、首轮结束")
     args = ap.parse_args(argv)
     if args.cmd == "open":
-        # the list of sessions an initialisation opens comes from what setup.py knows about the project; it is in
+        # the list of sessions an initialisation opens comes from what setup_core.py knows about the project; it is in
         # pool_open.py, which exists where the plugin is installed and not among a project's copies
         try:
             import pool_open

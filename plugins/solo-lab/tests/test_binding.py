@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 sys.path.insert(0, os.path.join(ROOT, "tests"))
 import orgspec  # noqa: E402
 import setup  # noqa: E402
+import setup_core  # noqa: E402
 import check  # noqa: E402
 import space_cmd  # noqa: E402
 import ledger_core  # noqa: E402
@@ -83,7 +84,7 @@ class BindingCase(unittest.TestCase):
 
     def feishu(self, *args, edit=None, **kw):
         out = io.StringIO()
-        with mock.patch.object(setup, "run", self.cli), mock.patch.object(space, "call", Replay(edit)), contextlib.redirect_stdout(out):
+        with mock.patch.object(setup_core, "run", self.cli), mock.patch.object(space, "call", Replay(edit)), contextlib.redirect_stdout(out):
             code = space_cmd.feishu(self.tmp, *args, **kw)
         return code, out.getvalue()
 
@@ -120,7 +121,7 @@ class FeishuTest(BindingCase):
         before = {n: self.read("feishu/" + n) for n in ("space.json", "space.md", "binding.md")}
         with mock.patch.object(space, "call", side_effect=AssertionError("read the space")):
             out = io.StringIO()
-            with mock.patch.object(setup, "run", self.cli), contextlib.redirect_stdout(out):
+            with mock.patch.object(setup_core, "run", self.cli), contextlib.redirect_stdout(out):
                 self.assertEqual(space_cmd.feishu(self.tmp, [], False, True), 0)
         self.assertEqual(before, {n: self.read("feishu/" + n) for n in before})
         self.assertIn("[相同] feishu/space.json", out.getvalue())
@@ -151,7 +152,7 @@ class FeishuTest(BindingCase):
         self.assertIn("--map decision.sign_result=", text)
         _, text = self.feishu(["decision.sign_result=批不批"], True, False, edit=renamed)
         self.assertIn("约定核对（contract_version 1）：通过", text)
-        with self.assertRaises(setup.SetupError):
+        with self.assertRaises(setup_core.SetupError):
             self.feishu(["decision.nope=x"], True, False)
 
     def test_a_type_under_another_name_stays_bound_on_the_next_read(self):
@@ -171,12 +172,12 @@ class FeishuTest(BindingCase):
 
     def test_every_session_may_read_the_space(self):
         for cmd in ("snapshot", "bind", "check", "show"):
-            self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/space.py %s *)" % cmd, setup.READ_ALLOW)
-        self.assertEqual([a for a in setup.READ_ALLOW if "export" in a], [])        # writes a file wherever it is told to
+            self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/space.py %s *)" % cmd, setup_core.READ_ALLOW)
+        self.assertEqual([a for a in setup_core.READ_ALLOW if "export" in a], [])        # writes a file wherever it is told to
 
     def test_a_space_that_is_not_there_is_made_from_the_template(self):
         self.projects = [OLD]
-        with self.assertRaises(setup.SetupError) as e:
+        with self.assertRaises(setup_core.SetupError) as e:
             self.feishu([], True, True)
         self.assertIn("没有叫“research_template”的飞书项目空间", str(e.exception))
         self.assertIn(orgspec.Contract(orgspec.OrgSpec()).template["url"], str(e.exception))
@@ -184,7 +185,7 @@ class FeishuTest(BindingCase):
         self.assertEqual(os.listdir(os.path.join(self.tmp, "feishu")), [])
         self.put("spec/task.json", {"name": "t", "feishu": {"meegle_space": "research_template",
                                                            "template_url": "https://example.com/templates/detail/abc"}})
-        with self.assertRaises(setup.SetupError) as e:
+        with self.assertRaises(setup_core.SetupError) as e:
             self.feishu([], True, False)
         self.assertIn("打开模板 https://example.com/templates/detail/abc", str(e.exception))   # the task file's own template
 
@@ -264,7 +265,7 @@ class FeishuTest(BindingCase):
 
     def test_the_task_must_name_exactly_one_space(self):
         self.projects = [HERE, dict(HERE, project_key="pk_twin", simple_name="twin")]
-        with self.assertRaises(setup.SetupError) as e:
+        with self.assertRaises(setup_core.SetupError) as e:
             self.feishu([], True, False)
         self.assertIn("找到 2 个飞书项目空间", str(e.exception))
 
@@ -278,22 +279,22 @@ class FeishuTest(BindingCase):
         _, text = self.feishu([], True, False)
         self.assertIn("换空间：旧空间“旧空间”", text)
         self.assertIn("## 换空间", text)
-        with self.assertRaises(setup.SetupError) as e:
+        with self.assertRaises(setup_core.SetupError) as e:
             self.feishu([], True, True)
         self.assertIn("--leave-old-items", str(e.exception))
         self.assertEqual(json.loads(self.read("feishu/ids.json"))["meegle"]["project_key"], "pk_old")       # nothing was written
-        table = setup.pool_state.empty()                                  # what the sessions answered for in the old space
+        table = setup_core.pool_state.empty()                                  # what the sessions answered for in the old space
         table["owners"] = {"2101": "Alg-p1-01", "2102": "Infra-p0-01"}
         table["refills"] = [{"role": "alg-p0", "count": 1, "by": "Alg-p1-01", "at": "2026-11-20T10:00:00-05:00"}]
-        setup.pool_state.save_json(setup.pool_state.pool_path(self.tmp), table)
+        setup_core.pool_state.save_json(setup_core.pool_state.pool_path(self.tmp), table)
         _, text = self.feishu([], True, True, True)
         m = json.loads(self.read("feishu/ids.json"))["meegle"]
         self.assertEqual((m["project_key"], m["previous_spaces"][0]["project_key"]), (SNAP["project_key"], "pk_old"))
         # 1.0.10: the old space's items leave the table with the switch; the prune command could never read them
         self.assertIn("会话池的认领表里移出了旧空间的 2 条工作项（#2101、#2102）", text)
-        after = setup.pool_state.load(self.tmp)[0]
+        after = setup_core.pool_state.load(self.tmp)[0]
         self.assertEqual((after["owners"], len(after["refills"])), ({}, 1))
-        out = [r for r in setup.pool_state.read_events(self.tmp) if r.get("event") == "owners_out"]
+        out = [r for r in setup_core.pool_state.read_events(self.tmp) if r.get("event") == "owners_out"]
         self.assertEqual(out[0]["owners"], table["owners"])
 
     def test_a_space_made_from_2_2_0_binds_its_decided_state(self):
@@ -375,14 +376,14 @@ class FeishuTest(BindingCase):
     def test_without_a_snapshot_there_is_nothing_to_bind(self):
         code, text = self.feishu([], False, False)
         self.assertIn("还没读过空间，绑定不了：加 --live 从空间读", text)
-        with self.assertRaises(setup.SetupError):
+        with self.assertRaises(setup_core.SetupError):
             self.feishu(["decision=拍板"], False, False)
 
 
 class TemplateTest(BindingCase):
     def template(self, name, edit=None):
         out = io.StringIO()
-        with mock.patch.object(setup, "run", self.cli), mock.patch.object(space, "call", Replay(edit)), contextlib.redirect_stdout(out):
+        with mock.patch.object(setup_core, "run", self.cli), mock.patch.object(space, "call", Replay(edit)), contextlib.redirect_stdout(out):
             code = space_cmd.check_template(None, name)
         return code, out.getvalue()
 
@@ -415,7 +416,7 @@ class TemplateTest(BindingCase):
         self.assertIn("的角色“书记员”", text)
 
     def test_the_space_has_to_be_named(self):
-        with self.assertRaises(setup.SetupError):
+        with self.assertRaises(setup_core.SetupError):
             self.template(None)
 
 
@@ -426,7 +427,7 @@ class LoginTest(unittest.TestCase):
         self.tmp = tempfile.mkdtemp(prefix="solo-lab-login-")
         self.logged = {"lark-cli": False, "meegle": False}
         self.scanned, self.brand, self.calls = False, "feishu", []
-        self.patches = [mock.patch.object(setup, "run", self.tools),
+        self.patches = [mock.patch.object(setup_core, "run", self.tools),
                         mock.patch.object(setup, "login_state", lambda: (self.tmp, os.path.join(self.tmp, "pending.json")))]
         for p in self.patches:
             p.start()
@@ -508,12 +509,12 @@ class LoginTest(unittest.TestCase):
 
     def test_a_token_that_can_still_be_renewed_counts_as_logged_in(self):
         later = (datetime.datetime.now().astimezone() + datetime.timedelta(days=3)).isoformat()
-        ready = lambda user: setup.lark_user_ready({"identities": {"user": user}})[0]
+        ready = lambda user: setup_core.lark_user_ready({"identities": {"user": user}})[0]
         self.assertTrue(ready({"available": True}))
         self.assertTrue(ready({"available": False, "status": "needs_refresh", "tokenStatus": "expired", "refreshExpiresAt": later}))
         self.assertFalse(ready({"available": False, "status": "missing", "tokenStatus": "expired", "refreshExpiresAt": later}))
         self.assertFalse(ready({"available": False, "status": "needs_refresh", "refreshExpiresAt": "2020-01-01T00:00:00+00:00"}))
-        self.assertFalse(setup.lark_user_ready({})[0])
+        self.assertFalse(setup_core.lark_user_ready({})[0])
 
 
 class EnvTest(unittest.TestCase):

@@ -17,7 +17,6 @@ import space
 import ledger
 import docs
 import ledger_core
-import setup
 
 
 class InitializationTest(unittest.TestCase):

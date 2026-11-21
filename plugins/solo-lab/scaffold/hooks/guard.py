@@ -1338,7 +1338,7 @@ def check_agent(data, who, policy, soft):
 
 
 # --------------------------------------------------------- agent turns
-WRAPUP_TOOL = re.compile(r"^mcp__.+__wrap_up$")       # the desktop app's turn wrap-up; setup.py WRAPUP_TOOL
+WRAPUP_TOOL = re.compile(r"^mcp__.+__wrap_up$")       # the desktop app's turn wrap-up; setup_core.py WRAPUP_TOOL
 ASK_KEYS = ("ask", "actions", "blocked")              # the wrap-up's question to the researcher
 
 

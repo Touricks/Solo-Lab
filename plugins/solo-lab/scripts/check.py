@@ -10,7 +10,7 @@ only); --sessions takes the client's own list of sessions saved as JSON; --readb
 session's model, effort and context window as the client reported them, holds the model against
 the pool plan and the window against the session that initialised, and prints the table.
 
-What the project should look like is setup.py's.
+What the project should look like is setup_core.py's.
 Python 3.12 standard library only.
 """
 import argparse
@@ -29,7 +29,7 @@ import orgspec  # noqa: E402
 import ledger  # noqa: E402
 import ledger_core  # noqa: E402
 import space  # noqa: E402
-import setup  # noqa: E402
+import setup_core  # noqa: E402
 
 MIN_VERSIONS = {"lark-cli": "1.0.96", "meegle": "1.0.23", "claude": "2.1.219"}
 
@@ -40,10 +40,10 @@ def version_tuple(v):
 
 def python_on_path():
     """(found, detail) for the precheck: the hooks and every command in the role texts start with PYTHON."""
-    path = shutil.which(setup.PYTHON)
+    path = shutil.which(setup_core.PYTHON)
     if not path:
-        return False, "PATH 里找不到 %s：hook 和角色说明里的命令都用它；先装一个，比如 brew install python@3.12" % setup.PYTHON
-    code, out, err = setup.run([path, "--version"])
+        return False, "PATH 里找不到 %s：hook 和角色说明里的命令都用它；先装一个，比如 brew install python@3.12" % setup_core.PYTHON
+    code, out, err = setup_core.run([path, "--version"])
     return code == 0, "%s（%s）" % ((out or err or "").strip() or "?", path)
 
 
@@ -54,7 +54,7 @@ def precheck():
         rows.append((item, status, detail))
 
     found, detail = python_on_path()
-    add(setup.PYTHON, "通过" if found else "失败", detail)
+    add(setup_core.PYTHON, "通过" if found else "失败", detail)
 
     if sys.platform == "darwin":
         apps = [p for p in ("/Applications/Lark.app", "/Applications/Feishu.app",
@@ -65,7 +65,7 @@ def precheck():
         add("飞书客户端", "跳过", "不是 macOS，请人工确认")
     for cli, cmd in (("lark-cli", ["lark-cli", "--version"]), ("meegle", ["meegle", "version"]),
                      ("claude", ["claude", "--version"])):
-        code, out, err = setup.run(cmd)
+        code, out, err = setup_core.run(cmd)
         found = re.findall(r"\d+\.\d+\.\d+", out or "")
         if code != 0 or not found:
             add("%s 版本" % cli, "提醒" if cli == "claude" else "失败",
@@ -73,7 +73,7 @@ def precheck():
         else:
             ok = version_tuple(found[0]) >= version_tuple(MIN_VERSIONS[cli])
             add("%s 版本" % cli, "通过" if ok else "失败", "%s（最低 %s）" % (found[0], MIN_VERSIONS[cli]))
-    code, out, _ = setup.run(["lark-cli", "doctor"], 60)
+    code, out, _ = setup_core.run(["lark-cli", "doctor"], 60)
     try:
         doctor = json.loads(out)
         bad = [c for c in doctor.get("checks", []) if c.get("status") != "pass"]
@@ -81,31 +81,31 @@ def precheck():
             "；".join("%s=%s" % (c.get("name"), c.get("status")) for c in bad) or "全部通过")
     except ValueError:
         add("lark-cli doctor", "失败", "输出不是 JSON（退出码 %s）" % code)
-    code, out, _ = setup.run(["lark-cli", "auth", "status"])
+    code, out, _ = setup_core.run(["lark-cli", "auth", "status"])
     try:
-        ok, user = setup.lark_user_ready(json.loads(out))
+        ok, user = setup_core.lark_user_ready(json.loads(out))
         add("lark-cli 用户身份", "通过" if ok else "失败", "status=%s tokenStatus=%s%s" % (
             user.get("status"), user.get("tokenStatus"), "" if ok else "；运行 setup.py login 发起登录，研究员扫码"))
     except ValueError:
         add("lark-cli 用户身份", "失败", "auth status 输出不是 JSON（退出码 %s）" % code)
-    code, _, _ = setup.run(["meegle", "auth", "status"])
+    code, _, _ = setup_core.run(["meegle", "auth", "status"])
     add("meegle 登录", "通过" if code == 0 else "失败",
         "退出码 %s%s" % (code, "" if code == 0 else "；运行 setup.py login 发起登录，研究员扫码"))
-    code, out, _ = setup.run(["meegle", "project", "search", "--page-num", "1", "--format", "json"], 60)
+    code, out, _ = setup_core.run(["meegle", "project", "search", "--page-num", "1", "--format", "json"], 60)
     try:
         projects = (json.loads(out) or {}).get("projects") or []
         add("飞书项目权限", "通过" if projects else "提醒",
             "能访问 %d 个空间" % len(projects) if projects else "这个账号还看不到任何空间；初始化时用模板新建一个")
     except ValueError:
         add("飞书项目权限", "失败", "project search 输出不是 JSON（退出码 %s）" % code)
-    code, out, _ = setup.run(["meegle", "telemetry", "status"])
+    code, out, _ = setup_core.run(["meegle", "telemetry", "status"])
     try:
         enabled = json.loads(out).get("enabled")
         add("meegle 诊断上报", "提醒" if enabled else "通过",
             "开着，请研究员决定是否关闭（meegle telemetry disable，本人执行）" if enabled else "已关闭")
     except ValueError:
         add("meegle 诊断上报", "跳过", "telemetry 子命令不可用（退出码 %s）" % code)
-    code, out, _ = setup.run(["lark-cli", "event", "consume", "im.message.receive_v1", "--as", "bot", "--dry-run"], 60)
+    code, out, _ = setup_core.run(["lark-cli", "event", "consume", "im.message.receive_v1", "--as", "bot", "--dry-run"], 60)
     try:
         decision = (json.loads(out).get("data") or {}).get("decision") or {}
         bad = [c.get("name") for c in decision.get("preconditions", []) if c.get("status") != "ok"]
@@ -131,39 +131,39 @@ def precheck():
 def local_layer(target, m):
     """(problems, reminders) of the project's own files against the plugin that made them."""
     problems, notes = [], []
-    if m.get("plugin_version") != setup.plugin_version():
-        problems.append("插件版本：项目是 %s，插件是 %s；重跑 init 预览差异" % (m.get("plugin_version"), setup.plugin_version()))
-    rules = setup.read_text(os.path.join(orgspec.ORGSPEC_DIR, "rules.json"))
-    if m.get("rules_sha256") != setup.sha256(rules):
+    if m.get("plugin_version") != setup_core.plugin_version():
+        problems.append("插件版本：项目是 %s，插件是 %s；重跑 init 预览差异" % (m.get("plugin_version"), setup_core.plugin_version()))
+    rules = setup_core.read_text(os.path.join(orgspec.ORGSPEC_DIR, "rules.json"))
+    if m.get("rules_sha256") != setup_core.sha256(rules):
         problems.append("规则文件和项目里的副本不一致；重跑 init 预览差异")
-    if m.get("terms_sha256") != setup.sha256(setup.read_text(os.path.join(orgspec.ORGSPEC_DIR, "terms.zh.json"))):
+    if m.get("terms_sha256") != setup_core.sha256(setup_core.read_text(os.path.join(orgspec.ORGSPEC_DIR, "terms.zh.json"))):
         problems.append("术语表和项目里的副本不一致；重跑 init 预览差异")
-    if m.get("contract_sha256") != setup.sha256(setup.read_text(os.path.join(orgspec.ORGSPEC_DIR, "contract.json"))):
+    if m.get("contract_sha256") != setup_core.sha256(setup_core.read_text(os.path.join(orgspec.ORGSPEC_DIR, "contract.json"))):
         problems.append("约定文件和项目里的副本不一致；重跑 init 预览差异，再跑 space.py feishu --live 核对绑定")
-    if m.get("plugin_scripts") != setup.plugin_scripts():
+    if m.get("plugin_scripts") != setup_core.plugin_scripts():
         problems.append("插件脚本的位置或内容和初始化时不同，hook 不再放行研究员会话里的 setup.py；重跑 init --apply"
                         "（hook 拦下时，请研究员在自己的终端里运行这一次）")
     task_path = os.path.join(target, "spec", "task.json")
     fresh = None
-    if os.path.isfile(task_path) and m.get("files", {}).get("spec/task.json") not in (None, setup.sha256(setup.read_text(task_path))):
+    if os.path.isfile(task_path) and m.get("files", {}).get("spec/task.json") not in (None, setup_core.sha256(setup_core.read_text(task_path))):
         problems.append("改过：spec/task.json（和 init 用的任务文件不同）。它跟着 init --task 的任务文件走：要改设置，改任务文件再重跑 init --apply；"
                         "有 spec/task.json.new 的，对照合并。改回来之前，先不比对插件更新")
     else:
         try:      # regenerate from the project's own task and sequences: catches script, template and ID changes
-            fresh = setup.build_plan(target, task_path, ",".join(m.get("sequences") or []) or None)
-        except setup.SetupError as e:
+            fresh = setup_core.build_plan(target, task_path, ",".join(m.get("sequences") or []) or None)
+        except setup_core.SetupError as e:
             problems.append("没法按现在的插件重新生成来比对：%s" % e)
     if fresh:
         stale = [rel for rel, (content, _, keep) in sorted(fresh.files.items())
-                 if not keep and m.get("files", {}).get(rel) != setup.sha256(content)]
+                 if not keep and m.get("files", {}).get(rel) != setup_core.sha256(content)]
         risk_reported = ".claude/hooks/lark-risk.json" in stale
         if risk_reported:                                   # follows the lark-cli on this machine, not the plugin
             stale.remove(".claude/hooks/lark-risk.json")
-            table = (setup.load_json_file(os.path.join(target, ".claude", "hooks", "lark-risk.json")) or {}).get("lark_cli_version")
+            table = (setup_core.load_json_file(os.path.join(target, ".claude", "hooks", "lark-risk.json")) or {}).get("lark_cli_version")
             problems.append("lark-cli 风险表和本机的 lark-cli 对不上：项目里的表按 %s 生成，本机是 %s；重跑 init 会换成对应的表" % (
-                table or "未知版本", setup.installed_lark_version() or "没装 lark-cli"))
-        table = (setup.load_json_file(os.path.join(target, ".claude", "hooks", "lark-risk.json")) or {}).get("lark_cli_version")
-        installed = setup.installed_lark_version()
+                table or "未知版本", setup_core.installed_lark_version() or "没装 lark-cli"))
+        table = (setup_core.load_json_file(os.path.join(target, ".claude", "hooks", "lark-risk.json")) or {}).get("lark_cli_version")
+        installed = setup_core.installed_lark_version()
         if table and installed and installed != table and not risk_reported:
             notes.append("本机 lark-cli 是 %s，项目的风险表按 %s 生成（插件自带的表）；新命令的风险等级可能缺失，未知的写命令一律按写处理" % (installed, table))
         if stale:
@@ -177,16 +177,16 @@ def local_layer(target, m):
             continue            # the researcher's and the project's documents; a draft gets its work item written in
         else:
             try:
-                changed = setup.sha256(setup.read_text(path)) != digest
+                changed = setup_core.sha256(setup_core.read_text(path)) != digest
             except (UnicodeDecodeError, OSError):
                 problems.append("读不了：%s（不是 UTF-8 编码？）" % rel)
                 continue
-            if changed and not (fresh and rel in fresh.files and setup.read_text(path) == fresh.files[rel][0]):
+            if changed and not (fresh and rel in fresh.files and setup_core.read_text(path) == fresh.files[rel][0]):
                 problems.append("改过：%s（和初始化时不同）" % rel)
     for rel in m.get("pending_new", []):
         if os.path.isfile(os.path.join(target, rel + ".new")):
             problems.append("待合并：%s.new" % rel)
-    problem = setup.pair_problem(target)
+    problem = setup_core.pair_problem(target)
     if problem:
         problems.append(problem)
     return problems, notes
@@ -197,20 +197,20 @@ def live_feishu(target, seqs):
     every node is in the knowledge space. Reads only."""
     spec = orgspec.OrgSpec()
     contract = orgspec.Contract(spec)
-    ids = setup.load_json_file(os.path.join(target, "feishu", "ids.json")) or {}
+    ids = setup_core.load_json_file(os.path.join(target, "feishu", "ids.json")) or {}
     m, wiki = ids.get("meegle") or {}, ids.get("wiki") or {}
     problems, notes = [], []
     try:
         old = space.binding_of(ids)
-        _, now_, found, notes = setup.read_space(
+        _, now_, found, notes = setup_core.read_space(
             contract, {"project_key": m["project_key"], "simple_name": m.get("simple_name"), "name": m.get("space_name")}, {}, old)
         problems += ["空间结构：%s，%s。%s" % tuple(row) for row in found + space.stale(contract, old, now_)]
-    except (setup.SetupError, KeyError) as e:
+    except (setup_core.SetupError, KeyError) as e:
         problems.append("读不了飞书项目空间：%s" % e)
     nodes = wiki.get("nodes") or {}
 
     def lost(key):
-        code, out, _ = setup.run(["lark-cli", "wiki", "+node-get", "--node-token", (nodes.get(key) or {}).get("node_token") or "", "--as", "user"], 60)
+        code, out, _ = setup_core.run(["lark-cli", "wiki", "+node-get", "--node-token", (nodes.get(key) or {}).get("node_token") or "", "--as", "user"], 60)
         try:
             doc = json.loads(out) if code == 0 else None
         except ValueError:
@@ -228,7 +228,7 @@ def live_feishu(target, seqs):
 def feishu_layer(target, m, live):
     """(problems, reminders): the binding, the knowledge space and its nodes, the links in .env."""
     seqs = m.get("sequences") or None
-    problems = setup.feishu_gaps(target, seqs)
+    problems = setup_core.feishu_gaps(target, seqs)
     if problems:
         return problems, []
     problems = env_gaps(target)
@@ -242,7 +242,7 @@ def feishu_layer(target, m, live):
 def first_task_layer(target, live):
     """(problems, reminders): a research task is registered, its receipt has the main document
     and its draft names the work item; --live reads the three of them back."""
-    tasks = setup.registered_tasks(target)
+    tasks = setup_core.registered_tasks(target)
     if not tasks and live:
         try:
             with contextlib.redirect_stdout(io.StringIO()):
@@ -253,14 +253,14 @@ def first_task_layer(target, live):
             return [], ["空间里已有 %d 条研究任务，这个目录里没有它们的登记回执（是从别处登记的）" % len(rows)]
     if not tasks:
         return ["还没有登记过研究任务：开池时由书记员登记 %s，清单见 pool.py open%s" % (
-            setup.FIRST_TASK, "" if live else "；空间里已经有研究任务的，加 --live 核对")], []
+            setup_core.FIRST_TASK, "" if live else "；空间里已经有研究任务的，加 --live 核对")], []
     rec, draft = tasks[0]
     item_id, doc = str(rec.get("work_item_id")), str(rec.get("doc") or "")
     problems = []
     if not doc.startswith("http"):
         problems.append("研究任务 #%s 的回执里没有主文档的地址" % item_id)
     try:
-        line = ledger_core.header_of(setup.read_text(draft)).get("关联工作项", "")
+        line = ledger_core.header_of(setup_core.read_text(draft)).get("关联工作项", "")
     except (OSError, UnicodeDecodeError):
         line = ""
     if item_id not in re.findall(r"#(\d+)", line):
@@ -287,7 +287,7 @@ def first_task_layer(target, live):
 def listed_sessions(target, path, plan, pl):
     """(problems, reminders) of the claims against the client's own list of sessions: the
     result of list_sessions saved as it came."""
-    rows = setup.load_json_file(path)
+    rows = setup_core.load_json_file(path)
     if not isinstance(rows, list):
         return ["--sessions 给的文件不是会话列表：把 list_sessions 的结果原样存成 JSON 文件（include_archived 写 true，limit 写够）"], []
     by_id = {str(r.get("sessionId")): r for r in rows if isinstance(r, dict)}
@@ -334,15 +334,15 @@ def session_readback(target, path):
     that session: {"self": {model, effort, contextWindow}, "sessions": [{sessionId, model, effort,
     contextWindow}, ...]}; a value it could not read is null."""
     import pool
-    data = setup.load_json_file(path)
+    data = setup_core.load_json_file(path)
     if not isinstance(data, dict) or not isinstance(data.get("self"), dict) or not isinstance(data.get("sessions"), list):
         return ["--readback 给的文件不是回读表：要写成 {\"self\": {...}, \"sessions\": [...]}，每条带 sessionId、model、effort、"
                 "contextWindow，读不到的写 null；做法见 setup 技能第 8 步"], [], []
     pl, ok = pool.load(target)
     if not ok:
         return [], [], []                              # pool_health reports the broken claims table
-    plan = setup.load_json_file(os.path.join(target, ".claude", "solo-lab", "pool-plan.json")) or {}
-    entries = list(setup.plan_entries(plan))
+    plan = setup_core.load_json_file(os.path.join(target, ".claude", "solo-lab", "pool-plan.json")) or {}
+    entries = list(setup_core.plan_entries(plan))
     planned = {e["name"]: e["model"] for e in entries}
     by_role = {e["role"]: e["model"] for e in entries}
     window = lambda r: r.get("contextWindow") if type(r.get("contextWindow")) is int else None
@@ -358,7 +358,7 @@ def session_readback(target, path):
         rows.append((name, want, model, effort, size))
         if not model or size is None:
             unread.append(name)
-        if model and setup.model_tier(want) >= 0 and setup.model_tier(model) != setup.model_tier(want):
+        if model and setup_core.model_tier(want) >= 0 and setup_core.model_tier(model) != setup_core.model_tier(want):
             models.append(name)
         if size is not None and window(own) and size < window(own):
             narrow.append(name)
@@ -388,7 +388,7 @@ def session_layer(target, m, listing=None):
     if listing:
         import pool
         pl, ok = pool.load(target)
-        plan = setup.load_json_file(os.path.join(target, ".claude", "solo-lab", "pool-plan.json")) or {}
+        plan = setup_core.load_json_file(os.path.join(target, ".claude", "solo-lab", "pool-plan.json")) or {}
         if ok:
             more, extra = listed_sessions(target, listing, plan, pl)
             problems += more
@@ -404,7 +404,7 @@ def check(target, live=False, sessions=None, readback=None):
     if not os.path.isfile(mpath):
         print("没有 %s：这个目录还没初始化。" % mpath)
         return 2
-    m = json.loads(setup.read_text(mpath))
+    m = json.loads(setup_core.read_text(mpath))
     layers = [("本地配置",) + local_layer(target, m), ("飞书",) + feishu_layer(target, m, live),
               ("会话",) + session_layer(target, m, sessions), ("首条研究任务",) + first_task_layer(target, live)]
     more, extra, rows = session_readback(target, readback) if readback else ([], [], [])
@@ -430,7 +430,7 @@ def check(target, live=False, sessions=None, readback=None):
 def pool_health(target, manifest):
     """(problems, reminders) from the claims and the sessions' status files."""
     import pool
-    policy = setup.load_json_file(os.path.join(target, ".claude", "hooks", "policy.json")) or {}
+    policy = setup_core.load_json_file(os.path.join(target, ".claude", "hooks", "policy.json")) or {}
     if not policy.get("agents"):
         return ["读不到 .claude/hooks/policy.json"], []
     if not policy.get("entry_role") or not policy.get("scribe_role"):
@@ -439,8 +439,8 @@ def pool_health(target, manifest):
     if not ok:
         return ["读不出 .claude/state/pool.json：认领表坏了，台账写入会全部被拒；请研究员先看这个文件"], []
     problems, notes = [], []
-    plan = setup.load_json_file(os.path.join(target, ".claude", "solo-lab", "pool-plan.json")) or {}
-    planned = [e["name"] for e in setup.plan_entries(plan)]
+    plan = setup_core.load_json_file(os.path.join(target, ".claude", "solo-lab", "pool-plan.json")) or {}
+    planned = [e["name"] for e in setup_core.plan_entries(plan)]
     held = {}
     for c in pl["claims"].values():
         held.setdefault(c["role"], []).append(c["name"])
@@ -478,10 +478,10 @@ def pool_health(target, manifest):
 
 def env_gaps(target):
     """Problems of the project's .env against feishu/ids.json; other lines are not looked at."""
-    values, missing = setup.env_values(target)
+    values, missing = setup_core.env_values(target)
     if missing:
         return ["还写不了 .env：%s" % "；".join(missing)]
-    current = setup.read_env(target)
+    current = setup_core.read_env(target)
     have = dict(line.strip().split("=", 1) for line in (current or "").split("\n")
                 if line.strip().startswith(tuple(values)) and "=" in line)
     if have != values:
@@ -501,12 +501,12 @@ def main(argv=None):
                    help="本会话用 get_session、get_usage 读回的各会话模型、推理强度和窗口存成的 JSON 文件：模型对照开池清单，窗口和推理强度对照本会话")
     args = ap.parse_args(argv)
     try:
-        setup.need_python()
+        setup_core.need_python()
         if args.cmd == "precheck":
             return precheck()
         if args.cmd == "check":
             return check(os.path.abspath(args.target), args.live, args.sessions, args.readback)
-    except (setup.SetupError, ValueError, OSError) as e:
+    except (setup_core.SetupError, ValueError, OSError) as e:
         print("出错：%s" % e)
         return 2
     ap.print_help()

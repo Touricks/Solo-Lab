@@ -110,13 +110,14 @@ def project_file(root):
     scripts = os.path.join(root, PLUGIN, "scripts")
     sys.path.insert(0, scripts)
     import setup
+    import setup_core
     import check
-    setup.run = lambda cmd, timeout=30: (None, "", "lint does not call %s" % cmd[0])     # no lark-cli, meegle or claude
-    source = os.path.join(scripts, "setup.py")
+    setup_core.run = lambda cmd, timeout=30: (None, "", "lint does not call %s" % cmd[0])     # no lark-cli, meegle or claude
+    source = os.path.join(scripts, "setup_core.py")
     findings = []
     with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
-        plan = setup.build_plan(tmp, os.path.join(root, PLUGIN, "scaffold", "task.example.json"), None)
-        setup.apply_plan(tmp, plan, setup.actions_for(tmp, plan))
+        plan = setup_core.build_plan(tmp, os.path.join(root, PLUGIN, "scaffold", "task.example.json"), None)
+        setup.apply_plan(tmp, plan, setup_core.actions_for(tmp, plan))
         invited = sorted(rel for rel, (content, _, _) in plan.files.items() if INVITES.search(content))
         for rel in invited:
             if not plan.files[rel][2]:
@@ -126,7 +127,7 @@ def project_file(root):
             with open(os.path.join(tmp, rel), "a", encoding="utf-8") as f:
                 f.write("\n项目写进来的内容\n")
         task = os.path.join(tmp, "spec", "task.json")
-        kinds = {rel: kind for kind, rel, _ in setup.actions_for(tmp, setup.build_plan(tmp, task, None))}
+        kinds = {rel: kind for kind, rel, _ in setup_core.actions_for(tmp, setup_core.build_plan(tmp, task, None))}
         with open(os.path.join(tmp, ".claude", "solo-lab", "manifest.json"), encoding="utf-8") as f:
             problems, _ = check.local_layer(tmp, json.load(f))
         for rel in invited:
@@ -182,12 +183,12 @@ def two_gates(root):
     """
     scripts = os.path.join(root, PLUGIN, "scripts")
     sys.path.insert(0, scripts)
-    import setup
-    setup.run = lambda cmd, timeout=30: (None, "", "lint does not call %s" % cmd[0])
-    source = os.path.join(scripts, "setup.py")
+    import setup_core
+    setup_core.run = lambda cmd, timeout=30: (None, "", "lint does not call %s" % cmd[0])
+    source = os.path.join(scripts, "setup_core.py")
     findings, commands = [], 0
     with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()):
-        plan = setup.build_plan(tmp, os.path.join(root, PLUGIN, "scaffold", "task.example.json"), None)
+        plan = setup_core.build_plan(tmp, os.path.join(root, PLUGIN, "scaffold", "task.example.json"), None)
         deny = [r[5:-1] for r in json.loads(plan.files[".claude/settings.json"][0])["permissions"]["deny"]
                 if r.startswith("Bash(") and r.endswith(")")]
         agents = json.loads(plan.files[".claude/hooks/policy.json"][0])["agents"]

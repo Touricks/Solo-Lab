@@ -628,7 +628,7 @@ def report(contract, snap, binding, problems, notes):
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     if argv and argv[0] in ("feishu", "template"):
-        # binding a project and checking a template need what setup.py knows about the project; they are in
+        # binding a project and checking a template need what setup_core.py knows about the project; they are in
         # space_cmd.py, which exists where the plugin is installed and not among a project's copies
         try:
             import space_cmd

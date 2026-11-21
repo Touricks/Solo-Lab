@@ -27,6 +27,7 @@ import ledger  # noqa: E402
 import ledger_core  # noqa: E402
 import workitem  # noqa: E402
 import setup  # noqa: E402
+import setup_core  # noqa: E402
 
 WRAPUP = "mcp__ccd_turn__wrap_up"
 WOKEN = "本轮由其他 agent 会话叫醒"
@@ -701,7 +702,7 @@ class ExpiryTest(DeliveryCase):
     def setUp(self):
         super().setUp()
         self.fake = fake_space.FakeSpace()
-        self.quiet(workitem.register, self.lg(), os.path.join(self.tmp, setup.FIRST_TASK))
+        self.quiet(workitem.register, self.lg(), os.path.join(self.tmp, setup_core.FIRST_TASK))
 
     def lg(self):
         return fake_space.SimLedger(self.tmp, "apply", self.fake, ())
