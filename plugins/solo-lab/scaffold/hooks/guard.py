@@ -55,7 +55,7 @@ import feishu_cmd as fc  # noqa: E402
 import pool  # noqa: E402
 
 TMP_PREFIXES = ("/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/")
-POLICY_VERSION = 7
+POLICY_VERSION = 8
 
 
 def glob_regex(pattern):
@@ -121,25 +121,6 @@ def resolve_role(data, policy):
 
 
 # --------------------------------------------------------------- Bash
-def content_of(inv, flags):
-    """Return the text passed to --content (inline, @file or stdin), or None."""
-    value = fc.last(flags, "--content")
-    if value is None:
-        return None
-    if value == "-":
-        return inv.stdin            # its own here-document or here-string, or what a pipe feeds it
-    if isinstance(value, str) and value.startswith("@"):
-        return fc.read_script(value[1:], inv.cwd)      # regular files up to 2 MB only: a FIFO would hang the hook
-    return value
-
-
-def first_line(text):
-    for line in (text or "").splitlines():
-        if line.strip():
-            return line
-    return ""
-
-
 def tag_comment(args, tag):
     """Return new args with the session tag prefixed to the comment, or None."""
     new = list(args)
@@ -177,6 +158,7 @@ def as_needed(policy, c):
     return None
 
 
+DOC_DOMAINS = ("docs", "wiki", "drive", "markdown")      # where documents live: written through docs.py only (1.1.0)
 AS_HINT = {"user": "知识库、文档和云空间的命令用研究员身份，带 --as user",
            "bot": "收发消息和订阅事件用机器人身份，带 --as bot"}
 NO_SUBCOMMAND = ("看不出这条 %s 命令的子命令，没法判断它是读还是写：把子命令和参数直接写出来，查看帮助用 --help。"
@@ -187,10 +169,9 @@ def check_lark(inv, c, who, policy, data, soft, rewritable):
     key, pol, name = c["key"], who.pol, who.label
     if c["help"]:
         return Verdict("allow", "查看帮助"), None
-    mine = key in pol.get("lark_high_risk", ())      # the scribe's wiki +node-delete: a document goes to the recycle bin
-    if c["yes"] and not mine:
+    if c["yes"]:                                      # 1.1.0: no session has a high-risk command of its own any more
         return Verdict("deny", "带 --yes 的命令只能由研究员本人执行。不要自己加 --yes；把完整命令记进研究员任务清单：python3.12 -I .claude/solo-lab/bin/todo.py add --text '<完整命令，和为什么要跑>'。"), None
-    if c["tier"] == "high-risk-write" and not mine:
+    if c["tier"] == "high-risk-write":
         return Verdict("deny", "%s 是 high-risk-write，只能由研究员本人执行。把完整命令记进研究员任务清单：python3.12 -I .claude/solo-lab/bin/todo.py add --text '<完整命令，和为什么要跑>'。" % key), None
     if c["dry_run"]:
         return Verdict("allow", "--dry-run 只预览"), None
@@ -205,17 +186,14 @@ def check_lark(inv, c, who, policy, data, soft, rewritable):
             return Verdict("deny", "%s 是写命令，%s；身份不对，写出来的东西会落在别人名下。" % (key, AS_HINT[need])), None
     if c["tier"] == "read":
         return Verdict("allow", "只读命令"), new_args
-    if key == "docs +update" and fc.last(c["flags"], "--command") == "append":
-        text = content_of(inv, c["flags"])
-        if text is None:
-            soft.append("看不到要追加的正文（比如从文件重定向传入），没法核对第一行的会话标签 %s；书记员用 docs.py append。" % pol["tag"])
-        elif pol["tag"] not in first_line(text):
-            soft.append("追加的交接记录第一行要带会话标签 %s；书记员用 docs.py append。" % pol["tag"])
     if key in pol.get("lark_write", ()):
         return Verdict("allow", "%s 在 %s 的写入白名单里" % (key, name)), new_args
     if not c["pos"]:
         return refuse(who, data, NO_SUBCOMMAND % "lark-cli"), None
-    return refuse(who, data, "（%s）不能执行写命令 %s。要写进飞书的内容先写成草稿，请书记员登记。" % (name, key)), new_args
+    if c["pos"][0] in DOC_DOMAINS:
+        return refuse(who, data, "（%s）不能直接执行写命令 %s。文档谁负责谁写，但只经文档脚本：上传用 docs.py upload，修订用 docs.py revise，"
+                                 "状态包和交接记录用 docs.py status-block、append；要删的文档记进研究员任务清单（todo.py add）。" % (name, key)), new_args
+    return refuse(who, data, "（%s）不能执行写命令 %s：这个角色没有这条飞书写命令。" % (name, key)), new_args
 
 
 def check_meegle(inv, c, who, data, soft, rewritable):
@@ -244,17 +222,23 @@ def check_meegle(inv, c, who, data, soft, rewritable):
         return Verdict("allow", "%s 在 %s 的写入白名单里" % (key, name)), updated
     if not c["pos"]:
         return refuse(who, data, NO_SUBCOMMAND % "meegle"), None
-    return refuse(who, data, "（%s）不能执行写命令 %s。工作项、字段、节点和文档只由书记员写；先写成草稿，请书记员登记。" % (name, key)), None
+    return refuse(who, data, "（%s）不能执行写命令 %s。工作项、字段、节点和评论只由书记员写：给书记员发【登记请求】，写上要它运行的 workitem.py 命令。" % (name, key)), None
 
 
 LEDGER_READS = {"", "get", "next", "query", "mql", "trace", "status", "-h", "--help"}
 LEDGER_WRITE_WORDS = {"register", "revise", "reply", "confirm", "rollback", "update", "comment", "status-block", "append",
-                      "archive", "relink", "ensure-node"}
+                      "archive", "relink", "ensure-node", "upload", "attach"}
 _WORDS = "|".join(re.escape(w) for w in sorted(LEDGER_WRITE_WORDS, key=len, reverse=True))
-# ledger.py was one script until 1.1.0. Its write commands are in docs.py and workitem.py now, over ledger_core.py;
-# the hook reads the three scripts alike, and code that imports any of the four modules counts as a write.
+# ledger.py was one script until 1.1.0. Its write commands are in docs.py and workitem.py now, over ledger_core.py,
+# and who may run them goes by the file: workitem.py is the scribe's alone; docs.py is every claimed session's,
+# since a document is written by the session that answers for it and the script itself holds the session against
+# the document's owner. That holds for the project's own copy of docs.py only (the one that still matches the
+# manifest, run as `python … docs.py <command>`): a copy, a module import or code that starts the script is read
+# as before, as a write of the scribe's. Code that imports any of the four modules counts as a write.
 LEDGER_SCRIPTS = fc.LEDGER_SCRIPTS
-LEDGER_DOC_WORDS = {"revise", "status-block", "append", "relink", "ensure-node"}      # the write commands of docs.py; the rest are workitem.py's
+DOCS_SCRIPT = "docs.py"
+LEDGER_DOC_WORDS = {"upload", "attach", "revise", "status-block", "append", "relink", "ensure-node"}   # the write commands of docs.py; the rest are workitem.py's
+DOCS_FREE = False       # set while ledger_write looks for writes other than the project's docs.py running its own commands
 LEDGER_MODULES = ("ledger", "ledger_core", "docs", "workitem")
 _SCRIPT = "(?:%s)" % "|".join(re.escape(s) for s in LEDGER_SCRIPTS)
 _MODULE = "(?:%s)" % "|".join(LEDGER_MODULES)
@@ -391,6 +375,9 @@ def _python_run(argv, ctx, stdin, via_xargs=False):
         return None
     if _ledger_named(script, rest):
         sub = _subcommand(rest)
+        if DOCS_FREE and not via_xargs and sub in LEDGER_DOC_WORDS and os.path.basename(script) == DOCS_SCRIPT \
+                and fc._full(script, ctx.cwd) in fc.TRUSTED:
+            return None                                # the project's own docs.py: every claimed session's to run
         return "（xargs 传入的子命令）" if not sub and via_xargs else _verdict(sub)
     name = script.rsplit("/", 1)[-1]
     if ("$" in name or "`" in name) and _names_ledger(ctx.text) and _subcommand(rest) in LEDGER_WRITE_WORDS:
@@ -489,7 +476,7 @@ def _strip_substitutions(text, ctx):
     return "".join(out), None
 
 
-def ledger_write(command, cwd=None):
+def ledger_write(command, cwd=None, docs_free=False):
     """The ledger.py subcommand a shell command would run, unless it is a read.
 
     A guardrail against accidental writes by well-behaved agents, not a security
@@ -502,8 +489,16 @@ def ledger_write(command, cwd=None):
     script files run by a shell, source, python or their own path, $(...) and
     backticks, eval and sh -c (with simple $VAR substitution), find -exec, other
     interpreters' inline code, and glob script names.
+
+    docs_free=True leaves out what every claimed session may run: a write command of docs.py, run from the
+    project's own copy as `python … docs.py <command>`. What it returns then is a write that is the scribe's.
     """
-    return _ledger_write(command, cwd, 0)
+    global DOCS_FREE
+    DOCS_FREE = docs_free
+    try:
+        return _ledger_write(command, cwd, 0)
+    finally:
+        DOCS_FREE = False
 
 
 def _ledger_write(command, cwd, depth, bodies=None):
@@ -1130,7 +1125,9 @@ def check_git(data, who, command, root):
     return refuse(who, data, reason)
 
 
-def check_ledger(data, who, policy, root, sub):
+def check_ledger(data, who, policy, root, sub, scribes=None):
+    """sub: the first ledger write the command runs. scribes: the first one that is not the project's docs.py
+    running a command of its own (None when there is none): a write only the scribe may run."""
     scribe = policy.get("scribe_role", "pmo-scribe")
     fixed = (policy["agents"].get(scribe) or {}).get("fixed_session") or scribe
     pl, ok = pool.load(root)
@@ -1141,9 +1138,17 @@ def check_ledger(data, who, policy, root, sub):
         if pool.scribe_ok(pl, policy, who.claim):
             return Verdict("allow", "唯一认领的书记员 %s 写台账" % who.name)
         return Verdict("deny", "这条书记员认领已经失效；请研究员用 pool.py show 核对。")
-    script = "docs.py " if sub in LEDGER_DOC_WORDS else "workitem.py " if sub in LEDGER_WRITE_WORDS else "台账脚本"
-    return refuse(who, data, "（%s）不能运行 %s%s：工作项、字段、状态和文档只由书记员 %s 写。写成草稿，给它发【%s】。" % (
-        who.label, script, sub, fixed, (policy.get("msg") or {}).get("register_request", "登记请求")))
+    if who.origin == "claim" and not scribes:
+        return Verdict("allow", "%s 运行 docs.py %s：文档谁负责谁写，脚本核对它是不是这份文档的作者" % (who.name, sub))
+    word = scribes or sub
+    request = (policy.get("msg") or {}).get("register_request", "登记请求")
+    if word in LEDGER_DOC_WORDS:                       # a command of docs.py, but not run from the project's own copy
+        return refuse(who, data, "（%s）要运行 docs.py %s，请照原样写：python3.12 -I .claude/solo-lab/bin/docs.py %s …。"
+                                 "别的写法（脚本的副本、import、让别的程序代跑）hook 认不出是项目自己的文档脚本；"
+                                 "照原样写还被拒绝，是项目里的 docs.py 被改过，请研究员重跑 init --apply。" % (who.label, word, word))
+    script = "workitem.py " if word in LEDGER_WRITE_WORDS else "台账脚本"
+    return refuse(who, data, "（%s）不能运行 %s%s：工作项、字段和状态只由书记员 %s 写，给它发【%s】，写上这条命令。"
+                             "文档归你自己写：上传用 docs.py upload，修订用 docs.py revise。" % (who.label, script, word, fixed, request))
 
 
 NOT_WHOLE = "命令里除了飞书和台账调用还有别的，hook 不替整条命令答允许，权限照 Claude Code 自己的检查（其中的飞书或台账调用：%s）"
@@ -1173,7 +1178,7 @@ def check_bash(data, who, policy, risk, soft, command=None):
         return verdict
     ledger = ledger_write(command, data.get("cwd") or root)
     if ledger:
-        verdict.merge(check_ledger(data, who, policy, root, ledger))
+        verdict.merge(check_ledger(data, who, policy, root, ledger, ledger_write(command, data.get("cwd") or root, docs_free=True)))
         if verdict.decision == "deny":
             return verdict
     parsed = fc.parse(command, data.get("cwd") or root)

@@ -779,16 +779,6 @@ class FourthRoundTest(ProjectCase):
         for cmd in writes:
             self.assertTrue(guard.ledger_write(cmd, self.tmp), cmd)
 
-    def test_append_from_a_file_redirect_is_explained(self):
-        cmd = "lark-cli docs +update --doc https://x.feishu.cn/wiki/A --command append --doc-format markdown --content - --as user < rec.md"
-        _, out = self.scribe("Bash", {"command": cmd})
-        self.assertNotEqual(out.get("permissionDecision"), "deny")
-        self.assertIn("看不到要追加的正文", out.get("additionalContext", ""))
-        with open(os.path.join(self.tmp, ".claude", "logs", "guard.jsonl"), encoding="utf-8") as f:
-            last = json.loads(f.read().splitlines()[-1])
-        self.assertTrue(any("看不到要追加的正文" in h for h in last["soft_hits"]))
-
-
 class FifthRoundTest(ProjectCase):
     """The fourth adversarial check: comments, runners, script files, option clusters, find, eval."""
 
@@ -899,8 +889,8 @@ class FifthRoundTest(ProjectCase):
         os.mkfifo(fifo)
         cmd = "lark-cli docs +update --doc https://x.feishu.cn/wiki/A --command append --content @pipe --as user"
         _, out = self.scribe("Bash", {"command": cmd})       # must not hang on the FIFO
-        self.assertNotEqual(out.get("permissionDecision"), "deny")        # the tag check is a reminder now
-        self.assertIn("会话标签", out.get("additionalContext", ""))
+        self.assertEqual(out.get("permissionDecision"), "deny")           # 1.1.0: a document is written through docs.py only
+        self.assertIn("交接记录用 docs.py status-block、append", out.get("permissionDecisionReason", ""))
         code, out = self.guard("alg-p2", "Bash", {"command": "python3.12 -I %s register \ud800 --apply" % self.L})
         self.assertIn(code, (0, 2))
         if code == 0:
@@ -1086,14 +1076,15 @@ class SixthRoundHookTest(ProjectCase):
             ("alg-p2", "ruby -rtime -e \"system('lark-cli docs +update --doc X --command overwrite --content x --as user')\"", True),
         ])
 
-    def test_scribe_tag_check_reads_the_heredoc_fed_to_lark(self):
+    def test_a_lark_write_fed_by_a_heredoc_is_read(self):
+        """1.1.0: no session appends to a document with lark-cli itself, the scribe included (until 1.0.12 the scribe
+        did, and the hook reminded it of the session tag). The command is read through here-documents and pipes all
+        the same; the scribe's own script is not stopped."""
         append = "lark-cli docs +update --doc https://x.feishu.cn/wiki/A --command append --doc-format markdown --content - --as user"
-        _, out = self.scribe("Bash", {"command": "cat > /tmp/prev.md <<'EOF'\n[PMO+0] 上一条记录\nEOF\n%s <<'EOF'\n没有会话标签的记录\nEOF" % append})
-        self.assertNotEqual(out.get("permissionDecision"), "deny")        # the tag is a norm: reminded
-        self.assertIn("第一行要带会话标签", out.get("additionalContext", ""))
         self.check([
-            ("pmo-scribe", "cat > /tmp/prev.md <<'EOF'\n没有标签\nEOF\n%s <<'EOF'\n[PMO+0] 记录\nEOF" % append, False),
-            ("pmo-scribe", "cat <<'EOF' | %s\n[PMO+0] 记录\nEOF" % append, False),
+            ("pmo-scribe", "cat > /tmp/prev.md <<'EOF'\n[PMO+0] 上一条记录\nEOF\n%s <<'EOF'\n没有会话标签的记录\nEOF" % append, True),
+            ("pmo-scribe", "cat > /tmp/prev.md <<'EOF'\n没有标签\nEOF\n%s <<'EOF'\n[PMO+0] 记录\nEOF" % append, True),
+            ("pmo-scribe", "cat <<'EOF' | %s\n[PMO+0] 记录\nEOF" % append, True),
             ("pmo-scribe", "python3.12 -I %s register packages/drafts/alg/x.md --apply" % self.L, False),
         ])
 
@@ -1182,10 +1173,10 @@ class SeventhRoundTest(ProjectCase):
             ("alg-p2", "x=1; (( y = x << n ))\nlark-cli docs +update --doc https://x.feishu.cn/wiki/A --command overwrite --content x --as user", True),
         ])
 
-    def test_scribe_multi_line_lark_command(self):
+    def test_a_multi_line_lark_write_is_read(self):
         cmd = ("lark-cli docs +update \\\n  --doc https://x.feishu.cn/wiki/A \\\n  --command append --doc-format markdown \\\n"
                "  --content - --as user <<'EOF'\n[PMO+0] 记录\nEOF")
-        self.check([("pmo-scribe", cmd, False)])
+        self.check([("pmo-scribe", cmd, True)])              # 1.1.0: nobody's to run; read as one command all the same
 
 
 class SpecAndRoutingTest(ProjectCase):
@@ -2866,9 +2857,12 @@ class PoolGuardTest(PoolProjectCase):
         self.assertEqual(self.decision("s-alg2", self.W), "deny")
         self.assertEqual(self.decision("s-scribe", self.W), "allow")
         self.assertNotEqual(self.decision("s-alg2", "python3.12 -I .claude/solo-lab/bin/ledger.py query open"), "deny")
-        _, out = self.bash("s-alg2", "meegle comment add --work-item-id 1 --content hi")
+        _, out = self.bash("s-alg2", "meegle comment add --work-item-id 1 --content hi")     # 1.1.0: a comment is the scribe's too
+        self.assertEqual(out.get("permissionDecision"), "deny")
+        self.assertIn("工作项、字段、节点和评论只由书记员写", out["permissionDecisionReason"])
+        _, out = self.bash("s-scribe", "meegle comment add --work-item-id 1 --content hi")
         self.assertEqual(out.get("permissionDecision"), "allow")
-        self.assertIn("[Alg+2]", out.get("updatedInput", {}).get("command", ""))
+        self.assertIn("[PMO+0]", out.get("updatedInput", {}).get("command", ""))
 
     def test_the_scribe_uploads_a_local_file_for_a_link_field(self):
         L = "python3.12 -I .claude/solo-lab/bin/workitem.py"
@@ -2984,11 +2978,9 @@ class AskAndIdentityFlagTest(ProjectCase):
         _, out = self.guard("alg-p2", "Bash", {"command": "lark-cli docs +fetch --doc https://x.feishu.cn/wiki/A"})
         self.assertNotEqual(out.get("permissionDecision"), "deny")
         self.assertIn("--as user", out.get("additionalContext", ""))
-        _, out = self.scribe("Bash", {"command": "lark-cli docs +create --title t --markdown x"})
-        self.assertEqual(out.get("permissionDecision"), "allow")
-        self.assertTrue(out.get("updatedInput", {}).get("command", "").endswith("--as user"))
-        _, out = self.scribe("Bash", {"command": "lark-cli docs +create --title t --markdown x --as bot"})
-        self.assertEqual(out.get("permissionDecision"), "deny")
+        _, out = self.scribe("Bash", {"command": "lark-cli docs +create --title t --markdown x"})    # 1.1.0: no session writes a
+        self.assertEqual(out.get("permissionDecision"), "deny")                                      # document with lark-cli itself
+        self.assertIn("上传用 docs.py upload", out.get("permissionDecisionReason", ""))
 
 
 class PoolHookTest(PoolProjectCase):
@@ -4844,7 +4836,7 @@ class HookScopeTest(PoolProjectCase):
         """A ledger.py write, a lark-cli write and a meegle write, each plain and wrapped (a function written either
         way, command -p, exec -a, time -p, env -S, sshpass, sudo, a shell, eval, after cd -- or pushd): denied in
         every session but the scribe's, asked in the researcher's own."""
-        for write, why in ((self.LEDGER, "不能运行 workitem.py archive"), (self.DOCS, "不能执行写命令 docs +update"),
+        for write, why in ((self.LEDGER, "不能运行 workitem.py archive"), (self.DOCS, "不能直接执行写命令 docs +update"),
                            (self.MEEGLE, "不能执行写命令 workitem update")):
             for cmd in self.wrapped(write):
                 out = self.bash("s-alg1", cmd)[1]
@@ -4855,9 +4847,11 @@ class HookScopeTest(PoolProjectCase):
                 self.assertEqual(self.bash(sid, write)[1].get("permissionDecision"), "deny", (sid, write))
                 self.assertEqual(self.bash(sid, "function f { %s; }; f" % write)[1].get("permissionDecision"), "deny", (sid, write))
             self.assertEqual(self.bash("s-researcher", write, permission_mode="dontAsk")[1].get("permissionDecision"), "deny", write)
-        for cmd in (self.LEDGER, "command -p " + self.LEDGER, "cd %s && %s" % (shlex.quote(self.tmp), self.LEDGER), self.MEEGLE,
-                    "lark-cli docs +update --doc x --command append --content '[PMO+0] 登记' --as user"):
+        for cmd in (self.LEDGER, "command -p " + self.LEDGER, "cd %s && %s" % (shlex.quote(self.tmp), self.LEDGER), self.MEEGLE):
             self.assertEqual(self.bash("s-scribe", cmd)[1].get("permissionDecision"), "allow", cmd)      # the scribe's own writes
+        out = self.bash("s-scribe", self.DOCS)[1]                                   # 1.1.0: a document is not among them
+        self.assertEqual(out.get("permissionDecision"), "deny")
+        self.assertIn("（PMO-p0-01）不能直接执行写命令 docs +update。文档谁负责谁写，但只经文档脚本", out["permissionDecisionReason"])
         for cmd in self.wrapped(self.DOCS + " --yes"):                              # --yes is the researcher's, the scribe included
             out = self.bash("s-scribe", cmd)[1]
             self.assertEqual(out.get("permissionDecision"), "deny", cmd)
@@ -4874,20 +4868,21 @@ class HookScopeTest(PoolProjectCase):
         for cmd in (send, "function f { %s; }; f" % send, "command -p " + send):
             self.assertEqual(self.bash("s-alg1", cmd)[1].get("permissionDecision"), "deny", cmd)
 
-    def test_the_scribe_may_delete_a_document_and_nothing_else_that_is_high_risk(self):
-        """1.0.10, the researcher's ruling of 2026-11-20: documents in the knowledge space may be deleted (they
-        go to the recycle bin), not changed outside ledger.py. Nobody but the researcher could delete one, and
-        the copies a revision left behind piled up. The scribe runs lark-cli wiki +node-delete itself; every
-        other high-risk command, and every other session, is as before."""
+    def test_no_session_deletes_a_document(self):
+        """1.1.0, the researcher's ruling of 2026-11-21: a document is deleted by the researcher on the web. From
+        1.0.10 the scribe ran lark-cli wiki +node-delete itself, the one high-risk command a session had; that is
+        gone, and a session that wants a document gone puts it on the researcher's to-do list."""
         delete = "lark-cli wiki +node-delete --node-token wikOLD --obj-type wiki --include-children=false --yes --as user"
-        for cmd in (delete, "command -p " + delete):
-            self.assertEqual(self.bash("s-scribe", cmd)[1].get("permissionDecision"), "allow", cmd)
-        for sid in ("s-alg2", "s-alg1", "s-entry"):
-            out = self.bash(sid, delete)[1]
-            self.assertEqual(out.get("permissionDecision"), "deny", sid)
-            self.assertIn("只能由研究员本人执行", out["permissionDecisionReason"], sid)
+        for sid in ("s-scribe", "s-alg2", "s-alg1", "s-entry"):
+            for cmd in (delete, "command -p " + delete):
+                out = self.bash(sid, cmd)[1]
+                self.assertEqual(out.get("permissionDecision"), "deny", (sid, cmd))
+                self.assertIn("只能由研究员本人执行", out["permissionDecisionReason"], sid)
+                self.assertIn("todo.py add", out["permissionDecisionReason"], sid)
         for other in ("lark-cli wiki +move-to-drive --node-token wikOLD --yes --as user",
-                      "lark-cli drive +delete --file-token boxOLD --type docx --yes --as user"):
+                      "lark-cli drive +delete --file-token boxOLD --type docx --yes --as user",
+                      "lark-cli wiki +move --node-token wikOLD --target-parent-token wikNEW --as user",
+                      "lark-cli docs +create --title t --markdown x --as user"):
             out = self.bash("s-scribe", other)[1]
             self.assertEqual(out.get("permissionDecision"), "deny", other)
 
@@ -4909,20 +4904,21 @@ class HookScopeTest(PoolProjectCase):
         $(...), a shell or a function, the hook gives no answer and Claude Code decides. Deny and ask are as before."""
         read, send, ledger_write = self.READ, self.SEND, self.LEDGER
         comment = "meegle comment add --work-item-id 1 --content hi"
-        scribe_doc = "lark-cli docs +update --doc x --command append --content '[PMO+0] 登记' --as user"
+        docs_write = "python3.12 -I .claude/solo-lab/bin/docs.py upload packages/drafts/alg/x.md --apply"   # every claimed session's
         cases = [("s-alg1", read + "; sudo ls"), ("s-alg1", read + " && sudo rm -rf /usr/local/lib/x"),
                  ("s-alg1", read + "; git push --force origin main"), ("s-alg1", "meegle workitem get --work-item-id 2101; ssh campus-hpc 'rm -rf ~/runs'"),
                  ("s-alg1", "lark-cli --help; open -a Docker"), ("s-alg1", read + "; rm -rf repo/eval; rm .claude/state/gates.json"),
                  ("s-alg1", read + " > repo/eval/score.py"), ("s-alg1", read + " > .claude/state/gates.json"), ("s-alg1", read + " >> notes.md"),
                  ("s-alg1", "sudo " + read), ("s-alg1", "doas " + read), ("s-alg1", "sshpass -p x " + read), ("s-alg1", "echo x | xargs " + read),
-                 ("s-alg1", "uv run " + read), ("s-alg1", comment + "; git push origin main"), ("s-alg1", "sudo " + comment),
+                 ("s-alg1", "uv run " + read), ("s-scribe", comment + "; git push origin main"), ("s-scribe", "sudo " + comment),
+                 ("s-alg1", docs_write + " && sudo ls"), ("s-alg1", docs_write + " > /tmp/out.txt"),
                  ("s-alg1", read + " | python3 -c 'import os'"), ("s-alg1", read + " | head -5"), ("s-alg1", "echo $(%s)" % read),
                  ("s-alg1", "echo `%s`" % read), ("s-alg1", "X=`%s`" % read), ("s-alg1", "sh -c %s" % shlex.quote(read)),
                  ("s-alg1", "function f { %s; }; f" % read), ("s-alg1", "if true; then %s; fi" % read),
-                 ("s-alg1", "OUT=`meegle comment add --work-item-id 2101 --content hi`; echo $OUT"),
+                 ("s-scribe", "OUT=`meegle comment add --work-item-id 2101 --content hi`; echo $OUT"),
                  ("s-entry", send + " && sudo reboot"), ("s-entry", send + "; ssh campus-hpc ls"), ("s-entry", "function f { %s; }; f" % send),
                  ("s-scribe", ledger_write + " && sudo ls"), ("s-scribe", ledger_write + " && rm -rf repo/eval"),
-                 ("s-scribe", scribe_doc + " && rm -rf repo/eval"), ("s-scribe", "sudo " + ledger_write),
+                 ("s-scribe", docs_write + " && rm -rf repo/eval"), ("s-scribe", "sudo " + ledger_write),
                  ("s-scribe", ledger_write + " > /tmp/out.txt"), ("s-scribe", "function f { %s; }; f" % ledger_write),
                  ("s-scribe", "sh -c %s" % shlex.quote(ledger_write)), ("s-scribe", "python3 tools/workitem.py archive 2101 --apply"),
                  ("s-researcher", read + " && sudo rm -rf /usr/local/lib/x"), ("s-researcher", "sudo " + read)]
@@ -4934,24 +4930,30 @@ class HookScopeTest(PoolProjectCase):
         for tool in ("Monitor", "mcp__terminal__run_in_terminal"):                 # shell commands outside the Bash tool, too
             self.assertEqual(self.guard("s-alg1", tool, {"command": read + "; sudo ls"}), (0, {}), tool)
             self.assertEqual(self.guard("s-alg1", tool, {"command": read})[1].get("permissionDecision"), "allow", tool)
+        self.assertEqual(self.bash("s-alg1", docs_write)[1].get("permissionDecision"), "allow")     # alone on the line, it keeps its allow
+        self.assertEqual(self.bash("s-alg1", "cd . && " + docs_write)[1].get("permissionDecision"), "allow")
         # nothing else on the line: the allow stands, with cd, other Feishu and ledger calls, and redirects that write no file
         for sid, cmd in (("s-alg1", read), ("s-alg1", "cd repo && " + read), ("s-alg1", "pushd repo && %s; popd" % read),
                          ("s-alg1", read + "; meegle workitem get --work-item-id 2101"), ("s-alg1", read + " 2>&1"),
                          ("s-alg1", read + " 2>/dev/null"), ("s-alg1", read + " && python3.12 -I %s get 2101" % self.L),
                          ("s-alg1", "timeout 30 env LANG=C " + read), ("s-alg1", "lark-cli docs +fetch --help"),
-                         ("s-alg1", comment), ("s-entry", send), ("s-entry", "cd %s && %s" % (shlex.quote(self.tmp), send)),
+                         ("s-scribe", comment), ("s-entry", send), ("s-entry", "cd %s && %s" % (shlex.quote(self.tmp), send)),
                          ("s-scribe", ledger_write), ("s-scribe", "cd %s && %s" % (shlex.quote(self.tmp), ledger_write)),
                          ("s-scribe", ledger_write + " 2>&1"), ("s-scribe", "%s && python3.12 -I %s get 2101" % (ledger_write, self.L)),
-                         ("s-scribe", "pushd repo && %s; popd" % self.MEEGLE), ("s-scribe", scribe_doc), ("s-researcher", read)):
+                         ("s-scribe", "pushd repo && %s; popd" % self.MEEGLE), ("s-alg1", docs_write), ("s-researcher", read)):
             self.assertEqual(self.bash(sid, cmd)[1].get("permissionDecision"), "allow", (sid, cmd))
-        out = self.bash("s-alg1", comment)[1]                                       # the rewrite goes with the allow
-        self.assertIn("[Alg+1]", out["updatedInput"]["command"])
+        out = self.bash("s-scribe", comment)[1]                                     # the rewrite goes with the allow
+        self.assertIn("[PMO+0]", out["updatedInput"]["command"])
+        out = self.bash("s-entry", send.replace(" --as bot", ""))[1]                # and so does the identity flag a write lacks
+        self.assertEqual(out.get("permissionDecision"), "allow")
+        self.assertTrue(out["updatedInput"]["command"].endswith("--as bot"))
+        self.assertEqual(self.bash("s-entry", send.replace("--as bot", "--as user"))[1].get("permissionDecision"), "deny")
         # what the hook refuses is refused whatever else is on the line
         for tail in ("; sudo ls", " && git push origin main", " > /tmp/out.txt"):
             for write in (self.LEDGER, self.DOCS, self.MEEGLE):
                 self.assertEqual(self.bash("s-alg1", write + tail)[1].get("permissionDecision"), "deny", write + tail)
                 self.assertEqual(self.bash("s-researcher", write + tail)[1].get("permissionDecision"), "ask", write + tail)
-            self.assertEqual(self.bash("s-scribe", scribe_doc + " --yes" + tail)[1].get("permissionDecision"), "deny", tail)
+            self.assertEqual(self.bash("s-scribe", self.DOCS + " --yes" + tail)[1].get("permissionDecision"), "deny", tail)
         self.assertEqual(self.bash("s-alg1", read + "; git stash")[1].get("permissionDecision"), "deny")
         self.assertEqual(self.bash("s-researcher", read + "; git stash")[1].get("permissionDecision"), "ask")
         sys.path.insert(0, self.hooks)
@@ -4971,7 +4973,7 @@ class HookScopeTest(PoolProjectCase):
         for inner, why in (("meegle workitem update --work-item-id 2101 --fields '[]'", "不能执行写命令 workitem update"),
                            ("meegle workitem create --work-item-type decision --fields '[]'", "不能执行写命令 workitem create"),
                            ("meegle workflow transition --work-item-id 2101 --node-id started --action confirm", "不能执行写命令 workflow transition"),
-                           (self.DOCS, "不能执行写命令 docs +update"), (self.LEDGER, "不能运行 workitem.py archive")):
+                           (self.DOCS, "不能直接执行写命令 docs +update"), (self.LEDGER, "不能运行 workitem.py archive")):
             for cmd in ("echo `%s`", "X=`%s`", "`%s`", "OUT=`%s`; echo $OUT", "echo $(%s)", "echo \"`%s`\"", "cat <<EOF\n`%s`\nEOF"):
                 out = self.bash("s-alg1", cmd % inner)[1]
                 self.assertEqual(out.get("permissionDecision"), "deny", cmd % inner)
@@ -5069,22 +5071,41 @@ class HookScopeTest(PoolProjectCase):
         self.assertIn("用编辑工具改评测协议的只读路径（质量序列的会话和研究员自己的会话例外：改动弹窗要研究员确认，bypass 和 dontAsk 模式下也拒绝）",
                       self.read("CLAUDE.md"))
 
-    def test_revise_is_the_scribes(self):
-        cmd = "python3.12 -I .claude/solo-lab/bin/docs.py revise 2140 packages/drafts/infra/v2.md --note '去掉沙箱' --apply"
-        self.assertEqual(self.bash("s-scribe", cmd)[1].get("permissionDecision"), "allow")      # revise is the scribe's, like every write
-        self.assertEqual(self.bash("s-alg2", cmd)[1].get("permissionDecision"), "deny")
-        self.assertEqual(self.bash("s-researcher", cmd)[1].get("permissionDecision"), "ask")
+    def test_docs_py_is_every_claimed_sessions_and_workitem_py_the_scribes(self):
+        """1.1.0: who may run a ledger script goes by the file. A document is written by the session that answers
+        for it, so every claimed session runs docs.py and the script holds the session against the document's
+        owner; a work item is written by the scribe alone. That goes for the project's own copy of docs.py, run as
+        `python … docs.py <command>`: a copy, an import or code that starts the script is the scribe's, as before."""
+        D = "python3.12 -I .claude/solo-lab/bin/docs.py"
+        for words in ("revise 2140 packages/drafts/infra/v2.md --note '去掉沙箱' --apply", "upload packages/drafts/alg/x.md --apply",
+                      "relink 2140 --apply", "append 2140 --file note.md --apply", "status-block 2140 --file s.md --apply",
+                      "attach 2140 规格 spec/spec.md --apply"):
+            cmd = "%s %s" % (D, words)
+            for sid in ("s-scribe", "s-alg2", "s-alg1", "s-alg0", "s-entry"):
+                self.assertEqual(self.bash(sid, cmd)[1].get("permissionDecision"), "allow", (sid, cmd))
+            self.assertEqual(self.bash("s-researcher", cmd)[1].get("permissionDecision"), "ask", cmd)
+        W = "python3.12 -I .claude/solo-lab/bin/workitem.py confirm 2140 --by Alg-p2-01 --apply"
+        self.assertEqual(self.bash("s-scribe", W)[1].get("permissionDecision"), "allow")
+        for cmd in (W, "%s upload packages/drafts/alg/x.md --apply && %s" % (D, W), "%s; %s relink 2140 --apply" % (W, D)):
+            out = self.bash("s-alg2", cmd)[1]                                        # next to a command of docs.py too
+            self.assertEqual(out.get("permissionDecision"), "deny", cmd)
+            self.assertIn("（Alg-p2-01）不能运行 workitem.py confirm：工作项、字段和状态只由书记员 PMO-p0-01 写，给它发【登记请求】", out["permissionDecisionReason"], cmd)
+        for cmd in ("python3 tools/docs.py revise 2140 v2.md --note x --apply", "python3 tools/my_docs.py upload x.md --apply",
+                    "python3.12 -I -m docs upload x.md --apply", "echo x.md | xargs %s upload --apply" % D,
+                    "python3 - <<'EOF'\nimport docs\ndocs.main(['upload', 'x.md', '--apply'])\nEOF"):
+            out = self.bash("s-alg2", cmd)[1]
+            self.assertEqual(out.get("permissionDecision"), "deny", cmd)
+        out = self.bash("s-alg2", "python3 tools/docs.py upload x.md --apply")[1]
+        self.assertIn("要运行 docs.py upload，请照原样写：python3.12 -I .claude/solo-lab/bin/docs.py upload", out["permissionDecisionReason"])
+        with open(os.path.join(self.tmp, ".claude", "solo-lab", "bin", "docs.py"), "a", encoding="utf-8") as f:
+            f.write("\n# changed\n")                                                # no longer the copy init wrote
+        self.assertEqual(self.bash("s-alg2", D + " upload packages/drafts/alg/x.md --apply")[1].get("permissionDecision"), "deny")
         sys.path.insert(0, self.hooks)
         import importlib
         guard = importlib.import_module("guard")
         self.assertEqual(guard.ledger_write("python3 tools/my_ledger.py revise 2140 v2.md --note x --apply", self.tmp), "revise")
         self.assertEqual(guard.ledger_write("python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['python3', '.claude/solo-lab/bin/ledger.py', "
                                             "'revise', '2140', 'v2.md'])\nEOF", self.tmp), "（代码里调用了 ledger.py 的写命令）")
-        self.assertEqual(guard.ledger_write("function f { python3 .claude/solo-lab/bin/docs.py revise 2140 v2.md --apply; }; f", self.tmp), "revise")
-        self.assertEqual(guard.ledger_write("\"/opt/My Tools/python3\" .claude/solo-lab/bin/workitem.py archive 2140 --apply", self.tmp), "archive")
-        self.assertEqual(guard.command_runs("function g { git stash; }; cd -- repo && command -p git pull", self.tmp, self.tmp),
-                         [(["git", "stash"], self.tmp), (["git", "pull"], os.path.join(self.tmp, "repo"))])
-
 
     def test_reads_are_never_stopped(self):
         """1.0.11, the researcher on 2026-11-20: the hook stops what sessions other than the scribe write, and no
@@ -5657,7 +5678,7 @@ class TextsAfterTheGatesTest(PoolProjectCase):
                      "选项表的“要放行的不可逆动作”一列改名“不可逆的动作”", "包头“执行方”写了 +1、+0 或书记员的，改写负责这件事的 +2",
                      "升级前回滚过、还在待决定的也算", "先读所属研究任务的状态包（`ledger.py status <研究任务 ID>`）"):
             self.assertIn(part, note)
-        self.assertEqual(setup_core.POLICY_VERSION, 7)
+        self.assertEqual(setup_core.POLICY_VERSION, 8)                    # 7 from 1.0.6 on; 8 with 1.1.0, which goes by the file
         guide = next(x for x in texts["docs/使用说明.md"].splitlines() if x.startswith("**升到 1.0.6。**"))
         for part in ("这一版去掉了 1.0.4 加的三层命令拦截", "请初始化会话重跑 `init --apply`", "请你退出并重开一次桌面应用",
                      "升级以后不用登记放行", "选项表的“要放行的不可逆动作”一列改名“不可逆的动作”",

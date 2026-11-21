@@ -44,13 +44,11 @@ PLUGIN_RUN = ("setup.py", "check.py", "space.py", "pool.py", "onboarding.py")
 FIRST_TASK = ledger_core.FIRST_TASK
 POOL_SESSIONS = (7, 57)
 
-SCRIBE_LARK = ["docs +create", "docs +update", "wiki +node-create", "wiki +move",
-               "drive +add-comment", "drive +add-reply", "drive +resolve-comment", "drive +upload"]
-# The one high-risk command a session runs (1.0.10): the scribe deletes a document in the knowledge space, one
-# that a later version replaced or a copy uploaded twice. Until then nobody but the researcher could, and the
-# copies stayed. What is deleted goes to the space's recycle bin. Everything else that is high-risk stays the
-# researcher's, and a document is changed through docs.py and workitem.py only.
-SCRIBE_HIGH_RISK = ["wiki +node-delete"]
+# 1.1.0: no session runs a lark-cli write itself. A document is written through docs.py by the session that
+# answers for it (the script checks who that is), moved to the archive by the scribe's workitem.py archive, and
+# deleted by the researcher on the web: a session that wants one gone puts it on the researcher's to-do list.
+# Until 1.0.12 the scribe had docs +create, docs +update, wiki +node-create, wiki +move and the drive comment
+# commands, and from 1.0.10 the one high-risk command a session ran, wiki +node-delete.
 SCRIBE_MEEGLE = ["workitem create", "workitem update", "comment add", "attachment +upload", "attachment prepare-upload"]
 READ_ALLOW = [
     "Bash(lark-cli docs +fetch *)", "Bash(lark-cli docs +search *)", "Bash(lark-cli wiki +node-list *)",
@@ -365,10 +363,9 @@ def build_policy(spec, task, seqs):
                    "limit": limits.get(name, limits["p%d" % rank]), "fixed_session": fixed.get(name),
                    "session_pattern": pattern, "spawn": spec.dispatch_targets(name, seq, rank, seqs),
                    "write_paths": write_paths(seq, rank, task), "lark_write": [],
-                   "meegle_write": ["comment add"], "ledger_write": False}
+                   "meegle_write": [], "ledger_write": False}     # 1.1.0: a comment on a work item is the scribe's too
             if name == "pmo-scribe":
-                pol.update(lark_write=SCRIBE_LARK + SCRIBE_HIGH_RISK, lark_high_risk=SCRIBE_HIGH_RISK,
-                           meegle_write=SCRIBE_MEEGLE, ledger_write=True)
+                pol.update(meegle_write=SCRIBE_MEEGLE, ledger_write=True)
             elif name == "pmo-p2":
                 pol["lark_write"] = ["im +messages-send", "im +messages-reply"]
             agents[name] = pol
@@ -425,7 +422,7 @@ POOL_ALLOW = ["Bash(python3.12 -I .claude/solo-lab/bin/onboarding.py *)"] + [
                                          "route.py audit", "route.py cross", "notify.py send", "notify.py focus")]
 SCRIBE_ALLOW = ["Bash(python3.12 -I .claude/solo-lab/bin/%s.py %s *)" % (script, w) for script, words in (
     ("workitem", ("register", "reply", "confirm", "rollback", "update", "comment", "archive")),
-    ("docs", ("revise", "status-block", "append", "relink", "ensure-node"))) for w in words]
+    ("docs", ("upload", "attach", "revise", "status-block", "append", "relink", "ensure-node"))) for w in words]
 POOL_HOOK_EVENTS = ("Stop", "StopFailure", "Notification", "PermissionRequest", "PermissionDenied", "PostCompact")
 # The desktop app's terminal panel tool runs shell commands outside the Bash tool. A matcher with
 # regex characters is an unanchored regex, so it gets its own anchored group.
@@ -436,8 +433,7 @@ WRAPUP_TOOL = "^mcp__.+__wrap_up$"
 
 
 def build_settings(task, risk, policy):
-    allowed = {k for pol in policy["agents"].values() for k in pol.get("lark_high_risk", ())}
-    high = sorted(k for k, v in risk.get("commands", {}).items() if v == "high-risk-write" and k not in allowed)
+    high = sorted(k for k, v in risk.get("commands", {}).items() if v == "high-risk-write")
     deny = ADMIN_DENY + ["Bash(lark-cli %s *)" % k for k in high if k != "update"]
     ask = ["Edit(/.claude/settings.json)", "Edit(/.claude/settings.local.json)", "Edit(/.claude/hooks/**)",
            "Edit(/.claude/agents/**)", "Edit(/.claude/solo-lab/**)", "Edit(/.claude/state/**)", "Edit(/org/**)",
@@ -1488,7 +1484,7 @@ def pair_problem(target):
             "在 Claude 以外的终端里合并 .claude/hooks/policy.json.new，再重跑 init" % (gv, pv))
 
 
-POLICY_VERSION = 7
+POLICY_VERSION = 8
 
 
 def disk_policy_version(target):
