@@ -604,3 +604,15 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
         with contextlib.redirect_stdout(io.StringIO()):
             docs.relink(lg, item)
     return item
+
+
+def reply(lg, path, doc=None):
+    """A delivery as its two sessions carry it out from 1.1.0: the session that delivers uploads the 交付包
+    (docs.upload), the scribe puts its link into the request's 交付包 field (workitem.reply). What the upload
+    prints is left out. With --doc and offline only the scribe's step runs."""
+    import docs
+    import workitem
+    if lg.mode == "apply" and not doc:
+        with contextlib.redirect_stdout(io.StringIO()):
+            docs.upload(lg, path)
+    return workitem.reply(lg, path, doc=doc)

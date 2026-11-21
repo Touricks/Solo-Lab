@@ -76,6 +76,7 @@ def by_hand(value):
 
 
 register = fake_space.register         # upload, register, relink: a registration as its two sessions carry it out
+reply = fake_space.reply               # upload, reply: a delivery likewise
 
 
 class LedgerCase(unittest.TestCase):
@@ -963,28 +964,40 @@ class LinkLineTest(unittest.TestCase):
 
 class ReplyTest(LedgerCase):
     def test_delivery_fills_the_field_of_the_request_it_answers(self):
+        """1.1.0: the session that delivers uploads the 交付包, the scribe fills the request's field with its link."""
         self.task()
         request = self.quiet(register, self.lg(), self.draft(ASSIGN))
         path = self.write(example(DELIVERY).replace("- 关联工作项：#2001", "- 关联工作项：#%s" % request), "back.md")
+        self.assertIn("这份交付包的文档还没上传：文档谁负责谁写，请 Product-p1-03 先运行", self.fails(workitem.reply, self.lg(), path))
         lg = self.lg()
-        link, text = self.out(workitem.reply, lg, path)
-        self.assertEqual(self.value(request, "same_seq", "delivery_link"), link)
+        link, text = self.out(docs.upload, lg, path)
         parent = self.fake.doc_by(self.value(request, "same_seq", "main_doc").rsplit("/", 1)[1])["node_token"]
         self.assertEqual(self.fake.doc_by(link.rsplit("/", 1)[1])["parent"], parent)
+        self.assertEqual((lg.wrote("meegle"), self.value(request, "same_seq", "delivery_link")), ([], ""))   # the field is the scribe's
+        self.assertIn("上传：交付包挂在 #%s 的主文档下：%s\n接着给书记员发【登记请求】：请它运行 python3.12 -I .claude/solo-lab/bin/workitem.py reply "
+                      "packages/drafts/alg/back.md --apply 填“交付包”字段，再确认“执行”这一步。" % (request, link), text)
+        lg = self.lg()
+        again, text = self.out(docs.upload, lg, path)                                   # run again: no second document
+        self.assertEqual((again, lg.wrote("lark-cli")), (link, []))
+        self.assertIn("已经上传过，没有再传", text)
+        lg = self.lg()
+        filled, text = self.out(workitem.reply, lg, path)
+        self.assertEqual((filled, self.value(request, "same_seq", "delivery_link"), lg.wrote("lark-cli")), (link, link, []))
         self.assertIn("“交付包”字段已填", text)
         self.assertIn("不要重复登记", self.fails(workitem.reply, self.lg(), path))
+        self.assertIn("不要重复上传", self.fails(docs.upload, self.lg(), path))
 
     def test_a_delivery_that_was_not_accepted_is_handed_in_again(self):
         """The delivery template says a delivery changed after it was not accepted is handed in again with its
-        version one higher. reply takes it, from the same file or another: a new document under the request, the
-        交付包 field on the new link, the earlier document where it was. The same version again, and a number that
-        does not follow, stop with the number to write."""
+        version one higher. Its author uploads it, from the same file or another: a new document under the
+        request, the earlier document where it was; the scribe's reply puts the 交付包 field on the new link.
+        The same version again, and a number that does not follow, stop the upload with the number to write."""
         self.task()
         request = self.quiet(register, self.lg(), self.draft(ASSIGN, edit=lambda t: t.replace("- 接收方：产品 +1", "- 接收方：产品 +1（Product-p1-02）")))
         self.quiet(workitem.confirm, self.lg(), request, "Product-p1-02")
         first = example(DELIVERY).replace("- 关联工作项：#2001", "- 关联工作项：#%s" % request)
         path = self.write(first, "back.md")
-        v1 = self.quiet(workitem.reply, self.lg(), path)
+        v1 = self.quiet(reply, self.lg(), path)
         receipt = "packages/sent/reply-%s-back.md.json" % request
         with open(os.path.join(self.tmp, receipt), encoding="utf-8") as f:
             self.assertEqual(json.load(f)["version"], 1)
@@ -992,19 +1005,25 @@ class ReplyTest(LedgerCase):
         self.assertEqual(self.state(request), "待验收")
         self.quiet(workitem.rollback, self.lg(), request, "执行", "第 2 条没有证据", by="Product-p2-01")
         self.assertEqual((self.state(request), self.value(request, "same_seq", "delivery_link")), ("执行中", ""))
-        again = "验收不通过、改好后重新交的，包头“版本”写第 2 版，再 reply"
-        self.assertEqual(self.fails(workitem.reply, self.lg(), path),                      # unchanged: the way out is said
-                         "这份交付包（第 1 版）已经挂到 #%s 下了（回执 %s），不要重复登记；%s" % (request, receipt, again))
+        again = "验收不通过、改好后重新交的，包头“版本”写第 2 版，再上传"
+        self.assertEqual(self.fails(docs.upload, self.lg(), path),                         # unchanged: the way out is said
+                         "这份交付包（第 1 版）已经挂到 #%s 下了（回执 %s），不要重复上传；%s" % (request, receipt, again))
+        self.assertIn("这份交付包（第 1 版）已经挂到 #%s 下了（回执 %s），不要重复登记" % (request, receipt), self.fails(workitem.reply, self.lg(), path))
         other = self.write(first, "back-again.md")                                       # another file, the number not raised
-        self.assertEqual(self.fails(workitem.reply, self.lg(), other),
+        self.assertEqual(self.fails(docs.upload, self.lg(), other),
                          "#%s 已经收过第 1 版交付包（回执 %s），这一份写的是第 1 版：%s" % (request, receipt, again))
         self.write(first.replace("第 1 版（2026-11-02）", "第 3 版（2026-11-05）"), "back.md")
-        self.assertIn("这一份写的是第 3 版：" + again, self.fails(workitem.reply, self.lg(), path))
+        self.assertIn("这一份写的是第 3 版：" + again, self.fails(docs.upload, self.lg(), path))
         count = len(self.fake.docs)
         self.write(first.replace("第 1 版（2026-11-02）", "第 2 版（2026-11-04）"), "back.md")
-        _, out = self.out(workitem.reply, self.lg("preview"), path)
+        _, out = self.out(docs.upload, self.lg("preview"), path)
+        self.assertIn("预览：会把交付包第 2 版挂在 #%s 的主文档下" % request, out)
+        self.assertIn("这份交付包的文档还没上传（回执里是第 1 版，草稿是第 2 版）", self.fails(workitem.reply, self.lg(), path))
         self.assertEqual((len(self.fake.docs), self.value(request, "same_seq", "delivery_link")), (count, ""))
-        v2, out = self.out(workitem.reply, self.lg(), path)
+        v2, out = self.out(docs.upload, self.lg(), path)
+        self.assertIn("上传：交付包第 2 版挂在 #%s 的主文档下：%s，上一版的文档留在原处" % (request, v2), out)
+        self.assertEqual((len(self.fake.docs), self.value(request, "same_seq", "delivery_link")), (count + 1, ""))   # the field waits for the scribe
+        _, out = self.out(workitem.reply, self.lg(), path)
         self.assertIn("交付包第 2 版已挂到 #%s 下，“交付包”字段已填，上一版的文档留在原处。" % request, out)
         self.assertNotEqual(v1, v2)
         self.assertEqual((len(self.fake.docs), self.value(request, "same_seq", "delivery_link")), (count + 1, v2))
@@ -1015,13 +1034,14 @@ class ReplyTest(LedgerCase):
             rec = json.load(f)
         self.assertEqual((rec["version"], rec["status"], rec["doc"], rec["earlier"]), (2, "registered", v2, [{"version": 1, "doc": v1}]))
         self.assertIn("这份交付包（第 2 版）已经挂到 #%s 下了" % request, self.fails(workitem.reply, self.lg(), path))
-        # a third version from another file, after a run that failed once the document existed
+        # a third version from another file; the scribe's write fails once, and both steps are run again
         third = self.write(first.replace("第 1 版（2026-11-02）", "第 3 版（2026-11-06）"), "back-3.md")
         count = len(self.fake.docs)
-        text = self.fails(workitem.reply, self.lg(replies=[(("workitem", "update"), ledger_core.LedgerError("down"))]), third)
-        self.assertIn("文档已经建好", text)
+        v3 = self.quiet(docs.upload, self.lg(), third)
+        self.assertEqual(self.fails(workitem.reply, self.lg(replies=[(("workitem", "update"), ledger_core.LedgerError("down"))]), third), "down")
         lg = self.lg()
-        v3, out = self.out(workitem.reply, lg, third)
+        self.assertEqual(self.quiet(docs.upload, lg, third), v3)
+        _, out = self.out(workitem.reply, lg, third)
         self.assertIn("交付包第 3 版已挂到", out)
         self.assertEqual((lg.wrote("docs", "+create"), len(self.fake.docs), self.value(request, "same_seq", "delivery_link")), ([], count + 1, v3))
         # a receipt from before 1.0.6 keeps no version: the next one only has to be higher than the first
@@ -1029,27 +1049,28 @@ class ReplyTest(LedgerCase):
         self.quiet(workitem.confirm, self.lg(), request, "Product-p2-01")
         self.assertEqual(self.state(request), "已验收")
         fourth = self.write(first.replace("第 1 版（2026-11-02）", "第 4 版（2026-11-07）"), "back-4.md")
-        self.assertIn("#%s 已经是“已验收”：工作项关闭以后不再重新交交付包" % request, self.fails(workitem.reply, self.lg(), fourth))
+        self.assertIn("#%s 已经是“已验收”：工作项关闭以后不再重新交交付包" % request, self.fails(docs.upload, self.lg(), fourth))
         old = self.quiet(register, self.lg(), self.draft(ASSIGN, "old.md"))
         old_path = self.write(example(DELIVERY).replace("- 关联工作项：#2001", "- 关联工作项：#%s" % old), "old-back.md")
-        self.quiet(workitem.reply, self.lg(), old_path)
+        self.quiet(reply, self.lg(), old_path)
         old_receipt = os.path.join(self.tmp, "packages", "sent", "reply-%s-old-back.md.json" % old)
         with open(old_receipt, encoding="utf-8") as f:
             rec = json.load(f)
         del rec["version"]
         with open(old_receipt, "w", encoding="utf-8") as f:
             json.dump(rec, f, ensure_ascii=False)
-        self.assertIn("不要重复登记；" + again, self.fails(workitem.reply, self.lg(), old_path))
+        self.assertIn("不要重复上传；" + again, self.fails(docs.upload, self.lg(), old_path))
         self.write(example(DELIVERY).replace("- 关联工作项：#2001", "- 关联工作项：#%s" % old).replace(
             "第 1 版（2026-11-02）", "第 3 版（2026-11-09）"), "old-back.md")
-        self.quiet(workitem.reply, self.lg(), old_path)
+        self.quiet(reply, self.lg(), old_path)
+        self.assertTrue(self.value(old, "same_seq", "delivery_link"))
 
     def test_only_a_delivery_is_a_reply(self):
         self.task()
-        self.assertIn("要用 register 登记", self.fails(workitem.reply, self.lg(), self.draft(DECISION)))
+        self.assertIn("要用 register 登记", self.fails(reply, self.lg(), self.draft(DECISION)))
         decision = self.decision()
         path = self.write(example(DELIVERY).replace("- 关联工作项：#2001", "- 关联工作项：#%s" % decision), "back.md")
-        self.assertIn("交付包答复的是同序列需求或跨序列需求", self.fails(workitem.reply, self.lg(), path))
+        self.assertIn("交付包答复的是同序列需求或跨序列需求", self.fails(reply, self.lg(), path))
 
 
 class StepTest(LedgerCase):
@@ -1473,7 +1494,6 @@ class UploadTest(LedgerCase):
         # what register refuses is refused before a document exists
         count = len(self.fake.docs)
         self.assertIn("包头“版本”写第 1 版", self.fails(docs.upload, self.lg(), self.draft(DECISION, "v2.md", edit=lambda t: t.replace("第 1 版", "第 2 版"))))
-        self.assertIn("是答复，不新建工作项", self.fails(docs.upload, self.lg(), self.draft(DELIVERY, "dl.md")))
         self.assertIn("关联工作项", self.fails(docs.upload, self.lg(), self.draft(DECISION, "linked.md", edit=lambda t: t.replace(
             "- 关联工作项：待建", "- 关联工作项：#2999"))))
         self.assertEqual(len(self.fake.docs), count)
@@ -1578,6 +1598,29 @@ class WhoWritesTest(LedgerCase):
         self.assertIn("这份草稿的发出方是 项目管理 +2，请它来上传", self.fails(docs.upload, self.lg(), fb))
         self.as_session("PMO-p2-01")
         self.quiet(docs.upload, self.lg(), fb)
+
+    def test_a_delivery_and_a_steps_document_are_their_sessions(self):
+        self.as_session()
+        task = self.task()
+        request = self.quiet(register, self.lg(), self.draft(ASSIGN, "a.md", edit=lambda t: t.replace("- 接收方：产品 +1", "- 接收方：产品 +1（Product-p1-03）")))
+        back = self.write(example(DELIVERY).replace("- 关联工作项：#2001", "- 关联工作项：#%s" % request), "back.md")   # from Product-p1-03
+        self.as_session("Product-p2-01")
+        self.assertEqual(self.fails(docs.upload, self.lg(), back), "（Product-p2-01）不能上传这份交付包：这份交付包的发出方是 Product-p1-03，请它来上传。")
+        # a step's document: the session that answers for the step in progress, or the owner of the main document
+        os.makedirs(os.path.join(self.tmp, "spec"))
+        with open(os.path.join(self.tmp, "spec", "goal.md"), "w", encoding="utf-8") as f:
+            f.write("# 调研\n\n三篇相关工作。\n")
+        self.as_session()
+        self.quiet(workitem.confirm, self.lg(), task, "Product-p2-01", STEPS[0][1])     # now at 前期调研, the algorithm +2's step
+        self.as_session("Alg-p1-01")
+        self.assertEqual(self.fails(docs.attach, self.lg(), task, "调研文档", "spec/goal.md"),
+                         "（Alg-p1-01）不能给 #%s 上传“调研文档”：“前期调研”归算法 +2，主文档归 Product-p2-01 写。" % task)
+        self.as_session("Alg-p2-01")
+        link = self.quiet(docs.attach, self.lg(), task, "调研文档", "spec/goal.md")
+        self.as_session("PMO-p0-01")
+        _, out = self.out(workitem.confirm, self.lg(), task, "Alg-p2-01", ["调研文档=@spec/goal.md"])
+        self.assertIn("spec/goal.md 用的是 Alg-p2-01 上传的文档：%s" % link, out)
+        self.assertEqual(self.value(task, "research_task", "调研文档"), link)
 
     def test_the_scribe_uploads_the_sheet_init_writes(self):
         """One document is nobody's: the research-task sheet init writes, which the scribe registers while the
@@ -2070,9 +2113,9 @@ class DocumentsTest(LedgerCase):
         with open(os.path.join(self.tmp, "packages", "sent", "reply-%s-back.md.json" % request), "w", encoding="utf-8") as f:
             json.dump(["x"], f)                                                         # not a receipt: left alone
         before = len(self.fake.docs)
-        self.fails(workitem.reply, self.lg(replies=[(("wiki", "+node-get"), ledger_core.LedgerError("down"))]), path)
+        self.fails(reply, self.lg(replies=[(("wiki", "+node-get"), ledger_core.LedgerError("down"))]), path)
         lg = self.lg()
-        self.quiet(workitem.reply, lg, path)
+        self.quiet(reply, lg, path)
         self.assertEqual((lg.wrote("docs", "+create"), len(self.fake.docs)), ([], before + 1))
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "packages", "sent", "reply-%s-back.md-2.json" % request)))
 
@@ -2144,7 +2187,9 @@ class DocumentsTest(LedgerCase):
 
 
 class AttachTest(LedgerCase):
-    """A link field given a local file: the scribe uploads it under the item's main document."""
+    """A link field given a local file. From 1.1.0 the session that answers for the step uploads the file under
+    the item's main document (docs.py attach); the scribe's --set <字段>=@<文件> finds that document by the file
+    and its content, and uploads nothing."""
 
     def local(self, text="# 上下文整理\n\n基线的公开数字和三篇相关工作。\n", name="context.md"):
         os.makedirs(os.path.join(self.tmp, "spec"), exist_ok=True)
@@ -2160,18 +2205,26 @@ class AttachTest(LedgerCase):
         task = self.task()
         self.quiet(workitem.confirm, self.lg(), task, "Product-p2-01", STEPS[0][1])
         before = len(self.fake.docs)
+        ref = self.local()
+        text = self.fails(workitem.confirm, self.lg(), task, "Alg-p2-01", ["调研文档=" + ref])       # not uploaded: the scribe stops
+        self.assertIn("spec/context.md 还没上传，或者上传以后改过：书记员不上传文档", text)
+        self.assertIn("docs.py attach %s 调研文档 spec/context.md --apply" % task, text)
+        self.assertEqual((len(self.fake.docs), self.state(task)), (before, "前期调研"))
         lg = self.lg()
-        _, text = self.out(workitem.confirm, lg, task, "Alg-p2-01", ["调研文档=" + self.local()])
-        self.assertIn("已上传“调研文档：上下文整理”：", text)
-        self.assertIn("“前期调研”完成", text)
-        self.assertEqual(len(self.fake.docs), before + 1)
+        link, text = self.out(docs.attach, lg, task, "调研文档", ref)                              # the step's session uploads
+        self.assertIn("已上传“调研文档：上下文整理”：%s\n请书记员写进工作项：--set 调研文档=@spec/context.md" % link, text)
+        self.assertEqual((len(self.fake.docs), lg.wrote("meegle")), (before + 1, []))
         argv, _, stdin = next(c for c in lg.calls if c[1] and "+create" in c[0])
         self.assertIn("调研文档：上下文整理", argv)
         self.assertEqual(stdin, "基线的公开数字和三篇相关工作。\n")                # the heading became the title
-        link = self.value(task, "research_task", "调研文档")
-        self.assertRegex(str(link), r"^https://[^/]+/wiki/\w+")
+        self.assertRegex(link, r"^https://[^/]+/wiki/\w+")
+        lg = self.lg()
+        _, text = self.out(workitem.confirm, lg, task, "Alg-p2-01", ["调研文档=" + ref])
+        self.assertIn("spec/context.md 用的是 研究员 上传的文档：%s" % link, text)
+        self.assertIn("“前期调研”完成", text)
+        self.assertEqual(self.value(task, "research_task", "调研文档"), link)
         writes = [a[1:3] for a, w, _ in lg.calls if w]
-        self.assertEqual(writes, [["docs", "+create"], ["workitem", "update"], ["workflow", "transition"]])
+        self.assertEqual(writes, [["workitem", "update"], ["workflow", "transition"]])       # the scribe writes the work item only
         self.assertEqual(len(self.receipts(task)), 1)
 
     def test_nothing_is_uploaded_before_the_checks_pass(self):
@@ -2182,45 +2235,57 @@ class AttachTest(LedgerCase):
         self.assertIn("假设签字", text)                                          # the step lacks other things
         self.assertNotIn("规格、", text.replace("规格版本", ""))                    # the file counts as given
         self.assertEqual((len(self.fake.docs), self.receipts(task)), (before, []))
-        self.assertIn("将执行：lark-cli docs +create", self.out(workitem.update, self.lg("preview"), task, ["规格=@spec/spec.md"])[1])
+        self.assertIn("将执行：lark-cli docs +create", self.out(docs.attach, self.lg("preview"), task, "规格", "spec/spec.md")[1])
         self.assertEqual((len(self.fake.docs), self.receipts(task)), (before, []))  # a preview writes nothing either
 
     def test_the_same_content_is_uploaded_once_and_a_changed_file_again(self):
         task = self.task()
         ref = self.local(name="spec.md")
+        first = self.quiet(docs.attach, self.lg(), task, "规格", ref)
         self.quiet(workitem.update, self.lg(), task, ["规格=" + ref])
-        first = self.value(task, "research_task", "规格")
+        self.assertEqual(self.value(task, "research_task", "规格"), first)
         lg = self.lg()
-        _, text = self.out(workitem.update, lg, task, ["规格=" + ref])
+        again, text = self.out(docs.attach, lg, task, "规格", ref)
         self.assertIn("spec/spec.md 没有改过，沿用上次上传的文档", text)
-        self.assertEqual((lg.wrote("docs", "+create"), self.value(task, "research_task", "规格")), ([], first))
+        self.assertEqual((lg.wrote("docs", "+create"), again), ([], first))
         self.local("# 规格 v2\n\n阈值改成 0.3。\n", "spec.md")
+        self.assertIn("还没上传，或者上传以后改过", self.fails(workitem.update, self.lg(), task, ["规格=" + ref]))   # the changed file is no document yet
+        self.assertEqual(self.value(task, "research_task", "规格"), first)
         lg = self.lg()
-        self.quiet(workitem.update, lg, task, ["规格=" + ref])
+        second = self.quiet(docs.attach, lg, task, "规格", ref)
         self.assertEqual(len(lg.wrote("docs", "+create")), 1)                    # a new document: the link changes with the content
-        self.assertNotEqual(self.value(task, "research_task", "规格"), first)
+        self.quiet(workitem.update, self.lg(), task, ["规格=" + ref])
+        self.assertEqual(self.value(task, "research_task", "规格"), second)
+        self.assertNotEqual(second, first)
         self.assertEqual(len(self.receipts(task)), 2)
+        self.quiet(workitem.update, self.lg(), task, ["规格=" + first])           # a link is taken as it is
+        self.assertEqual(self.value(task, "research_task", "规格"), first)
 
     def test_a_document_that_exists_is_not_made_twice_after_a_failure(self):
         task = self.task()
         ref = self.local(name="spec.md")
         before = len(self.fake.docs)
-        self.fails(workitem.update, self.lg(replies=[(("workitem", "update"), ledger_core.LedgerError("down"))]), task, ["规格=" + ref])
-        self.assertEqual(len(self.fake.docs), before + 1)                        # uploaded, the field not written
+        self.fails(docs.attach, self.lg(replies=[(("wiki", "+node-get"), ledger_core.LedgerError("down"))]), task, "规格", ref)
+        self.assertEqual(len(self.fake.docs), before + 1)                        # created, its link not known yet
         lg = self.lg()
-        self.quiet(workitem.update, lg, task, ["规格=" + ref])
+        link = self.quiet(docs.attach, lg, task, "规格", ref)
         self.assertEqual((lg.wrote("docs", "+create"), len(self.fake.docs)), ([], before + 1))
-        self.assertTrue(self.value(task, "research_task", "规格"))
-        text = self.fails(workitem.update, self.lg(replies=[(("docs", "+create"), ledger_core.WriteMaybeDone("timeout"))]), task,
-                          ["需求文档=" + self.local(name="prd.md")])
+        self.fails(workitem.update, self.lg(replies=[(("workitem", "update"), ledger_core.LedgerError("down"))]), task, ["规格=" + ref])
+        self.quiet(workitem.update, self.lg(), task, ["规格=" + ref])             # the scribe's write again: the same document
+        self.assertEqual((self.value(task, "research_task", "规格"), len(self.fake.docs)), (link, before + 1))
+        text = self.fails(docs.attach, self.lg(replies=[(("docs", "+create"), ledger_core.WriteMaybeDone("timeout"))]), task,
+                          "需求文档", self.local(name="prd.md"))
         self.assertIn("没有拿到确定的结果", text)
-        self.assertIn("--set 需求文档=<文档链接>", self.fails(workitem.update, self.lg(), task, ["需求文档=@spec/prd.md"]))
+        self.assertIn("--set 需求文档=<文档链接>", self.fails(docs.attach, self.lg(), task, "需求文档", "@spec/prd.md"))
 
     def test_what_is_refused(self):
         task = self.task()
         self.assertIn("找不到文件 spec/none.md", self.fails(workitem.update, self.lg(), task, ["规格=@spec/none.md"]))
+        self.assertIn("找不到文件 spec/none.md", self.fails(docs.attach, self.lg(), task, "规格", "spec/none.md"))
         self.local("", "empty.md")
         self.assertIn("是空的", self.fails(workitem.update, self.lg(), task, ["规格=@spec/empty.md"]))
+        self.assertIn("是空的", self.fails(docs.attach, self.lg(), task, "规格", "spec/empty.md"))
+        self.assertIn("“成功标准”不是链接字段，不用上传", self.fails(docs.attach, self.lg(), task, "成功标准", self.local("十个节点\n", "goal.txt")))
         self.quiet(workitem.update, self.lg(), task, ["成功标准=" + self.local("十个节点都确认到归档\n", "goal.txt")])
         self.assertEqual(self.value(task, "research_task", "成功标准"), "十个节点都确认到归档")   # a text field still takes the text
         path = self.write(SHEET % ("正式实验", "产品 +2（Product-p2-01）"), "second.md")

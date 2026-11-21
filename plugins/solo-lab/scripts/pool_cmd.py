@@ -518,6 +518,9 @@ def recover_cmd(root, policy):
             continue
         if isinstance(rec, dict) and rec.get("status") not in (None, "registered", "replied"):
             if os.path.basename(path).startswith("reply-"):
+                if rec.get("status") == "created":           # the document itself is not finished: the author's step
+                    uploads.append("%s（交付包没传完，作者 %s 重跑 docs.py upload <草稿>）" % (rec.get("draft"), rec.get("by") or "?"))
+                    continue
                 replies.append("%s（答复 #%s，%s）" % (rec.get("draft"), rec.get("parent"), rec.get("status")))
             else:
                 unfinished.append("%s（#%s，%s）" % (rec.get("draft"), rec.get("work_item_id"), rec.get("status")))
@@ -526,7 +529,7 @@ def recover_cmd(root, policy):
     if unfinished:
         print("- 书记员先补完写到一半的登记，逐条运行 workitem.py register <草稿> --resume：%s" % "；".join(unfinished))
     if replies:
-        print("- 书记员补完写到一半的答复，逐条重跑 workitem.py reply <草稿>（会接着上次的回执做）：%s" % "；".join(replies))
+        print("- 交付包已上传、“交付包”字段还没填：书记员逐条运行 workitem.py reply <草稿>（承接方把请求再发一次）：%s" % "；".join(replies))
     for r in rows:
         st, before = r["status"], r.get("prev_status") or ""
         if before == "idle_bg":

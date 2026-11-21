@@ -9,6 +9,9 @@ printed as the request to send to the scribe.
                                             created under its node, its link kept in an upload receipt
     docs.py relink <ID>                     once the item exists: its ID into the 关联工作项 line and the
                                             title of its main document
+    docs.py upload <交付包 draft>            a delivery: hung under the main document of the request it answers;
+                                            the scribe's `workitem.py reply` fills the request's 交付包 field
+    docs.py attach <ID> <field> <file>      a step's output document for one of the item's link fields
     docs.py revise <ID> <draft> --note N    the next version of a 需求包 or 决策包: the main document's
                                             opening up to 状态包 replaced in place, a line in 交接记录
     docs.py status-block <ID> --file F      replace the 状态包 section (block_replace)
@@ -58,6 +61,8 @@ def upload(lg, path, source=None, doc=None):
     spec = lg.spec
     kind = core.sheet_kind(path)
     d = core.Sheet(spec, path, kind) if kind else core.Draft(spec, path)
+    if not kind and d.pid == "delivery":
+        return upload_delivery(lg, d, path, doc)
     wid = kind or core.work_item_type(d)
     core.check_new(d, kind)
     names, owner_seq, owner = core.doc_owner(lg, None, d)
@@ -113,6 +118,167 @@ def upload(lg, path, source=None, doc=None):
     remember(status="uploaded", sha256=digest, title=title, parent=parent, source=source, type=wid)
     print(("上传：文档建在节点 %s 下：%s\n%s" if lg.mode == "apply" else "预览：会把文档建在节点 %s 下（%s）。\n%s") % (parent, url, then))
     return url
+
+
+def upload_delivery(lg, d, path, doc=None):
+    """Hang a 交付包 under the main document of the request it answers; the session that delivers runs it,
+    and the scribe's `workitem.py reply` puts the link into the request's 交付包 field afterwards.
+
+    The parent node is worked out before anything is written; the receipt packages/sent/reply-<ID>-<file>.json
+    lets a rerun reuse the document instead of creating a second one, and keeps the version handed in. A
+    delivery changed after one that was not accepted is handed in again, from the same file or another: its
+    version is the last one plus one, it becomes a new document (the earlier one stays where it is); the same
+    version again, or a number that does not follow, stops with the number to write."""
+    spec = lg.spec
+    if not d.linked:
+        raise core.LedgerError("包头的“关联工作项”要写它答复的工作项 ID，比如 #2003")
+    if not d.author:
+        raise core.LedgerError("发出方要带会话名，比如“算法 +1（Alg-p1-01）”")
+    core.must_be(lg, "上传这份交付包", names=[d.author], why="这份交付包的发出方是 %s，请它来上传" % d.author)
+    parent_id = core.item_id_of(d.linked[0])
+    rel = os.path.relpath(path, lg.root)
+    rpath = core.receipt_file(lg, ["reply-%s-%s" % (parent_id, core.safe_name(path))], path)
+    rec = (core.load_json(rpath, {}) or {}) if lg.mode != "offline" else {}
+    rec = rec if isinstance(rec, dict) else {}
+    earlier = core.delivered(lg, parent_id) if lg.mode != "offline" else []
+    again = bool(earlier or rec.get("earlier"))        # not the first delivery of this request
+    then = "接着给书记员发【%s】：请它运行 %sworkitem.py reply %s --apply 填“交付包”字段，再确认“执行”这一步。" % (
+        spec.term("msg", "register_request"), RUN, rel)
+    if rec.get("status") == "uploaded" and rec.get("doc") and (rec.get("version") or 1) == d.version and not doc:
+        print("这份%s（第 %d 版）已经上传过，没有再传：%s\n%s" % (spec.pkg(d.pid), d.version, rec["doc"], then))
+        return rec["doc"]
+    if earlier and rec.get("status") not in ("created", "uploaded"):     # handed in again; an unfinished run of this one just goes on
+        last, receipt = max(v or 1 for v, _ in earlier), earlier[-1][1]
+        how = "验收不通过、改好后重新交的，包头“%s”写第 %d 版，再上传" % (orgspec.VERSION, last + 1)
+        if rec.get("status") == "registered" and d.version == (rec.get("version") or 1):
+            raise core.LedgerError("这份%s（第 %d 版）已经挂到 #%s 下了（回执 %s），不要重复上传；%s" % (
+                spec.pkg(d.pid), d.version, parent_id, os.path.relpath(rpath, lg.root), how))
+        follows = d.version == last + 1 if all(v for v, _ in earlier) else d.version > last   # an old receipt: its number is not known
+        if not follows:
+            raise core.LedgerError("#%s 已经收过第 %d 版%s（回执 %s），这一份写的是第 %d 版：%s" % (
+                parent_id, last, spec.pkg(d.pid), receipt, d.version, how))
+    it = lg.item(parent_id)
+    if it is not None and not it.get("type"):
+        raise core.LedgerError("认不出 #%s 的类型（type_key %s）；确认工作项 ID 没写错，或者先跑 space.py feishu --live --apply 重读类型" % (
+            parent_id, it.get("type_key")))
+    wid = (it and it.get("type")) or "same_seq"
+    if wid not in lg.contract.types_with("fields", "delivery_link"):
+        raise core.LedgerError("交付包答复的是同序列需求或跨序列需求，#%s 是%s" % (parent_id, spec.term("wi", wid)))
+    if again and it is not None and it["state"] in core.closed_states(lg):
+        raise core.LedgerError("#%s 已经是“%s”：工作项关闭以后不再重新交%s" % (parent_id, it["state"], spec.pkg(d.pid)))
+    node = lg.node_of(lg.doc_url(parent_id, it))
+    if not node:
+        raise core.LedgerError("#%s 的主文档不是知识库文档，答复没处挂" % parent_id)
+    title = spec.rules["naming"]["reply_doc"].replace("<答复包名>", spec.pkg(d.pid)) \
+        .replace("<作者会话名>", d.author or "?").replace("<同一个任务名>", d.task)
+    if rec.get("status") == "registered":             # this file handed in again: a new document, the earlier one stays
+        rec = {"earlier": list(rec.get("earlier") or []) + [{"version": rec.get("version") or 1, "doc": rec.get("doc")}]}
+
+    def remember(**kw):
+        rec.update({k: v for k, v in kw.items() if v is not None})
+        if lg.mode == "apply":
+            rec.update(draft=rel, parent=parent_id, version=d.version, updated_at=core.now(),
+                       by=(lg.caller or {}).get("name") or core.RESEARCHER)
+            rec.setdefault("status", "created")
+            os.makedirs(core.sent_dir(lg), exist_ok=True)
+            core.save_json(rpath, rec)
+
+    def create():
+        return lg.create_doc(node, title, d.body_without_title(), created=lambda x: remember(docx=x, doc_unknown=False))
+
+    try:
+        link = core.main_document(lg, dict(rec), doc, "#%s 的主文档下" % parent_id, create, remember)
+    except core.LedgerError as e:
+        receipt = os.path.relpath(rpath, lg.root)
+        if rec.get("doc_unknown") and not (rec.get("doc") or rec.get("docx")):
+            raise core.LedgerError("%s\n建文档没有拿到确定的结果（回执 %s）：先在网页上核对 #%s 的主文档下有没有这份%s；建好了的，重跑时加 --doc <文档链接>；确认没建成的，加 --doc new" % (
+                e, receipt, parent_id, spec.pkg(d.pid)))
+        if rec.get("doc") or rec.get("docx"):
+            raise core.LedgerError("%s\n文档已经建好，回执记在 %s；修好后重跑同一条命令，会接着用这份文档，不会再建一个" % (e, receipt))
+        raise core.LedgerError("%s\n文档还没建，飞书里没有写入；修好后重跑同一条命令即可" % e)
+    remember(status="uploaded")
+    print(("上传：%s%s挂在 #%s 的主文档下：%s%s\n%s" if lg.mode == "apply" else "预览：会把%s%s挂在 #%s 的主文档下（%s）%s。\n%s") % (
+        spec.pkg(d.pid), "第 %d 版" % d.version if again else "", parent_id, link, "，上一版的文档留在原处" if again else "", then))
+    return link
+
+
+def attach(lg, item_id, field, path):
+    """Upload a local file as the document of one of an item's link fields, under the item's main document;
+    return its link. The session that answers for the step runs it (1.1.0); the scribe's --set <字段>=@<文件>
+    then finds the document by the file and its content, or takes the link as it is.
+
+    One receipt per file and content (packages/sent/attach-<ID>-<field>-<file>-<hash>.json): a rerun with the same
+    content uses the document it made, a changed file becomes a new document with a new link, so a field
+    frozen by a signature cannot change unnoticed."""
+    item_id = core.item_id_of(item_id)
+    it, wid = core.typed_item(lg, item_id)
+    try:
+        f = lg.field(wid, field)
+    except (KeyError, orgspec.OrgSpecError) as e:
+        raise core.LedgerError("%s（%s有哪些字段见 feishu/space.md）" % (e, lg.spec.term("wi", wid)))
+    key, label = f["field_key"], f.get("name") or field
+    if f.get("field_type") != "link":
+        raise core.LedgerError("“%s”不是链接字段，不用上传：值直接写进书记员的 --set %s=<值>" % (label, label))
+    full = core.find_file(lg, path[1:] if path.startswith("@") else path)
+    if not full:
+        raise core.LedgerError("找不到文件 %s（先按当前目录、再按项目目录找）" % path)
+    step_owner(lg, wid, it, item_id, "给 #%s 上传“%s”" % (item_id, label))
+    text = core.read_text_file(lg, full)
+    rel = os.path.relpath(full, lg.root)
+    if not text.strip():
+        raise core.LedgerError("文件 %s 是空的" % rel)
+    rpath, rec = core.attach_receipt(lg, item_id, label, full, text) if lg.mode != "offline" else (None, {})
+    receipt = os.path.relpath(rpath, lg.root) if rpath else ""
+    then = "请书记员写进工作项：--set %s=@%s（文件没有再改，它就用这份文档），或者 --set %s=<上面的链接>。" % (label, rel, label)
+    if rec.get("status") == "registered" and rec.get("doc"):
+        print("%s 没有改过，沿用上次上传的文档：%s\n%s" % (rel, rec["doc"], then))
+        return rec["doc"]
+    if rec.get("doc_unknown") and not (rec.get("doc") or rec.get("docx")):
+        raise core.LedgerError("上次上传 %s 没有拿到确定的结果（回执 %s）。先在网页上看 #%s 的主文档下有没有这份文档：有的话把它的链接直接交给书记员，"
+                               "--set %s=<文档链接>；确认没有，删掉这份回执再重跑" % (rel, receipt, item_id, label))
+    node = lg.node_of(lg.doc_url(item_id, it))
+    if not node:
+        raise core.LedgerError("#%s 的主文档不是知识库文档，“%s”没处挂" % (item_id, label))
+    lines = text.splitlines()
+    head = next((i for i, l in enumerate(lines) if l.startswith("# ")), None)
+    title = "%s：%s" % (label, core.title_of(text) or (it or {}).get("name") or "#%s" % item_id)
+    body = "\n".join(l for i, l in enumerate(lines) if i != head).strip() + "\n"
+
+    def remember(**kw):
+        rec.update({k: v for k, v in kw.items() if v is not None})
+        if lg.mode == "apply":
+            rec.update(draft=rel, parent=str(item_id), field=label, updated_at=core.now(),
+                       by=(lg.caller or {}).get("name") or core.RESEARCHER)
+            rec.setdefault("status", "created")
+            os.makedirs(core.sent_dir(lg), exist_ok=True)
+            core.save_json(rpath, rec)
+
+    def create():
+        return lg.create_doc(node, title, body, created=lambda x: remember(docx=x, doc_unknown=False))
+
+    try:
+        link = core.main_document(lg, dict(rec), None, "#%s 的主文档下" % item_id, create, remember)
+    except core.WriteMaybeDone as e:
+        raise core.LedgerError("%s\n上传 %s 没有拿到确定的结果（回执 %s）。先在网页上看 #%s 的主文档下有没有这份文档：有的话把它的链接直接交给书记员，"
+                               "--set %s=<文档链接>；确认没有，删掉这份回执再重跑" % (e, rel, receipt, item_id, label))
+    remember(status="registered")
+    print(("已上传“%s”：%s\n%s" if lg.mode == "apply" else "预览：会上传“%s”（%s）。\n%s") % (title, link, then))
+    return link
+
+
+def step_owner(lg, wid, it, item_id, what):
+    """Stop unless the session answers for a step of the item that is in progress, or for its main document."""
+    me = lg.caller
+    if me is None or lg.mode == "offline":
+        return core.must_be(lg, what)
+    words = []
+    for node in [n for n in (lg.flow_nodes(item_id) or []) if n["status"] == "doing"]:
+        who, test = core.responsible(lg, wid, it, node)
+        if test(me["name"]):
+            return None
+        words.append("“%s”归%s" % (node["name"], who))
+    names, seq, owner = core.doc_owner(lg, it)
+    return core.must_be(lg, what, names=names, seq=seq, why="%s，主文档归 %s 写" % ("、".join(words) or "这条工作项没有进行中的步骤", owner))
 
 
 def retitle(lg, url, title, whole=None):
@@ -609,6 +775,8 @@ def main(argv=None):
     p.add_argument("--source", help="来源工作项 ID：执行关系的需求包挂在它的主文档下面")
     p.add_argument("--doc", help="上次建文档没有拿到确定的结果时：已经建好的文档的链接，或者 new 重新建")
     p.add_argument("--apply", action="store_true")
+    p = sub.add_parser("attach"); p.add_argument("id"); p.add_argument("field"); p.add_argument("file")
+    p.add_argument("--apply", action="store_true")
     p = sub.add_parser("revise"); p.add_argument("id"); p.add_argument("draft")
     p.add_argument("--note", required=True, help="这一版改了什么，记进交接记录")
     p.add_argument("--apply", action="store_true")
@@ -622,6 +790,8 @@ def main(argv=None):
 def run_command(lg, args):
     if args.cmd == "upload":
         upload(lg, args.draft, args.source, args.doc)
+    elif args.cmd == "attach":
+        attach(lg, args.id, args.field, args.file)
     elif args.cmd == "revise":
         revise(lg, args.id, args.draft, args.note)
         if lg.mode == "apply" and core.receipt_of(lg, str(args.id).lstrip("#")).get("type") == "cross_request":

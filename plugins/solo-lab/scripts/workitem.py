@@ -30,8 +30,6 @@ in ledger_core.py.
 """
 import argparse
 import datetime
-import glob
-import hashlib
 import json
 import os
 import re
@@ -463,29 +461,15 @@ def after_register(lg, wid, d, item_id):
         print("接着看这一步要什么：ledger.py next %s" % item_id)
 
 
-def delivered(lg, parent_id):
-    """The deliveries a request has received so far, from the reply receipts that finished
-    (packages/sent/reply-<ID>-*.json): [(version, receipt)], lowest first. A receipt from before 1.0.6 keeps
-    no version: None, which sorts as the first."""
-    out, folder = [], glob.escape(core.sent_dir(lg))
-    for path in sorted(glob.glob(os.path.join(folder, "reply-%s-*.json" % parent_id))):
-        rec = core.load_json(path, {})
-        if isinstance(rec, dict) and rec.get("status") == "registered" and str(rec.get("parent", parent_id)) == str(parent_id):
-            out.append((rec.get("version") if isinstance(rec.get("version"), int) else None, os.path.relpath(path, lg.root)))
-    return sorted(out, key=lambda x: x[0] or 1)
-
-
 def reply(lg, path, doc=None):
-    """Hang a 交付包 under the main document of the request it answers and put its link into
-    the request's 交付包 field.
+    """Put the link of a 交付包 its author uploaded into the 交付包 field of the request it answers.
 
-    The target field and the parent node are worked out before anything is written; a
-    receipt packages/sent/reply-<ID>-<file>.json lets a rerun reuse the document
-    instead of creating a second one. The receipt keeps the version handed in. A delivery
-    changed after one that was not accepted is handed in again, from the same file or another:
-    its version is the last one plus one, it becomes a new document (the earlier one stays
-    where it is) and the 交付包 field takes its link; the same version again, or a number that
-    does not follow, stops with the number to write.
+    From 1.1.0 the scribe creates no document: the session that delivers runs `docs.py upload` on the draft,
+    which hangs the document under the request's main document and keeps the link in the receipt
+    packages/sent/reply-<ID>-<file>.json (the version, and the earlier versions of a delivery handed in again).
+    This command reads that receipt, or takes the link from --doc, writes the field and a comment, and marks
+    the receipt registered. A draft that was not uploaded stops here with the command its author runs; one
+    that is registered already is not written twice.
     """
     spec = lg.spec
     d = core.Draft(spec, path)
@@ -494,21 +478,14 @@ def reply(lg, path, doc=None):
     if not d.linked:
         raise core.LedgerError("包头的“关联工作项”要写它答复的工作项 ID，比如 #2003")
     parent_id = core.item_id_of(d.linked[0])
+    rel = os.path.relpath(path, lg.root)
     rpath = core.receipt_file(lg, ["reply-%s-%s" % (parent_id, core.safe_name(path))], path)
     rec = (core.load_json(rpath, {}) or {}) if lg.mode != "offline" else {}
     rec = rec if isinstance(rec, dict) else {}
-    earlier = delivered(lg, parent_id) if lg.mode != "offline" else []
-    again = bool(earlier or rec.get("earlier"))        # not the first delivery of this request
-    if earlier and rec.get("status") != "created":     # handed in again; an unfinished run of this one just goes on
-        last, receipt = max(v or 1 for v, _ in earlier), earlier[-1][1]
-        how = "验收不通过、改好后重新交的，包头“%s”写第 %d 版，再 reply" % (orgspec.VERSION, last + 1)
-        if rec.get("status") == "registered" and d.version == (rec.get("version") or 1):
-            raise core.LedgerError("这份%s（第 %d 版）已经挂到 #%s 下了（回执 %s），不要重复登记；%s" % (
-                spec.pkg(d.pid), d.version, parent_id, os.path.relpath(rpath, lg.root), how))
-        follows = d.version == last + 1 if all(v for v, _ in earlier) else d.version > last   # an old receipt: its number is not known
-        if not follows:
-            raise core.LedgerError("#%s 已经收过第 %d 版%s（回执 %s），这一份写的是第 %d 版：%s" % (
-                parent_id, last, spec.pkg(d.pid), receipt, d.version, how))
+    how = "验收不通过、改好后重新交的，包头“%s”写下一版，承接方先运行 docs.py upload %s --apply，再 reply" % (orgspec.VERSION, rel)
+    if rec.get("status") == "registered" and d.version == (rec.get("version") or 1):
+        raise core.LedgerError("这份%s（第 %d 版）已经挂到 #%s 下了（回执 %s），不要重复登记；%s" % (
+            spec.pkg(d.pid), d.version, parent_id, os.path.relpath(rpath, lg.root), how))
     it = lg.item(parent_id)
     if it is not None and not it.get("type"):
         raise core.LedgerError("认不出 #%s 的类型（type_key %s）；确认工作项 ID 没写错，或者先跑 space.py feishu --live --apply 重读类型" % (
@@ -517,42 +494,29 @@ def reply(lg, path, doc=None):
     if wid not in lg.contract.types_with("fields", "delivery_link"):
         raise core.LedgerError("交付包答复的是同序列需求或跨序列需求，#%s 是%s" % (parent_id, spec.term("wi", wid)))
     link_key = lg.field(wid, "delivery_link")["field_key"]
+    again = bool(rec.get("earlier")) or (d.version or 1) > 1          # not the first delivery of this request
     if again and it is not None and it["state"] in core.closed_states(lg):
         raise core.LedgerError("#%s 已经是“%s”：工作项关闭以后不再重新交%s" % (parent_id, it["state"], spec.pkg(d.pid)))
-    node = lg.node_of(lg.doc_url(parent_id, it))
-    if not node:
-        raise core.LedgerError("#%s 的主文档不是知识库文档，答复没处挂" % parent_id)
-    title = spec.rules["naming"]["reply_doc"].replace("<答复包名>", spec.pkg(d.pid)) \
-        .replace("<作者会话名>", d.author or "?").replace("<同一个任务名>", d.task)
-    if rec.get("status") == "registered":             # this file handed in again: a new document, the earlier one stays
-        rec = {"earlier": list(rec.get("earlier") or []) + [{"version": rec.get("version") or 1, "doc": rec.get("doc")}]}
-
-    def remember(**kw):
-        rec.update({k: v for k, v in kw.items() if v is not None})
-        if lg.mode == "apply":
-            rec.update(draft=os.path.relpath(path, lg.root), parent=parent_id, version=d.version, updated_at=core.now())
-            rec.setdefault("status", "created")
-            os.makedirs(core.sent_dir(lg), exist_ok=True)
-            core.save_json(rpath, rec)
-
-    def create():
-        return lg.create_doc(node, title, d.body_without_title(), created=lambda x: remember(docx=x, doc_unknown=False))
-
-    try:
-        link = core.main_document(lg, dict(rec), doc, "#%s 的主文档下" % parent_id, create, remember)
-        lg.meegle("workitem", "update", "--work-item-id", parent_id, "--fields", json.dumps(
-            [{"field_key": link_key, "field_value": link}]), write=True)
-        lg.meegle("comment", "add", "--work-item-id", parent_id, "--content",
-                  "%s 收到%s%s：%s" % (lg.tag, spec.pkg("delivery"), "第 %d 版" % d.version if again else "", link), write=True)
-    except core.LedgerError as e:
-        receipt = os.path.relpath(rpath, lg.root)
-        if rec.get("doc_unknown") and not (rec.get("doc") or rec.get("docx")):
-            raise core.LedgerError("%s\n建文档没有拿到确定的结果（回执 %s）：先在网页上核对 #%s 的主文档下有没有这份%s；建好了的，重跑时加 --doc <文档链接>；确认没建成的，加 --doc new" % (
-                e, receipt, parent_id, spec.pkg(d.pid)))
-        if rec.get("doc") or rec.get("docx"):
-            raise core.LedgerError("%s\n文档已经建好，回执记在 %s；修好后重跑同一条命令，会接着用这份文档，不会再建一个" % (e, receipt))
-        raise core.LedgerError("%s\n文档还没建，飞书里没有写入；修好后重跑同一条命令即可" % e)
-    remember(status="registered")
+    author = d.author or "承接方的会话"
+    if doc and doc.strip().lower() == "new":
+        raise core.LedgerError("书记员不建文档（1.1.0 起文档谁负责谁写）：请 %s 运行 docs.py upload %s --doc new --apply，再 reply" % (author, rel))
+    if doc:
+        link = core.doc_from_link(lg, doc, given=True)
+    elif lg.mode == "offline":
+        link = "<交付包的文档链接>"
+    elif rec.get("doc") and rec.get("status") in ("uploaded", "created") and (rec.get("version") or 1) == d.version:
+        link = rec["doc"]
+    else:
+        raise core.LedgerError("这份%s的文档还没上传%s：文档谁负责谁写，请 %s 先运行 python3.12 -I .claude/solo-lab/bin/docs.py upload %s --apply，再请书记员 reply" % (
+            spec.pkg(d.pid), "（回执里是第 %s 版，草稿是第 %s 版）" % (rec.get("version") or 1, d.version) if rec.get("doc") else "", author, rel))
+    lg.meegle("workitem", "update", "--work-item-id", parent_id, "--fields", json.dumps(
+        [{"field_key": link_key, "field_value": link}]), write=True)
+    lg.meegle("comment", "add", "--work-item-id", parent_id, "--content",
+              "%s 收到%s%s：%s" % (lg.tag, spec.pkg("delivery"), "第 %d 版" % d.version if again else "", link), write=True)
+    if lg.mode == "apply":
+        rec.update(draft=rel, parent=parent_id, version=d.version, doc=link, status="registered", updated_at=core.now())
+        os.makedirs(core.sent_dir(lg), exist_ok=True)
+        core.save_json(rpath, rec)
     print("交付包%s已挂到 #%s 下，“%s”字段已填%s。承接方接着请书记员确认这一步：workitem.py confirm %s --by <承接方的会话名>" % (
         "第 %d 版" % d.version if again else "", parent_id, lg.label(wid, link_key),
         "，上一版的文档留在原处" if again else "", parent_id))
@@ -572,29 +536,12 @@ def set_value(lg, raw):
     if not raw.startswith("@") or len(raw) == 1:
         return raw
     name = raw[1:]
-    full = find_file(lg, name)
+    full = core.find_file(lg, name)
     if full:
-        return read_text_file(lg, full).strip()
+        return core.read_text_file(lg, full).strip()
     if not re.search(r"\s", name) or re.search(r"/|<|>|\.[A-Za-z0-9]{1,5}$", name):
         raise core.LedgerError("找不到文件 %s（--set 的 @文件 先按当前目录、再按项目目录找）；要写以 @ 开头的文字，用 @@" % name)
     return raw
-
-
-def find_file(lg, name):
-    """The file an @name of --set points at: looked for under the current directory, then the project."""
-    for base in dict.fromkeys((os.getcwd(), lg.root)):
-        full = name if os.path.isabs(name) else os.path.join(base, name)
-        if os.path.isfile(full):
-            return full
-    return None
-
-
-def read_text_file(lg, full):
-    try:
-        with open(full, encoding="utf-8") as f:
-            return f.read()
-    except UnicodeDecodeError:
-        raise core.LedgerError("文件 %s 不是 UTF-8 文本；转成 UTF-8 再传" % os.path.relpath(full, lg.root))
 
 
 def parse_sets(lg, wid, pairs):
@@ -607,7 +554,7 @@ def parse_sets(lg, wid, pairs):
             f = lg.field(wid, ref)
             if f.get("field_type") == "link" and raw.startswith("@") and not raw.startswith("@@") and len(raw) > 1:
                 # a link field given a local file: the file becomes a document when the values are written
-                full = find_file(lg, raw[1:])
+                full = core.find_file(lg, raw[1:])
                 if not full:
                     raise core.LedgerError("找不到文件 %s（--set 的 @文件 先按当前目录、再按项目目录找）" % raw[1:])
                 out.append((ref, {"field_key": f["field_key"], "field_value": "@" + os.path.relpath(full, lg.root), "upload": full}))
@@ -618,63 +565,32 @@ def parse_sets(lg, wid, pairs):
     return out
 
 
-def attach(lg, item_id, it, wid, key, path):
-    """Upload a local file as a document under the work item's main document; return its link.
+def attached(lg, item_id, it, wid, key, path):
+    """The link of the document a session uploaded for a link field given as a local file (`docs.py attach`).
 
-    This is how a document written by the session that owns a step gets into Feishu without a
-    request of its own: the step is the work item behind it. One receipt per file and content
-    (packages/sent/attach-<ID>-<field>-<file>-<hash>.json): a rerun with the same content uses
-    the document it made, a changed file becomes a new document with a new link, so a field
-    frozen by a signature cannot change unnoticed.
-    """
-    text = read_text_file(lg, path)
+    From 1.1.0 the scribe uploads nothing: the session that answers for the step uploads the file, and the
+    scribe's --set <字段>=@<文件> finds that document by the file and its content (the receipt
+    packages/sent/attach-<ID>-<field>-<file>-<hash>.json). A file that was not uploaded, or that changed after it
+    was, stops here with the command to run: a field frozen by a signature cannot change unnoticed."""
+    text = core.read_text_file(lg, path)
     rel, label = os.path.relpath(path, lg.root), lg.label(wid, key)
     if not text.strip():
         raise core.LedgerError("文件 %s 是空的" % rel)
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
-    rpath = core.receipt_file(lg, ["attach-%s-%s-%s-%s" % (item_id, core.safe_name(label), core.safe_name(path), digest)], path)
-    rec = (core.load_json(rpath, {}) or {}) if lg.mode != "offline" else {}
-    rec = rec if isinstance(rec, dict) else {}
-    receipt = os.path.relpath(rpath, lg.root)
+    if lg.mode == "offline":
+        return "<“%s”的文档链接>" % label
+    _, rec = core.attach_receipt(lg, item_id, label, path, text)
     if rec.get("status") == "registered" and rec.get("doc"):
-        print("%s 没有改过，沿用上次上传的文档：%s" % (rel, rec["doc"]))
+        print("%s 用的是 %s 上传的文档：%s" % (rel, rec.get("by") or "它的作者", rec["doc"]))
         return rec["doc"]
-    if rec.get("doc_unknown") and not (rec.get("doc") or rec.get("docx")):
-        raise core.LedgerError("上次上传 %s 没有拿到确定的结果（回执 %s）。先在网页上看 #%s 的主文档下有没有这份文档：有的话把它的链接直接写进 "
-                          "--set %s=<文档链接>；确认没有，删掉这份回执再重跑" % (rel, receipt, item_id, label))
-    node = lg.node_of(lg.doc_url(item_id, it))
-    if not node:
-        raise core.LedgerError("#%s 的主文档不是知识库文档，“%s”没处挂" % (item_id, label))
-    lines = text.splitlines()
-    head = next((i for i, l in enumerate(lines) if l.startswith("# ")), None)
-    title = "%s：%s" % (label, core.title_of(text) or (it or {}).get("name") or "#%s" % item_id)
-    body = "\n".join(l for i, l in enumerate(lines) if i != head).strip() + "\n"
-
-    def remember(**kw):
-        rec.update({k: v for k, v in kw.items() if v is not None})
-        if lg.mode == "apply":
-            rec.update(draft=rel, parent=str(item_id), field=label, updated_at=core.now())
-            rec.setdefault("status", "created")
-            os.makedirs(core.sent_dir(lg), exist_ok=True)
-            core.save_json(rpath, rec)
-
-    def create():
-        return lg.create_doc(node, title, body, created=lambda x: remember(docx=x, doc_unknown=False))
-
-    try:
-        link = core.main_document(lg, dict(rec), None, "#%s 的主文档下" % item_id, create, remember)
-    except core.WriteMaybeDone as e:
-        raise core.LedgerError("%s\n上传 %s 没有拿到确定的结果（回执 %s）。先在网页上看 #%s 的主文档下有没有这份文档：有的话把它的链接直接写进 "
-                          "--set %s=<文档链接>；确认没有，删掉这份回执再重跑" % (e, rel, receipt, item_id, label))
-    remember(status="registered")
-    if lg.mode == "apply":
-        print("已上传“%s”：%s" % (title, link))
-    return link
+    raise core.LedgerError("%s 还没上传，或者上传以后改过：书记员不上传文档（1.1.0 起文档谁负责谁写）。请这一步的负责会话运行 "
+                           "python3.12 -I .claude/solo-lab/bin/docs.py attach %s %s %s --apply，再重跑这条命令；"
+                           "手里已经有文档链接的，直接写 --set %s=<文档链接>" % (rel, item_id, label, rel, label))
 
 
 def attach_documents(lg, item_id, it, wid, sets):
-    """--set pairs with every local file given for a link field uploaded and replaced by its link."""
-    return [(ref, {"field_key": v["field_key"], "field_value": attach(lg, item_id, it, wid, v["field_key"], v["upload"])}
+    """--set pairs with every local file given for a link field replaced by the link of the document its
+    session uploaded (attached)."""
+    return [(ref, {"field_key": v["field_key"], "field_value": attached(lg, item_id, it, wid, v["field_key"], v["upload"])}
              if "upload" in v else v) for ref, v in sets]
 
 
@@ -1198,7 +1114,7 @@ def main(argv=None):
     ap, sub = core.parser("写智能体组织的工作项")
     for name in ("register", "reply"):
         p = sub.add_parser(name); p.add_argument("draft"); p.add_argument("--apply", action="store_true")
-        p.add_argument("--doc", help="上次建文档没有确定结果时：已建好的文档链接，或 new 重新建")
+        p.add_argument("--doc", help="作者上传的文档的链接：没有上传回执时用")
         if name == "register":
             p.add_argument("--source", help="来源工作项的 ID")
             p.add_argument("--task", help="所属研究任务的 ID；空间里只有一条没归档的研究任务时不用写")

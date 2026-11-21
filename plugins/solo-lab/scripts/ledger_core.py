@@ -1310,6 +1310,47 @@ def run_conditions_hints(d):
     return hints
 
 
+def find_file(lg, name):
+    """The file an @name of --set points at: looked for under the current directory, then the project."""
+    for base in dict.fromkeys((os.getcwd(), lg.root)):
+        full = name if os.path.isabs(name) else os.path.join(base, name)
+        if os.path.isfile(full):
+            return full
+    return None
+
+
+def read_text_file(lg, full):
+    try:
+        with open(full, encoding="utf-8") as f:
+            return f.read()
+    except UnicodeDecodeError:
+        raise LedgerError("文件 %s 不是 UTF-8 文本；转成 UTF-8 再传" % os.path.relpath(full, lg.root))
+
+
+def delivered(lg, parent_id):
+    """The deliveries a request has received so far, from the reply receipts that finished
+    (packages/sent/reply-<ID>-*.json): [(version, receipt)], lowest first. A receipt from before 1.0.6 keeps
+    no version: None, which sorts as the first."""
+    out, folder = [], glob.escape(sent_dir(lg))
+    for path in sorted(glob.glob(os.path.join(folder, "reply-%s-*.json" % parent_id))):
+        rec = load_json(path, {})
+        if isinstance(rec, dict) and rec.get("status") == "registered" and str(rec.get("parent", parent_id)) == str(parent_id):
+            out.append((rec.get("version") if isinstance(rec.get("version"), int) else None, os.path.relpath(path, lg.root)))
+    return sorted(out, key=lambda x: x[0] or 1)
+
+
+
+
+def attach_receipt(lg, item_id, label, path, text):
+    """(path, receipt) of the upload of a local file for one of an item's link fields: one receipt per file
+    and content (packages/sent/attach-<ID>-<field>-<file>-<hash>.json). A rerun with the same content finds the
+    document it made; a changed file has no receipt yet and becomes a new document with a new link."""
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
+    target = receipt_file(lg, ["attach-%s-%s-%s-%s" % (item_id, safe_name(label), safe_name(path), digest)], path)
+    rec = load_json(target, {}) if os.path.exists(target) else {}
+    return target, rec if isinstance(rec, dict) else {}
+
+
 def check_new(d, kind):
     """A draft of a new work item: its sender is a session (a sheet's may be 研究员, 导师) and a package is
     its first version."""
