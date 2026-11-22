@@ -770,7 +770,7 @@ def append(lg, item_id, path):
         content = f.read()
     first = next((l for l in content.splitlines() if l.strip()), "")
     if not re.search(r"\[[A-Za-z]+\+[0-2]\]", first):
-        raise core.LedgerError("交接记录第一行要带会话标签，比如 [Alg+1]")
+        raise core.LedgerError("交接记录第一行要带会话标签，比如 [Alg+0]")
     core.must_be(lg, "追加 #%s 的交接记录" % item_id, any_claim=True)
     mine = (lg.caller or {}).get("tag")
     if mine and mine not in first:

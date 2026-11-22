@@ -5753,9 +5753,9 @@ class TextsAfterTheGatesTest(PoolProjectCase):
         the ledger skill say so."""
         texts = self.texts()
         for name, part in (
-                ("templates/decision.md", "执行方写会话的，只收各序列的 +2、入口和路由。写 +1、+0 或书记员的，包检查会退回"),
+                ("templates/decision.md", "执行方写会话的，只收各序列的 +2、入口和路由。写 +0 或书记员的，包检查会退回"),
                 ("templates/decision.md", "书记员确认“决定”时加 `--executor <会话名>`，把执行方改成那个会话"),
-                ("skills/packages/SKILL.md", "执行方写会话的，只收各序列的 +2、入口和路由，写 +1、+0 或书记员的包检查会退回"),
+                ("skills/packages/SKILL.md", "执行方写会话的，只收各序列的 +2、入口和路由，写 +0 或书记员的包检查会退回"),
                 ("skills/packages/SKILL.md", "书记员确认“决定”时加 `--executor <会话名>` 把执行方改成那个会话"),
                 ("skills/packages/references/principles.md", "只要有一个选项要研究员亲手做，就写“研究员”，研究员选了不用他动手的选项，书记员确认“决定”时用 `--executor` 改成会话。"),
                 ("skills/packages/references/examples.md", "书记员确认“决定”时加 `--executor Infra-p2-01`，把执行方改成会话。"),
