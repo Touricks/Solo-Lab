@@ -18,7 +18,7 @@ When Claude is used directly, what a session is doing, how far it has got and wh
 
 The user normally only needs to discuss tasks with the session that acts as the project entry, and that session delegates the work to the others. It is called the entry session below.
 
-- In this plugin the entry session is called PMO-p2. Its definition is in the Architecture section below.
+- In this plugin the entry session is called PMO-p1. Its definition is in the Architecture section below.
 
 ## Positioning
 
@@ -46,7 +46,7 @@ Once the plugin is installed, task-related documents are kept in four places
 
 | Component | Content |
 | --- | --- |
-| Claude Desktop | A section named after the Feishu Project space appears in the sidebar: 15 sessions by default, each taking one role |
+| Claude Desktop | A section named after the Feishu Project space appears in the sidebar: 12 sessions by default, each taking one role |
 | Local directory | Task-related files (code, task package drafts, third-party libraries and so on) |
 | Feishu Project | The task ledger, with five types of work item: research task, same-sequence request, cross-sequence request, decision and feedback.<br>Once opened, each type of work item follows its node workflow |
 | Feishu Wiki | Task documents. It keeps the task packages of every stage |
@@ -55,33 +55,35 @@ An overview of how Claude Desktop, Feishu Project and Feishu Wiki interact
 
 ```mermaid
 flowchart LR
-    you(["You (+3)"])
+    you(["You (+2)"])
 
     subgraph desktop["Claude Desktop"]
         direction LR
-        subgraph roles["Sessions of each sequence"]
+        entry["Entry<br/>PMO +1"]
+        router["Router"]
+        subgraph roles["Sessions of the sequences"]
             direction LR
-            entry["Entry<br/>PMO +2"]
-            heads["+2 of the other six sequences"]
-            staff["+1 and +0 of each sequence"]
-            entry -->|"delegate"| heads
+            heads["+1 of the six sequences"]
+            staff["+0 of each sequence"]
             heads -->|"delegate"| staff
-            staff -.->|"deliver"| heads
-            heads -.->|"deliver"| entry
+            staff -.->|"plan, delivery"| heads
         end
         scribe["Scribe"]
+        entry -->|"your words, as said"| router
+        router -->|"pass to the session in charge"| heads
+        heads -.->|"progress, things to decide"| router
+        router -.->|"decisions for you, milestones"| entry
         roles -->|"registration request"| scribe
     end
 
-    drafts["Local project directory<br/>task package drafts"]
+    drafts["Local project directory<br/>package drafts"]
     ledger[("Feishu Project<br/>task ledger")]
     wiki[("Feishu Wiki<br/>documents")]
 
     you -->|"talk, sign off"| entry
     roles -->|"write drafts"| drafts
-    drafts -.->|"read"| scribe
+    roles -->|"upload their own documents"| wiki
     scribe -->|"register, confirm nodes"| ledger
-    scribe -->|"upload"| wiki
 ```
 
 Key terms
@@ -89,7 +91,7 @@ Key terms
 | Term | Meaning |
 | --- | --- |
 | Sequence | The seven lines the work is divided into. What each one covers is in the table below |
-| Level | Each sequence has three levels: +2 sets goals and acceptance criteria, +1 decides the method, breaks work down and accepts it, +0 executes with the method it is given. The user plays +3 |
+| Level | Each sequence has two levels: +1 leads, sets goals and acceptance criteria, confirms plans and accepts the work; +0 does the work, handing in a plan first for work that needs judgement on the way and waiting for the +1 to confirm it, and executing with the method it is given for closed tasks. The user plays +2 |
 | Task package | A file that sessions use to hand work over. There are three kinds: request packages, delivery packages and decision packages |
 | Task ledger | All the work items in Feishu Project. It is the reference for how far each piece of work has got, who is responsible and what has been changed |
 
@@ -102,7 +104,7 @@ Responsibilities of the seven sequences
 | Engineering | Writes the experiment code for the plan the algorithm sequence proposes, runs the experiments and reports the results |
 | Infrastructure | Maintains the experiment platform and monitors the available resources |
 | Quality | Designs the evaluation protocol, maintains the eval set and carries out the evaluation |
-| PMO | Covers three duties: entry point for user interaction, task routing and task scribe.<br>These are, in turn: talking to the user, dispatching tasks and maintaining the user's decision queue (+2); deciding which work item a task belongs to (+1); maintaining the task ledger and the task documents (+0) |
+| PMO | Covers three duties: entry point for user interaction, task routing and task scribe.<br>These are, in turn: talking to the user and maintaining the user's decision queue (the entry, +1); deciding which work item a task belongs to and passing messages between the sequences (the router, +0); maintaining the task ledger (the scribe, +0) |
 | Liaison | Maintains the written material for the advisor or collaborators |
 
 ## Installation
@@ -154,12 +156,12 @@ After initialisation the user should be able to see:
 - A newly created Feishu Project space, named after the project by default.
 - A research task named after the project already exists in the Feishu Project space, stopped at the first step.
 - A Feishu knowledge space (wiki) with the same name
-- 15 new sessions in Claude Desktop, in the project session that holds the initialisation session.
+- 12 new sessions in Claude Desktop, in the project session that holds the initialisation session.
 - A new `.env` in the local project directory, recording the links to Feishu Project and Feishu Wiki.
 
 ## Usage
 
-The user normally only needs to talk to the project entry session. Its name in the sidebar is `[<project name>] PMO-p2-01`. Every task has 9 steps from opening to archive. The agents can advance some of them on their own, but three steps need a decision from the user, which gives the user more control over what the agents do. The steps are outlined below
+The user normally only needs to talk to the project entry session. Its name in the sidebar is `[<project name>] PMO-p1`. Every task has 9 steps from opening to archive. The agents can advance some of them on their own, but three steps need a decision from the user, which gives the user more control over what the agents do. The steps are outlined below
 
 After initialisation, the first thing the user does is discuss with the entry session to set up the first research task. The entry session interviews the user, then fills in and renames the research task that was generated during initialisation. If the user would rather look for a project direction first, the user tells the entry session “先探索下项目方向” ("explore the project direction first") to open a separate task, and terminates the research task generated during initialisation in the Feishu Project GUI.
 
@@ -181,9 +183,9 @@ A few tips:
 
 - **Mention the work item ID when speaking,** so the router does not have to guess which research task the sentence belongs to.
 - **Give sign-offs and decisions in the entry session.** The project entry session consults the queue of decision work items in Feishu Project and passes the user whatever is waiting for a decision.
-- **To discuss an approach with a +2, go straight into its session.** The user can ask it to write the outcome up as a decision package and pass it to the PMO sequence.
+- **To discuss an approach with the +1 of a sequence, go straight into its session.** The user can ask it to write the outcome up as a decision package and pass it to the PMO sequence.
 - **To see task progress, go to Feishu Project.** Feishu Project serves as the task ledger.
-- **Going back to an earlier step is the user's decision.** If the user finds that a step was not carried out to standard, the task can be rolled back. Which step to go back to, and why, is written by the +2 session of the task being rolled back, as a decision package for approval. Once the user approves it, the scribe session rolls the node back in Feishu Project.
+- **Going back to an earlier step is the user's decision.** If the user finds that a step was not carried out to standard, the task can be rolled back. Which step to go back to, and why, is written by the +1 session of the sequence whose task is being rolled back, as a decision package for approval. Once the user approves it, the scribe session rolls the node back in Feishu Project.
 - **Keep the initialisation session and do not archive it.** Signing in again, checking the deployment and upgrading the plugin are all done in it. It handles operations and maintenance for the whole plugin system
 
 ## Design
@@ -193,10 +195,10 @@ A few tips:
 - Problem: when one conversation plays several roles in turn, their context blurs together. A subtask handed to a temporary worker disappears once it is done; the user cannot see the process and cannot change the approach midway.
 - Our approach: each role is a session that stays open in the sidebar. The user can open any of them, see what it is doing and give it instructions directly. Delegations and deliveries are messages between sessions and stay in each session's history.
 
-**Only the scribe writes to Feishu**
+**Only the scribe writes work items**
 
 - Problem: if a dozen project sessions could all change the task ledger, it would end up in a mess sooner or later, and nobody could tell who wrote what when something went wrong.
-- Our approach: work items, fields, nodes and documents are written by one session only, the scribe, through one script. The other sessions write drafts locally and send the scribe a registration request. A hook in the project blocks write commands from the other sessions.
+- Our approach: work items, fields and nodes are written by one session only, the scribe, through one script. A document is uploaded and revised by the session that wrote it, and the script checks that it is the author; to create a work item or advance a node, a session sends the scribe a registration request. A hook in the project blocks write commands from the other sessions.
 
 **Feishu Project is the reference for task progress**
 
@@ -220,4 +222,4 @@ A few tips:
 
 ## Version
 
-v1.0.12
+v1.1.0
