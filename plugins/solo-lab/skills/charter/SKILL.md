@@ -11,7 +11,10 @@ description: 开一条研究任务：访谈研究员，写研究任务单（目�
 
 ```bash
 python3.12 -I .claude/solo-lab/bin/ledger.py query tasks
+python3.12 -I .claude/solo-lab/bin/ledger.py settled --keyword <这个问题里的关键词>
 ```
+
+第二条列出定下来的决定和已经有结论的研究任务。和新任务有关的，用 `--cards <ID,ID>` 出卡片读一遍：已经有结论的问题不重开，要重开就在研究任务单里写明和那条结论的差别；以前的决定限定了这条任务的（评测集版本、预算、不做什么），把它的工作项 ID 写进“已知的上下文”。
 
 ## 初始化时登记的那一条
 

@@ -676,6 +676,21 @@ NEW_SECTIONS = {
     "已发生的偏向性工作": "写已经做了、偏向某个选项的工作和投入",
     FROZEN: "写决策待定期间谁都不做的动作，一条一行：不可逆事项清单里的类别（可以带一句说明），或者一句话描述",
 }
+# 结论清单 (the researcher, 2026-11-21). A decision package carries what was settled before it as context: the
+# section 已有的决定和结论, written by `ledger.py settled … --into <草稿>` and never by hand. It opens with a line
+# 范围：… that says what was looked at, lists every settled decision and concluded research task of that range
+# (- #ID …: the index, for the reader to see what there is) and gives a card (### #ID …) for each one its author
+# picked, cut from the work items and their documents as they stand. Nothing judges what a settled decision
+# means for this one: the author says so in 建议, and cites there only what has a card. The header line 取代的决策
+# (optional) names the decisions this one takes the place of; each needs its card. A card repeats the 认知层 and
+# 背景 of the package it is about, so 背景 has a length it may not pass.
+SETTLED = "已有的决定和结论"
+SUPERSEDES = "取代的决策"
+SETTLED_SCOPE = "范围："
+INDEX_LINE = re.compile(r"^- #(\d+)\s", re.M)
+CARD_HEAD = re.compile(r"^### #(\d+)\s", re.M)
+BACKGROUND, BACKGROUND_MAX = "背景", 600
+SETTLED_HOW = "运行 ledger.py settled <范围> --cards <挑出来的 ID> --into <草稿>，由脚本照工作项和主文档的原文写进来"
 VERSION_VALUE = re.compile(r"第\s*(\d+)\s*版\s*[（(]\s*(\d{4})-(\d{1,2})-(\d{1,2})\s*[）)]")
 DATE_TEXT = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})")
 CRITERIA_TEXT = re.compile(r"判据\s*([0-9](?:\s*[、,，/和及与]\s*[0-9])*)")
@@ -945,6 +960,55 @@ def decision_parts(spec, text, header=None):
     return parts, errors, warnings
 
 
+def read_superseded(value):
+    """([IDs], None) of a decision package's 取代的决策 line: #2003, or several (#2003、#2010); [] when the line
+    is missing or says 无. (None, how to write it) for anything else."""
+    value = (value or "").strip().rstrip("。.")
+    if not value or SAYS_NOTHING.match(value):
+        return [], None
+    ids = re.findall(r"#(\d+)", value)
+    if not ids or re.sub(r"#\d+|[\s、,，和]", "", value):
+        return None, "写被取代的决策的工作项 ID，比如 #2003，几条用“、”隔开；没有写“无”"
+    return list(dict.fromkeys(ids)), None
+
+
+def settled_errors(text, header):
+    """What is wrong with a decision package's 已有的决定和结论 section, its 取代的决策 line and the length of its
+    背景. A missing section is left to the section check."""
+    errors = []
+    raw = header.get(SUPERSEDES)
+    old, why = read_superseded(raw)
+    if raw is not None and placeholder(raw.strip()):
+        errors.append("包头“%s”还是模板里的占位：写这条决策定下以后不再算数的旧决策的工作项 ID，没有写“无”" % SUPERSEDES)
+        old = []
+    elif why:
+        errors.append("包头“%s”写的是“%s”：%s" % (SUPERSEDES, raw, why))
+        old = []
+    background = section_of(text, BACKGROUND)
+    if background and not placeholder(background) and len(background) > BACKGROUND_MAX:
+        errors.append("“%s”有 %d 字，超过 %d 字：只留做决定需要的三到五句，细节放进“事实依据”；"
+                      "以后别的决策包引这条决定时，这一段会原样摘过去" % (BACKGROUND, len(background), BACKGROUND_MAX))
+    sec = section_of(text, SETTLED)
+    if sec is None:
+        return errors
+    if empty_text(sec):
+        errors.append("栏目“%s”是空的：%s；范围里一条都没有的，脚本会写“无”" % (SETTLED, SETTLED_HOW))
+        return errors
+    if not SAYS_NOTHING.match(sec) and not sec.startswith(SETTLED_SCOPE):
+        errors.append("栏目“%s”不手写：%s" % (SETTLED, SETTLED_HOW))
+        return errors
+    listed, cards = set(INDEX_LINE.findall(sec)), set(CARD_HEAD.findall(sec))
+    cited = [i for i in dict.fromkeys(re.findall(r"#(\d+)", section_of(text, "建议") or "")) if i in listed and i not in cards]
+    if cited:
+        errors.append("“建议”引了 %s，“%s”里只有清单里的一行，没有卡片：清单只用来看有哪些，不当依据；"
+                      "重新运行 ledger.py settled，--cards 里加上它" % ("、".join("#" + i for i in cited), SETTLED))
+    missing = [i for i in old if i not in cards]
+    if missing:
+        errors.append("包头“%s”写了 %s，“%s”里要有它的卡片，研究员才看得到被取代的是什么：重新运行 ledger.py settled，"
+                      "--cards 里加上它" % (SUPERSEDES, "、".join("#" + i for i in missing), SETTLED))
+    return errors
+
+
 def read_executor(spec, value):
     """(who, None) when a decision package's 执行方 line names 研究员 or a session that may carry a decision
     out, else (None, how to write it). A session's abbreviation names a sequence, case aside as the ledger
@@ -1102,7 +1166,7 @@ def lint_text(spec, text):
     if pid == "decision":
         errors += decision_errors(spec, header)
         _, more, warned = decision_parts(spec, text, header)
-        errors += more
+        errors += more + settled_errors(text, header)
         warnings += warned
     relation = header.get("关系", "").strip()
     rel_names = set(spec.terms["rel"].values())

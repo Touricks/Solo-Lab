@@ -2114,6 +2114,14 @@ class MainTest(LedgerCase):
         self.assertEqual(code, 0)
         self.assertIn("--action rollback --rollback-reason 证据不全", text)
         self.assertEqual(self.run_main("--offline", "mql", "tasks")[0], 0)
+        code, text = self.run_main("--offline", "settled", "--task", "2101", "--sequence", "算法", "--cards", "2103,2104")
+        self.assertEqual(code, 0)
+        self.assertEqual(text.count("将读取：meegle workitem query"), 3)          # the decisions; the tasks with 结论, with 去向
+        mql = [q for _, q, _ in ledger_core.settled_mql(self.lg("offline"), "2101", "算法")]
+        self.assertIn("WHERE `work_item_status` IN ('已决定', '归档') AND `field_5aae97` = '2101' AND `field_fb8b6f` = '算法'", mql[0])
+        self.assertEqual([q.split(" WHERE ")[1] for q in mql[1:]],
+                         ["`%s` IS NOT NULL AND `work_item_status` NOT IN ('已终止') AND `field_fb8b6f` = '算法'" % key
+                          for key in ("field_0286b6", "field_bc2876")])
 
     def test_an_unbound_or_old_binding_is_refused(self):
         self.ids(lambda ids: ids.update(schema="solo-lab/ids-v1"))
@@ -3167,6 +3175,238 @@ class DecisionStateTest(LedgerCase):
                 docs.main(["--offline", "revise", "2140", path])                    # --note is required
         finally:
             os.environ.pop("CLAUDE_PROJECT_DIR", None)
+
+
+class SettledTest(LedgerCase):
+    """结论清单 (1.1.0): `ledger.py settled` lists what the researcher decided and what the research tasks concluded,
+    gives a card for the few its reader picks, cut from the work items and their documents as they stand, and
+    writes both into a decision draft's section 已有的决定和结论. Nothing in it says what a settled thing means for
+    the question at hand."""
+    TODAY = datetime.date.today().isoformat()
+    NAME = "决策包（RnD-p1）：运行记录按轮次还是按变体分目录"
+    TEXT = "按轮次分目录，质量用查找脚本"
+
+    def setUp(self):
+        super().setUp()
+        self.research = self.task()
+
+    def decide(self, block=REVERSIBLE, name="d.md", content=None, option=None, edit=None, task=None):
+        item = self.quiet(register, self.lg(), self.draft(block, name, edit), task=task)
+        self.quiet(workitem.confirm, self.lg(), item, "研究员", ["决定内容=" + (content or self.TEXT), "决定人=研究员"], option=option)
+        return item
+
+    def settled(self, **kw):
+        return self.out(ledger.settled, self.lg("preview"), **kw)
+
+    def refused(self, **kw):
+        return self.fails(ledger.settled, self.lg("preview"), **kw)
+
+    def read(self, path):
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+
+    def test_the_index_lists_what_is_decided_and_what_is_concluded(self):
+        self.quiet(register, self.lg(), self.draft(PERMISSION, "w.md"))             # still 待决定: nothing settled
+        self.assertEqual(self.settled(), ([], "共 0 项。\n"))
+        made = self.decide(option="按轮次分目录")
+        rows, out = self.settled()
+        self.assertEqual(out, "#%s  决策  待执行  %s  %s  →  %s\n共 1 项。\n" % (made, self.TODAY, self.NAME, self.TEXT))
+        self.assertEqual((rows[0]["id"], rows[0]["kind"], rows[0]["text"], rows[0]["superseded_by"]), (made, "decision", self.TEXT, None))
+        self.quiet(workitem.archive, self.lg(), made)                            # carried out
+        self.assertIn("#%s  决策  已执行  %s  " % (made, self.TODAY), self.settled()[1])
+        self.walk(self.research, 9)                                                # its first eight steps: 结论 is 成立
+        signed = self.fake.item(self.research)["fields"][self.lg().key_of("research_task", "hypothesis_signoff")]
+        rows, out = self.settled()
+        self.assertEqual([r["id"] for r in rows], sorted([made, self.research, signed], key=int, reverse=True))     # the newest first
+        self.assertIn("#%s  研究任务  %s  复现并测量基线  →  结论：成立\n" % (self.research, self.state(self.research)), out)
+        self.assertIn("#%s  决策  待执行  决策包（PMO-p1）：签字  →  同意\n" % signed, out)       # no receipt here: no date
+        # a range: a research task, a sequence, a word of the name or of what was decided
+        mine = self.decide(name="m.md", content="两种目录都不要，记录进数据库", task=self.research)
+        # (a decision registered while one research task is open belongs to it)
+        self.assertEqual([r["id"] for r in self.settled(task=self.research)[0]], [mine, signed, made, self.research])
+        self.assertEqual([r["id"] for r in self.settled(task="#" + self.research, keyword="数据库")[0]], [mine])
+        self.assertEqual([r["id"] for r in self.settled(sequence="工程")[0]], [mine, made])
+        self.assertEqual(self.settled(sequence="rnd")[0], self.settled(sequence="工程")[0])
+        self.assertEqual([r["id"] for r in self.settled(keyword="查找脚本")[0]], [made])
+        self.assertEqual([r["id"] for r in self.settled(keyword="复现")[0]], [self.research])
+        self.assertIn("没有序列“工程组”", self.refused(sequence="工程组"))
+        # an exploration that ended is concluded by where it goes next
+        probe = self.task("探索", name="probe.md")
+        for by, sets in (("Product-p1", ["总预算=20", "探索问题=换一个基线会不会更稳"]), ("Product-p1", ["探索记录=" + LINK]),
+                         ("Product-p1", ["去向=转正式实验", "候选假设=换成基线 B，波动减半"])):
+            self.quiet(workitem.confirm, self.lg(), probe, by, sets)
+        self.assertIn("#%s  研究任务  %s  复现并测量基线  →  去向：转正式实验\n" % (probe, self.state(probe)), self.settled()[1])
+        _, out = self.settled(cards=probe)
+        self.assertIn("### #%s 研究任务：复现并测量基线（探索；去向：转正式实验）" % probe, out)
+        for line in ("探索问题：换一个基线会不会更稳", "总预算：20", "候选假设：换成基线 B，波动减半"):
+            self.assertIn("\n%s\n" % line, out)
+        self.assertIn("；探索记录 %s\n" % LINK, out)
+
+    def test_a_card_is_cut_from_the_package_and_the_work_item(self):
+        made = self.decide(option="按轮次分目录")
+        _, out = self.settled(cards=made)
+        head, index, card = out.split("\n\n", 2)
+        self.assertEqual(head, "范围：整个项目；定下来的决定和有结论的研究任务共 1 条（%s 查）。清单只用来看有哪些，依据看卡片和原文。" % self.TODAY)
+        self.assertEqual(index, "- #%s  决策  待执行  %s  %s  →  %s" % (made, self.TODAY, self.NAME, self.TEXT))
+        package = example(REVERSIBLE)
+        self.assertEqual(card, "\n".join([
+            "### #%s %s（待执行；%s 研究员定）" % (made, self.NAME, self.TODAY), "",
+            "要定的事：" + orgspec.section_of(package, "认知层"), "",          # as the package wrote them
+            "背景：" + orgspec.section_of(package, "背景"), "",
+            "决定：" + self.TEXT, "",                                          # as the work item holds it
+            "选项：定的是“按轮次分目录”；没选的有“按变体分目录”。",
+            "原文：" + self.value(made, "decision", "main_doc"), ""]))
+        # a decision whose option was not recorded; one that waits has no card
+        plain = self.decide(name="p.md")
+        self.assertIn("选项：包里列了“按轮次分目录”、“按变体分目录”，没记下选的是哪个，看“决定”。", self.settled(cards=plain)[1])
+        waiting = self.quiet(register, self.lg(), self.draft(PERMISSION, "w.md"))
+        self.assertIn("--cards 里的 #%s 不在这次的范围里：卡片只出清单里有的" % waiting, self.refused(cards=waiting))
+        self.assertIn("现在是“待决定”，还没定：卡片只出定下来的决策", self.fails(ledger.card, self.lg("preview"), waiting))
+        # 背景 longer than a card holds is cut, and says so; a main document that cannot be read is said, not left out
+        doc = self.fake.doc_by(self.value(made, "decision", "main_doc").rsplit("/", 1)[1])
+        doc["body"] = doc["body"].replace("运行记录现在都堆在 runs/rnd/ 下", "运行记录现在都堆在 runs/rnd/ 下" + "多" * 700)
+        doc.pop("blocks", None)
+        self.assertIn("多……（下略，见原文）\n", self.settled(cards=made)[1])
+        self.quiet(workitem.update, self.lg(), made, ["主文档=" + LINK])
+        self.assertIn("背景：主文档读不到（", self.settled(cards=made)[1])
+
+    def test_a_research_task_card_is_its_fields_and_its_last_decision(self):
+        report = self.quiet(self.fake.create_doc, None, "结论文档", "## 结论\n复现分数 71.3，公开数字 71.5，相差 0.2 个点，在 0.5 以内。\n\n## 过程\n三次运行。\n")
+        report = report["data"]["document"]["url"]
+        signs = self.walk(self.research, 10)                                     # all nine steps; the last signed by a decision
+        _, out = self.settled(cards=self.research)
+        self.assertIn("### #%s 研究任务：复现并测量基线（正式实验；结论：成立）\n" % self.research, out)
+        for line in ("成功标准：复现分数和公开数字相差 0.5 个点以内", "评测集版本：evalset-v1", "规格版本：spec-v1", "总预算：200",
+                     "波动估计：基线重复 3 次，标准差 0.2", "下一步（决策 #%s）：同意" % signs[9]):
+            self.assertIn("\n%s\n" % line, out)
+        self.assertIn("\n原文：主文档 %s；结论文档 %s\n" % (self.value(self.research, "research_task", "main_doc"), LINK), out)
+        self.assertNotIn("\n结论：", out)                                      # its 结论文档 cannot be read here: the fields stand
+        self.quiet(workitem.update, self.lg(), self.research, ["结论文档=" + report])
+        _, out = self.settled(cards=self.research)
+        self.assertIn("\n结论：复现分数 71.3，公开数字 71.5，相差 0.2 个点，在 0.5 以内。\n", out)   # the 结论 section, and no more
+        self.assertNotIn("三次运行", out)
+        request = self.quiet(register, self.lg(), self.draft(ASSIGN, "a.md"))
+        self.assertIn("#%s 是同序列需求：卡片只出决策和研究任务" % request, self.fails(ledger.card, self.lg("preview"), request))
+
+    def test_the_section_of_a_draft_is_written_by_the_command(self):
+        made = self.decide(option="按轮次分目录")
+        path = self.draft(DECISION, "new.md")
+        text = self.read(path)
+        self.assertEqual(orgspec.lint_text(self.spec, text)[0], [])                 # the example holds a section as the command writes it
+        _, out = self.settled(keyword="运行记录", cards=made, into=path)
+        self.assertEqual(out, "已写进 %s 的“已有的决定和结论”一节：清单 1 行，卡片 1 张。写完跑一遍包检查。\n" % path)
+        new = self.read(path)
+        sec = orgspec.section_of(new, "已有的决定和结论")
+        self.assertTrue(sec.startswith("范围：名称或内容里有“运行记录”的；定下来的决定和有结论的研究任务共 1 条（%s 查）。" % self.TODAY))
+        self.assertIn("\n- #%s  决策  待执行" % made, sec)
+        self.assertIn("\n\n### #%s %s（" % (made, self.NAME), sec)
+        self.assertNotIn("#2040", sec)                                           # what the section held is replaced
+        cut = lambda s: (s.split("\n## 已有的决定和结论\n")[0], s.split("\n## 选项\n")[1])
+        self.assertEqual(cut(new), cut(text))                                     # and nothing else is touched
+        self.assertIn("原文：%s\n\n## 选项\n" % self.value(made, "decision", "main_doc"), new)
+        self.assertEqual(orgspec.lint_text(self.spec, new)[0], [])
+        self.quiet(ledger.settled, self.lg("preview"), keyword="运行记录", cards=made, into=path)     # again: the same
+        self.assertEqual(self.read(path), new)
+        self.settled(keyword="没有这个词", into=path)                             # nothing in the range
+        self.assertEqual(orgspec.section_of(self.read(path), "已有的决定和结论"),
+                         "无（范围：名称或内容里有“没有这个词”的；%s 查，还没有定下来的决定和有结论的研究任务）" % self.TODAY)
+        self.assertEqual(orgspec.lint_text(self.spec, self.read(path))[0], [])
+        self.settled(sequence="工程", task=self.research, into=path)             # an index without a card
+        sec = orgspec.section_of(self.read(path), "已有的决定和结论")
+        self.assertTrue(sec.startswith("范围：研究任务 #%s、工程序列；定下来的决定和有结论的研究任务共 1 条（" % self.research))
+        self.assertEqual((sec.count("\n- #"), sec.count("### #")), (1, 0))
+        # only a draft, and one that has the section
+        outside = os.path.join(self.tmp, "notes.md")
+        with open(outside, "w", encoding="utf-8") as f:
+            f.write(text)
+        self.assertIn("--into 只写 packages/drafts/ 下面的草稿", self.refused(into=outside))
+        self.assertEqual(self.read(outside), text)
+        old = self.write(text.replace("\n## 已有的决定和结论\n", "\n## 以前定过的\n"), "old.md")
+        self.assertIn("里没有“## 已有的决定和结论”一节：照决策包模板加上这一节的标题，再运行", self.refused(into=old))
+
+    def test_the_package_check_keeps_the_section_to_what_the_command_wrote(self):
+        text = example(DECISION)
+        lint = lambda t: orgspec.lint_text(self.spec, t)[0]
+        advise = lambda words: text.replace("## 建议\n移进评测协议。", "## 建议\n移进评测协议，%s。" % words)
+        self.assertEqual(lint(text), [])
+        self.assertEqual(lint(advise("#2040 签字时定的“正式集每一轮只跑一次”不变")), [])       # it has a card
+        self.assertEqual(lint(advise("和 #2060 定的花费上限不冲突")), [                       # only a line of the index
+            "“建议”引了 #2060，“已有的决定和结论”里只有清单里的一行，没有卡片：清单只用来看有哪些，不当依据；"
+            "重新运行 ledger.py settled，--cards 里加上它"])
+        self.assertEqual(lint(advise("重评按 #2105 的打分脚本")), [])                          # another work item: not this section's
+        sec = orgspec.section_of(text, "已有的决定和结论")
+        how = "运行 ledger.py settled <范围> --cards <挑出来的 ID> --into <草稿>，由脚本照工作项和主文档的原文写进来"
+        self.assertEqual(lint(text.replace(sec, "#2040 定过评测协议 v1，这次不动它。")), ["栏目“已有的决定和结论”不手写：" + how])
+        self.assertEqual(lint(text.replace(sec, "")), ["栏目“已有的决定和结论”是空的：%s；范围里一条都没有的，脚本会写“无”" % how])
+        template = orgspec.template_block(self.read(os.path.join(ROOT, "skills", "packages", "assets", "decision.md")))
+        self.assertIn("栏目“已有的决定和结论”是空的：" + how, "\n".join(lint(template)))              # the template's own words are no content
+        self.assertEqual(lint(text.replace("## 已有的决定和结论\n" + sec + "\n\n", "")), ["缺栏目“已有的决定和结论”；没有内容写“无”"])
+        # 取代的决策: optional; what it names needs its card
+        over = lambda value: text.replace("- 取代的决策：无\n", "- 取代的决策：%s\n" % value if value else "")
+        self.assertEqual(lint(over(None)), [])
+        self.assertEqual(lint(over("#2040")), [])
+        self.assertEqual(lint(over("#2040、#2060")), [
+            "包头“取代的决策”写了 #2060，“已有的决定和结论”里要有它的卡片，研究员才看得到被取代的是什么：重新运行 ledger.py settled，--cards 里加上它"])
+        self.assertEqual(lint(over("2040")), ["包头“取代的决策”写的是“2040”：写被取代的决策的工作项 ID，比如 #2003，几条用“、”隔开；没有写“无”"])
+        self.assertIn("包头“取代的决策”还是模板里的占位", lint(over("<这条决策定下以后不再算数的旧决策>"))[0])
+        # 背景 is what a card repeats: it has a length
+        self.assertEqual(lint(text.replace("\n## 背景\n", "\n## 背景\n" + "多" * 506)), [
+            "“背景”有 601 字，超过 600 字：只留做决定需要的三到五句，细节放进“事实依据”；以后别的决策包引这条决定时，这一段会原样摘过去"])
+        self.assertEqual(lint(text.replace("\n## 背景\n", "\n## 背景\n" + "多" * 505)), [])
+
+    def test_a_decision_that_takes_the_place_of_another_marks_it(self):
+        old = self.decide(option="按轮次分目录")
+        names = lambda item: lambda t: t.replace("- 需要接收方做的事：拍板\n", "- 取代的决策：#%s\n- 需要接收方做的事：拍板\n" % item)
+        path = self.draft(REVERSIBLE, "n.md", names(old))
+        self.assertIn("包头“取代的决策”写了 #%s，“已有的决定和结论”里要有它的卡片" % old, orgspec.lint_text(self.spec, self.read(path))[0][0])
+        self.settled(keyword="运行记录", cards=old, into=path)
+        new = self.quiet(register, self.lg(), path)
+        self.assertEqual((self.receipt(new)["supersedes"], self.receipt(new)["cards"]), ([old], [old]))
+        self.assertEqual((self.receipt(old)["supersedes"], self.receipt(old)["cards"]), ([], []))
+        self.assertEqual(self.value(old, "decision", "决定内容"), self.TEXT)        # nothing before the researcher decides
+        _, out = self.out(workitem.confirm, self.lg("preview"), new, "研究员", ["决定内容=按变体分目录", "决定人=研究员"])
+        self.assertEqual(self.value(old, "decision", "决定内容"), self.TEXT)        # a preview writes nothing
+        _, out = self.out(workitem.confirm, self.lg(), new, "研究员", ["决定内容=按变体分目录", "决定人=研究员"])
+        self.assertIn("#%s 的“决定内容”末尾记了一行：被 #%s 取代。\n" % (old, new), out)
+        marked = "%s\n（%s 被 #%s 取代）" % (self.TEXT, self.TODAY, new)
+        self.assertEqual(self.value(old, "decision", "决定内容"), marked)
+        rows, out = self.settled()
+        self.assertEqual([(r["id"], r["superseded_by"]) for r in rows], [(new, None), (old, new)])
+        self.assertIn("#%s  决策  待执行  %s  %s  →  （已被 #%s 取代）%s\n" % (old, self.TODAY, self.NAME, new, self.TEXT), out)
+        _, out = self.settled(cards=old)
+        self.assertIn("\n决定：%s\n" % marked, out)
+        self.assertIn("\n后来：已被 #%s 取代，现在算数的是 #%s。\n" % (new, new), out)
+        # the researcher takes the new decision back: the old one stands again
+        _, out = self.out(workitem.rollback, self.lg(), new, "决定", "再想想", by="研究员")
+        self.assertIn("#%s 的“决定内容”去掉了这一行：被 #%s 取代。\n" % (old, new), out)
+        self.assertEqual(self.value(old, "decision", "决定内容"), self.TEXT)
+        self.assertEqual([(r["id"], r["superseded_by"]) for r in self.settled()[0]], [(old, None)])
+        self.quiet(workitem.confirm, self.lg(), new, "研究员", ["决定内容=还是按变体分目录", "决定人=研究员"])
+        self.assertEqual(self.value(old, "decision", "决定内容"), marked)
+        self.assertIn("\n后来：%s 回滚到待决定过，上面是回滚以后重新定的。\n" % self.TODAY, self.settled(cards=new)[1])
+        # what it names is a decision the researcher has made
+        for item, why in ((self.research, "是研究任务，不是决策：只写被这条决策取代的旧决策"),
+                          (self.quiet(register, self.lg(), self.draft(PERMISSION, "w.md")), "现在是“待决定”，还没定：没定的决策不用取代")):
+            path = self.draft(REVERSIBLE, "x-%s.md" % item, names(item))
+            self.write(self.read(path).replace("## 已有的决定和结论\n", "## 已有的决定和结论\n范围：整个项目。\n\n### #%s 一张卡片\n\n" % item, 1),
+                       "x-%s.md" % item)
+            self.assertIn("包头“取代的决策”写的 #%s %s" % (item, why), self.fails(register, self.lg(), path))
+
+    def test_how_much_one_run_gives(self):
+        made = self.decide()
+        self.assertIn("一次最多出 5 张卡片，这里写了 6 张：只挑和这次要定的事直接有关的", self.refused(cards="1001,1002,1003,1004,1005,1006"))
+        self.assertIn("工作项 ID 要写成数字", self.refused(cards="最新的"))
+        self.assertEqual(self.settled(cards=" %s，#%s " % (made, made))[1].count("\n### #"), 1)        # named twice: one card
+        limit = ledger.SETTLED_MAX
+        ledger.SETTLED_MAX = 0
+        try:
+            self.assertIn("有 1 条，超过 0 条：加 --task、--sequence 或 --keyword 缩小范围；确实要全部列出，加 --all", self.refused())
+            for kw in ({"everything": True}, {"keyword": "运行记录"}, {"sequence": "rnd"}, {"task": self.research}):
+                self.settled(**kw)
+        finally:
+            ledger.SETTLED_MAX = limit
+        self.assertEqual(self.out(ledger.settled, self.lg("offline"))[0], [])                       # offline: the queries, printed
+        self.assertIn("将读取：meegle workitem query", self.out(ledger.settled, self.lg("offline"))[1])
 
 
 class RunConditionsTest(LedgerCase):

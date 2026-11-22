@@ -703,6 +703,11 @@ class SecondRoundTest(ProjectCase):
             self.assertEqual(out.get("permissionDecision"), "deny", cmd)
         _, out = self.guard("alg-p1", "Bash", {"command": "python3.12 -I .claude/solo-lab/bin/ledger.py mql queue"})
         self.assertNotEqual(out.get("permissionDecision"), "deny")
+        # 1.1.0: settled reads the space; --into writes a section of the session's own draft, a local file
+        for cmd in ("python3.12 -I .claude/solo-lab/bin/ledger.py settled --task 2101",
+                    "python3.12 -I .claude/solo-lab/bin/ledger.py settled --keyword 评测集 --cards 2103,2104 --into packages/drafts/alg/d.md"):
+            _, out = self.guard("alg-p1", "Bash", {"command": cmd})
+            self.assertNotEqual(out.get("permissionDecision"), "deny", cmd)
 
 
 class ThirdRoundTest(ProjectCase):
@@ -1414,6 +1419,7 @@ class SpecAndRoutingTest(ProjectCase):
     def test_settings_allow_the_status_read(self):
         allow = json.loads(self.read(".claude/settings.json"))["permissions"]["allow"]
         self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/ledger.py status *)", allow)
+        self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/ledger.py settled *)", allow)
         self.assertFalse([r for r in allow if "ledger.py index" in r])
 
     def test_drafters_see_their_documents(self):
@@ -4864,6 +4870,16 @@ class DeliveryTextTest(PoolProjectCase):
         self.assertIn("\n- Alg-p0-01：收尾提问去掉 1 次，AskUserQuestion 拒绝 1 次，插队决策放行 0 次", section)
         self.assertNotIn("Alg-p1：收尾", section)
         self.assertNotIn(self.GATES + "\n- 无", text)
+        # 1.1.0: how often decision packages carry cards of what was settled before, from their registration receipts
+        self.assertNotIn("已有的决定和结论", text)
+        sent = os.path.join(self.tmp, "packages", "sent")
+        os.makedirs(sent, exist_ok=True)
+        for name, rec in (("2120.json", {"type": "decision", "cards": ["2040", "2060"]}), ("2150.json", {"type": "decision", "cards": []}),
+                          ("2001.json", {"type": "decision"}), ("2101.json", {"type": "same_seq"})):     # before 1.1.0; no decision
+            with open(os.path.join(sent, name), "w", encoding="utf-8") as f:
+                json.dump(rec, f)
+        self.assertIn("\n决策包的“已有的决定和结论”一节：登记了 2 份，带卡片的 1 份（共 2 张），写“无”或只有清单的 1 份。\n",
+                      self.route("audit", sid="s-entry")[1])
 
 
 

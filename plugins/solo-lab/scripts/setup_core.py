@@ -69,6 +69,7 @@ READ_ALLOW = [
     "Bash(python3.12 -I .claude/solo-lab/bin/ledger.py query *)",
     "Bash(python3.12 -I .claude/solo-lab/bin/ledger.py trace *)",
     "Bash(python3.12 -I .claude/solo-lab/bin/ledger.py status *)",
+    "Bash(python3.12 -I .claude/solo-lab/bin/ledger.py settled *)",
     "Bash(python3.12 -I .claude/solo-lab/bin/ledger.py mql *)",
     "Bash(python3.12 -I .claude/solo-lab/bin/space.py snapshot *)",
     "Bash(python3.12 -I .claude/solo-lab/bin/space.py bind *)",
@@ -577,7 +578,8 @@ def common_role_lines(spec, seq, rank, name, pol, task, policy):
         "- 文档谁负责谁写，工作项只由书记员写。你写的包和文档由你自己用 `docs.py` 传进飞书、自己修订，脚本会核对你是不是作者；"
         "建工作项、填字段、确认和回滚节点、归档、加评论，给书记员发登记请求。直接敲 `lark-cli`、`meegle` 的写命令会被 hook 拒绝；"
         "要删的文档记进研究员任务清单：`todo.py add --text '删文档 <链接>：<原因>'`。",
-        "- 读台账和文档：`ledger.py get`、`ledger.py query`、`ledger.py trace`、`ledger.py status`，以及 `lark-cli docs +fetch --as user`。",
+        "- 读台账和文档：`ledger.py get`、`ledger.py query`、`ledger.py trace`、`ledger.py status`，以及 `lark-cli docs +fetch --as user`。"
+        "以前定过什么、得出过什么结论，用 `ledger.py settled` 查（`--task`、`--sequence`、`--keyword` 定范围），不凭记忆说。",
     ]
     docs = [p for p, owners in sorted(policy["soft_owned"].items()) if name in owners and p in SPEC_DOC_NAMES]
     writable = code_list(pol["write_paths"]) + ("，以及你起草的 %s（写之前会请研究员确认）" % code_list(docs) if docs else "")
@@ -693,6 +695,9 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
         lines.append("- 决策包写成草稿，运行 `%sdocs.py upload <草稿路径> --apply` 自己上传，给 `%s` 发【%s】登记；拿到【%s #ID】后运行 `docs.py relink <ID> --apply`，"
                      "再给路由 `%s` 发 `%s：<事项一句话> <主文档链接>`。路由转告入口，入口讲给研究员；你不直接找入口。" % (
                          BIN, scribe, reg, receipt, router, msg_head(spec, "decide", receiver=router)))
+        lines.append("- 决策包的“已有的决定和结论”一节不手写：先运行 `%sledger.py settled`（加 `--task`、`--sequence` 或 `--keyword` 定范围）看清单，"
+                     "挑出和这次要定的事直接有关的，最多 5 条，再运行 `%sledger.py settled <同样的范围> --cards <ID,ID> --into <草稿路径>`，"
+                     "脚本把范围、清单和卡片写进草稿。以前的决定对这次有什么影响，写在“建议”里，只引有卡片的；这条决策定下以后不再算数的旧决策，写在包头“取代的决策”。" % (BIN, BIN))
         lines.append("- 进展和里程碑发给路由 `%s`，不发入口：研究任务走完一步、跨序列需求验收、出现要研究员动手的事、工作项过了截止时间，用【%s #ID】告诉它，它改状态包、转告入口。"
                      "研究员的话由入口交路由、路由转给你，抬头是【%s】或【%s #ID】，是原话，路由只加了抬头。" % (
                          router, spec.term("msg", "notice"), spec.term("msg", "notice"), spec.term("msg", "resume")))
@@ -1301,7 +1306,7 @@ PLUGIN_SECTIONS = {
     "c80f58059cf5cb10a43cc52da992aeb7b420f68618042de373c679496a383233": "1.0.10",
     "27f611c7282725b164819e37100fac25b86d8252a113c36b8a0a7fda75df2cc1": "1.0.11",
     "477a750ca960f939523f71466a9bd67391ecb9ae4f0afeeae5d691676d5fd753": "1.0.12",
-    "10b5e6265ae7822c0056c2ae2894c057a16cf4e6b4f2edf0f62f41a960668a10": "1.1.0",
+    "96f90c7115793754cd199474d98663c523282cf3e99af0830c5f3cf6d06c624c": "1.1.0",
 }
 
 

@@ -225,7 +225,8 @@ def check_meegle(inv, c, who, data, soft, rewritable):
     return refuse(who, data, "（%s）不能执行写命令 %s。工作项、字段、节点和评论只由书记员写：给书记员发【登记请求】，写上要它运行的 workitem.py 命令。" % (name, key)), None
 
 
-LEDGER_READS = {"", "get", "next", "query", "mql", "trace", "status", "-h", "--help"}
+# settled reads the space; its --into writes the section of a draft of the session that runs it, a local file
+LEDGER_READS = {"", "get", "next", "query", "mql", "trace", "status", "settled", "-h", "--help"}
 LEDGER_WRITE_WORDS = {"register", "revise", "reply", "confirm", "rollback", "update", "comment", "status-block", "append",
                       "archive", "relink", "ensure-node", "upload", "attach"}
 _WORDS = "|".join(re.escape(w) for w in sorted(LEDGER_WRITE_WORDS, key=len, reverse=True))
@@ -481,7 +482,7 @@ def ledger_write(command, cwd=None, docs_free=False):
 
     A guardrail against accidental writes by well-behaved agents, not a security
     boundary: enough obfuscation can always hide a command from a shell parser.
-    Returns None when ledger.py is not run, or only with get/query/mql/trace/status,
+    Returns None when ledger.py is not run, or only with get/query/mql/trace/status/settled,
     --help, no subcommand, or a write subcommand without --apply (a preview: _subcommand). Handled: comments, new lines, ; && || |, cd, shell
     keywords and functions, wrappers and project runners (env, timeout, nice,
     sudo, xargs, uv run ...), python option clusters, -c / -m (ledger, runpy,

@@ -463,6 +463,15 @@ class FakeSpace:
             # as lark-cli 1.0.98 answers: a range that names only its end is the end block alone, not the document up to it
             start = ids.index(flags["--start-block-id"]) if flags.get("--start-block-id") else end
             content = '<fragment mode="range">%s</fragment>' % self.xml(blocks[start:end + 1])
+        elif flags.get("--scope") == "section":
+            # a heading and what is under it, up to the next heading of its level or above; as Markdown when asked for
+            at = next(i for i, b in enumerate(blocks) if b["id"] == flags["--start-block-id"])
+            end = next((i for i in range(at + 1, len(blocks)) if blocks[i]["kind"] == "h" and blocks[i]["level"] <= blocks[at]["level"]), len(blocks))
+            if flags.get("--doc-format") == "markdown":
+                mark = {"h": lambda b: "#" * b["level"] + " ", "li": lambda b: "- "}
+                content = "\n\n".join(mark.get(b["kind"], lambda b: "")(b) + b["text"] for b in blocks[at:end]) + "\n"
+            else:
+                content = '<fragment mode="section">%s</fragment>' % self.xml(blocks[at:end])
         else:
             # with ids the title carries the document's own: it is the block a rename replaces
             ident = ' id="%s"' % doc["document_id"] if flags.get("--detail") == "with-ids" else ""

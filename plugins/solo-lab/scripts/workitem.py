@@ -151,6 +151,46 @@ def settle(lg, item_id, choice, by_default=None, executor=None):
     core.update_receipt(lg, item_id, **values)
 
 
+SUPERSEDED_LINE = "（%s 被 #%s 取代）"
+
+
+def superseded_decisions(lg, ids):
+    """The decisions a package's 取代的决策 line names, checked before its work item is created: each is a
+    decision the researcher has made."""
+    for old in ids or []:
+        it = lg.item(old)
+        if it is None:
+            continue                                       # offline
+        if it.get("type") != "decision":
+            raise core.LedgerError("包头“%s”写的 #%s 是%s，不是决策：只写被这条决策取代的旧决策" % (
+                orgspec.SUPERSEDES, old, lg.spec.term("wi", it["type"]) if it.get("type") else "别的工作项"))
+        if it.get("state") not in (lg.state("decision", "decided"), lg.state("decision", "archived")):
+            raise core.LedgerError("包头“%s”写的 #%s 现在是“%s”，还没定：没定的决策不用取代，请它的发出方改它或者撤回" % (
+                orgspec.SUPERSEDES, old, it.get("state")))
+
+
+def mark_superseded(lg, item_id, undo=False):
+    """Confirming 决定 on a decision whose package names the decisions it takes the place of (取代的决策) adds a
+    line to the 决定内容 of each, （YYYY-MM-DD 被 #ID 取代）: `ledger.py settled` shows them as superseded, and no
+    field is added to the space for it. A rollback to 待决定 takes the lines out again (undo). One that cannot
+    be read or written is said, and the rest goes on: the new decision stands either way."""
+    if lg.mode != "apply":
+        return
+    for old in core.receipt_of(lg, item_id).get("supersedes") or []:
+        try:
+            it, wid = core.typed_item(lg, old)
+            text = (lg.text_of(it, core.DECIDED_TEXT) or "").rstrip()
+            marked = re.search(r"\n?（\d{4}-\d{2}-\d{2} 被 #%s 取代）" % re.escape(str(item_id)), text)
+            if bool(marked) != undo:
+                continue
+            new = text.replace(marked.group(0), "") if undo else "%s\n%s" % (text, SUPERSEDED_LINE % (datetime.date.today().isoformat(), item_id))
+            update(lg, old, ["%s=%s" % (core.DECIDED_TEXT, new.strip())], wid)
+            print("#%s 的“%s”%s：被 #%s 取代。" % (old, core.DECIDED_TEXT, "去掉了这一行" if undo else "末尾记了一行", item_id))
+        except core.LedgerError as e:
+            print("提醒：#%s 的“%s”没%s“被 #%s 取代”这一行（%s）：用 workitem.py update %s 手工%s。" % (
+                old, core.DECIDED_TEXT, "去掉" if undo else "记上", item_id, str(e)[:160], old, "去掉" if undo else "补上"))
+
+
 def drop_pending(lg, item_id):
     """Take a decision out of the pending decisions (archived, terminated); True when it was there."""
     if lg.mode != "apply" or str(item_id) not in core.load_gates(lg.root)["pending"]:
@@ -347,6 +387,7 @@ def register(lg, path, source=None, pairs=None, resume=False, doc=None, task=Non
         print("提醒：回复期限“%s”不是存在的日期，截止时间没写；改好后用 update 补" % d.header["回复期限"])
     if wid == "decision":
         optional.append(("urgency", d.header.get("紧急程度")))
+        superseded_decisions(lg, orgspec.read_superseded(d.header.get(orgspec.SUPERSEDES))[0])
     for ref, raw in optional:
         if not raw or "/" in str(raw) and ref == "urgency":       # the template's "插队/今天/本周/可延后" left as it was
             continue
@@ -906,6 +947,7 @@ def confirm_step(lg, item_id, by=None, pairs=None, node=None, decision=None, wid
             print("“%s”这一步的负责方：%s。" % (n["name"], core.responsible(lg, wid, it, n)[0]))
         if deciding:
             settle(lg, item_id, choice, by_default and by_default[0], who)
+            mark_superseded(lg, item_id)
             if by_default:
                 print("到期默认：照选项“%s”办，执行完请书记员归档。" % choice["name"])
             if note:                                       # the record of the choice: the receipt has it, a comment says it
@@ -999,6 +1041,7 @@ def reopen(lg, item_id):
     counts from its registration, for the entry's list)."""
     rec = core.receipt_of(lg, item_id)
     stamp = core.now()
+    mark_superseded(lg, item_id, undo=True)
     values = {"rolled_back_at": stamp, "option": None, "decided_by": None, "decided_at": None}
     packaged = rec.get("as_packaged") if isinstance(rec.get("as_packaged"), dict) else None
     if packaged:

@@ -34,6 +34,7 @@ python3.12 -I .claude/solo-lab/bin/ledger.py query source:<工作项 ID>   # 由
 python3.12 -I .claude/solo-lab/bin/ledger.py trace <工作项 ID>          # 沿来源工作项往回查
 python3.12 -I .claude/solo-lab/bin/ledger.py status <工作项 ID>         # 主文档的状态包
 python3.12 -I .claude/solo-lab/bin/ledger.py mql queue                 # 只打印 MQL，不查
+python3.12 -I .claude/solo-lab/bin/ledger.py settled --task <研究任务 ID>   # 定下来的决定和有结论的研究任务，每条一行；--cards 出卡片，--into 写进决策包草稿
 ```
 
 - 命令里的工作项 ID 写数字，不带 `#`：shell 把 `#` 开头的词当注释。

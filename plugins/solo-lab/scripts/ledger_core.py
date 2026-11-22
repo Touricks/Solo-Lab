@@ -56,7 +56,7 @@ QUERIES = {
     "recent": ("same_seq", None, [], "RELATIVE_DATETIME_BETWEEN(`updated_at`, 'past', '7d')", "近 7 天更新过的同序列需求"),
 }
 QUERY_NAMES = ["queue", "blocked", "verifying", "open", "cross", "tasks", "recent"]
-READ_COMMANDS = ("get", "next", "query", "mql", "trace", "status")
+READ_COMMANDS = ("get", "next", "query", "mql", "trace", "status", "settled")
 TRUE_WORDS = {"是", "true", "True", "1", "yes", "要"}
 FALSE_WORDS = {"否", "false", "False", "0", "no", "不要"}
 RESEARCHER = "研究员"
@@ -948,7 +948,9 @@ def receipt_kind(spec, wid, d, pairs=None):
     also what decision_parts read (reversible, criteria, default, default_option, options, frozen) with its
     title, urgency and sender: `confirm --option` checks the option against them, and a decision rolled
     back to 待决定 is put back into the local decision state from them. Confirming 决定 adds how it was
-    decided (settle); a rollback to 待决定 adds rolled_back_at (reopen)."""
+    decided (settle); a rollback to 待决定 adds rolled_back_at (reopen). supersedes: the IDs of the decisions
+    its header line 取代的决策 names ([] without the line); confirming 决定 marks them (workitem.mark_superseded).
+    cards: the IDs its section 已有的决定和结论 gives a card for, counted by `route.py audit`."""
     version = getattr(d, "version", None)
     if wid != "decision":
         return dict({"type": wid, "queue": False, "urgent": False}, **({"version": version} if version else {}))
@@ -960,7 +962,9 @@ def receipt_kind(spec, wid, d, pairs=None):
             "executor": orgspec.executor_of(spec, d.header.get(orgspec.EXECUTOR)), "researcher_action": researcher_action(d),
             "version": version, "title": d.task, "urgency": urgency or None, "sender": d.author,
             "reversible": terms.get("reversible"), "criteria": terms.get("criteria") or [], "default": terms.get("default"),
-            "default_option": terms.get("default_option"), "options": terms.get("options"), "frozen": terms.get("frozen") or []}
+            "default_option": terms.get("default_option"), "options": terms.get("options"), "frozen": terms.get("frozen") or [],
+            "supersedes": orgspec.read_superseded(d.header.get(orgspec.SUPERSEDES))[0] or [],
+            "cards": orgspec.CARD_HEAD.findall(orgspec.section_of(getattr(d, "text", "") or "", orgspec.SETTLED) or "")}
 
 
 # A decision package's header lines that go into fields of the same name where the space has them: template
@@ -1647,16 +1651,10 @@ def mql_text(lg, name, sequence=None):
     """MQL for a named query. Every query leaves out the system state 已终止:
     views hide terminated items by default, MQL does not."""
     terminated = system_states(lg.spec)
-
-    names = {s: cn for s, cn, _ in lg.spec.sequences()}
-    if sequence and sequence not in names:
-        hit = [s for s, cn in names.items() if cn == sequence]
-        if not hit:
-            raise LedgerError("没有序列“%s”；--sequence 写标识或中文名：%s" % (sequence, "、".join("%s（%s）" % kv for kv in names.items())))
-        sequence = hit[0]
+    sequence = sequence_id(lg, sequence)
 
     def of_sequence(wid):
-        return "`%s` = '%s'" % (lg.field(wid, "sequence")["field_key"], lg.spec.term("seq", sequence))
+        return _of_sequence(lg, wid, sequence)
 
     if name.startswith("source:"):
         src = item_id_of(name.split(":", 1)[1])
@@ -1684,6 +1682,53 @@ def mql_text(lg, name, sequence=None):
     if sequence:
         parts.append(of_sequence(wid))
     return [_select(lg, wid, " AND ".join(parts), [k for k in [lg.key_of(wid, s) for s in QUERY_FIELDS.get(name, ())] if k])]
+
+
+def sequence_id(lg, sequence):
+    """The id of the sequence --sequence names, by its id or its Chinese name; None when it names none."""
+    names = {s: cn for s, cn, _ in lg.spec.sequences()}
+    if sequence and sequence not in names:
+        hit = [s for s, cn in names.items() if cn == sequence]
+        if not hit:
+            raise LedgerError("没有序列“%s”；--sequence 写标识或中文名：%s" % (sequence, "、".join("%s（%s）" % kv for kv in names.items())))
+        sequence = hit[0]
+    return sequence
+
+
+def _of_sequence(lg, wid, sequence):
+    return "`%s` = '%s'" % (lg.field(wid, "sequence")["field_key"], lg.spec.term("seq", sequence))
+
+
+# What is settled (结论清单, 1.1.0): the decisions the researcher made, 待执行 and 归档, and the research tasks that
+# have a conclusion, 结论 of the 正式实验 flow or 去向 of the 探索 flow. Two fields outside the contract are found
+# by their names in the space, like every such field: 决定内容 (workitem.py confirm writes it by that name) and 去向.
+DECIDED_TEXT, WHERE_NEXT = "决定内容", "去向"
+
+
+def settled_mql(lg, task=None, sequence=None):
+    """[(kind, MQL, {column: what it is})] of what is settled: kind is decision or task. task: only the
+    decisions of that research task (the task itself is picked out of the rows afterwards); sequence: only
+    that sequence's."""
+    sequence = sequence_id(lg, sequence)
+    out = []
+    d, r = "decision", "research_task"
+    if d in lg.types:
+        cols = {k: v for k, v in ((lg.key_of(d, DECIDED_TEXT), "text"), (lg.key_of(d, "task_ref"), "task")) if k}
+        parts = ["`work_item_status` IN ('%s', '%s')" % (lg.state(d, "decided"), lg.state(d, "archived"))]
+        if task:
+            parts.append("`%s` = '%s'" % (lg.field(d, "task_ref")["field_key"], task))
+        if sequence:
+            parts.append(_of_sequence(lg, d, sequence))
+        out.append((d, _select(lg, d, " AND ".join(parts), list(cols)), cols))
+    if r in lg.types:
+        for ref, what in (("conclusion", "conclusion"), (WHERE_NEXT, "where_next")):
+            key = lg.key_of(r, ref)
+            if key:
+                parts = ["`%s` IS NOT NULL" % key, _not_in(system_states(lg.spec))]
+                if sequence:
+                    parts.append(_of_sequence(lg, r, sequence))
+                out.append(("task", _select(lg, r, " AND ".join(parts), [key]), {key: what}))
+    return out
 
 
 def _select(lg, wid, cond, extra=()):

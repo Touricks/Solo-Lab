@@ -268,7 +268,27 @@ def audit_cmd(spec, root, hours=24):
     mixed = pool.mixed_modes(rows)
     if mixed:
         print("权限模式和多数会话不同类的：%s" % "、".join(mixed))
+    cards = settled_use(root)
+    if cards:
+        print("决策包的“%s”一节：登记了 %d 份，带卡片的 %d 份（共 %d 张），写“无”或只有清单的 %d 份。" % (
+            orgspec.SETTLED, len(cards), sum(1 for n in cards if n), sum(cards), sum(1 for n in cards if not n)))
     return 0
+
+
+def settled_use(root):
+    """How many cards each registered decision package carries in its section 已有的决定和结论, from the
+    registration receipts (packages/sent/<ID>.json); one from before 1.1.0 has no such section and is left out."""
+    out = []
+    folder = os.path.join(root, "packages", "sent")
+    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        try:
+            with open(os.path.join(folder, name), encoding="utf-8") as f:
+                rec = json.load(f)
+        except (OSError, ValueError):
+            continue
+        if isinstance(rec, dict) and rec.get("type") == "decision" and isinstance(rec.get("cards"), list):
+            out.append(len(rec["cards"]))
+    return out
 
 
 CROSS_DAYS = 7                 # route.py cross lists the requests that had traffic within this many days
