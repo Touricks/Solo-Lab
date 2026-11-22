@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1520 1024" width="1520" height="1024" font-family="'Noto Sans SC', 'PingFang SC', sans-serif">
+<defs>
+  <marker id="arrow-grey" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto-start-reverse"><path d="M0 0.8 L10 5 L0 9.2 Z" fill="#9AA0AB"/></marker>
+  <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto-start-reverse"><path d="M0 0.8 L10 5 L0 9.2 Z" fill="#5B8DEF"/></marker>
+  <marker id="arrow-purple" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto-start-reverse"><path d="M0 0.8 L10 5 L0 9.2 Z" fill="#9A7BEF"/></marker>
+</defs>
+<!-- 连线和线上的标签 -->
+<g id="connectors">
+  <polyline points="760,152 760,248" fill="none" stroke="#9AA0AB" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow-grey)"/>
+  <text x="772.0" y="204.5" font-size="13" fill="#646A73">说话、签字</text>
+  <polyline points="570,286 190,286 190,456" fill="none" stroke="#5B8DEF" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow-blue)"/>
+  <text x="381.0" y="277" font-size="13" fill="#3F74E0">转录用户的话</text>
+  <polyline points="270,456 270,322 570,322" fill="none" stroke="#5B8DEF" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow-blue)"/>
+  <text x="277.0" y="341" font-size="13" fill="#3F74E0">汇报需要用户决定的事、任务进展中的里程碑事件</text>
+  <polyline points="420,494 570,494" fill="none" stroke="#5B8DEF" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow-blue)"/>
+  <text x="449.5" y="485" font-size="13" fill="#3F74E0">转给负责的会话</text>
+  <polyline points="570,530 420,530" fill="none" stroke="#9A7BEF" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow-purple)"/>
+  <text x="443.0" y="549" font-size="13" fill="#7A56DC">进展、要拍板的事</text>
+  <polyline points="736,568 736,664" fill="none" stroke="#9A7BEF" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow-purple)"/>
+  <text x="698.0" y="620.5" font-size="13" fill="#7A56DC">委托</text>
+  <polyline points="784,664 784,568" fill="none" stroke="#9A7BEF" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow-purple)"/>
+  <text x="796.0" y="620.5" font-size="13" fill="#7A56DC">方案、交付</text>
+  <polyline points="950,512 1100,512" fill="none" stroke="#9A7BEF" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow-purple)"/>
+  <text x="973.0" y="503" font-size="13" fill="#7A56DC">各会话的登记请求</text>
+  <polyline points="1290,568 1290,664" fill="none" stroke="#5B8DEF" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow-blue)"/>
+  <text x="1302.0" y="620.5" font-size="13" fill="#3F74E0">登记、确认节点</text>
+  <polyline points="570,720 420,720" fill="none" stroke="#9A7BEF" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow-purple)"/>
+  <text x="456.0" y="711" font-size="13" fill="#7A56DC">各会话写草稿</text>
+  <polyline points="760,776 760,872" fill="none" stroke="#9A7BEF" stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow-purple)"/>
+  <text x="772.0" y="828.5" font-size="13" fill="#7A56DC">各会话上传自己的文档</text>
+</g>
+<!-- 卡片 -->
+<g id="card-user">
+  <rect x="570" y="40" width="380" height="112" rx="14" ry="14" fill="#F5F6F8" stroke="#B4B9C2" stroke-width="2"/>
+  <circle cx="614" cy="96" r="22" fill="#E3E5EA"/>
+  <g transform="translate(614,96)"><circle cx="0" cy="-4.5" r="4" fill="none" stroke="#5F6673" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M-8.5 9.5 C-8.5 4.5 -4.5 2.5 0 2.5 C4.5 2.5 8.5 4.5 8.5 9.5" fill="none" stroke="#5F6673" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <text x="652" y="91" font-size="17" font-weight="700" fill="#1F2329">用户（+2）</text>
+  <text x="652" y="115" font-size="13" fill="#646A73">说话、签字、拍板</text>
+  </g>
+<g id="card-entry">
+  <rect x="570" y="248" width="380" height="112" rx="14" ry="14" fill="#EEF3FF" stroke="#5B8DEF" stroke-width="2"/>
+  <circle cx="614" cy="304" r="22" fill="#D9E5FF"/>
+  <g transform="translate(614,304)"><rect x="-9.5" y="-8.5" width="19" height="13.5" rx="3.5" fill="none" stroke="#2F6BE6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><polyline points="-4.5,5 -4.5,9.5 0.5,5" fill="none" stroke="#2F6BE6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <text x="652" y="288" font-size="17" font-weight="700" fill="#1C3D8F">入口 PMO-p1</text>
+  <text x="652" y="312" font-size="13" fill="#646A73">项目管理 +1 · 只和用户、路由往来</text>
+  <text x="652" y="333" font-size="13" fill="#646A73">管用户的决策队列</text>
+  </g>
+<g id="card-router">
+  <rect x="40" y="456" width="380" height="112" rx="14" ry="14" fill="#EEF3FF" stroke="#5B8DEF" stroke-width="2"/>
+  <circle cx="84" cy="512" r="22" fill="#D9E5FF"/>
+  <g transform="translate(84,512)"><circle cx="-7.5" cy="0" r="2.4" fill="none" stroke="#2F6BE6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="7.5" cy="-6" r="2.4" fill="none" stroke="#2F6BE6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="7.5" cy="6" r="2.4" fill="none" stroke="#2F6BE6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><polyline points="-5.1,0 0,0 0,-6 5.1,-6" fill="none" stroke="#2F6BE6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><polyline points="0,0 0,6 5.1,6" fill="none" stroke="#2F6BE6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <text x="122" y="496" font-size="17" font-weight="700" fill="#1C3D8F">路由 PMO-p0-router</text>
+  <text x="122" y="520" font-size="13" fill="#646A73">判断一句话归哪件事</text>
+  <text x="122" y="541" font-size="13" fill="#646A73">在各序列之间转发</text>
+  </g>
+<g id="card-p1">
+  <rect x="570" y="456" width="380" height="112" rx="14" ry="14" fill="#F4EFFF" stroke="#9A7BEF" stroke-width="2"/>
+  <circle cx="614" cy="512" r="22" fill="#E4DAFF"/>
+  <g transform="translate(614,512)"><circle cx="-7.5" cy="-4.5" r="2.5" fill="#6F4BD8"/><circle cx="0" cy="-4.5" r="2.5" fill="#6F4BD8"/><circle cx="7.5" cy="-4.5" r="2.5" fill="#6F4BD8"/><circle cx="-7.5" cy="4.5" r="2.5" fill="#6F4BD8"/><circle cx="0" cy="4.5" r="2.5" fill="#6F4BD8"/><circle cx="7.5" cy="4.5" r="2.5" fill="#6F4BD8"/></g>
+  <text x="652" y="496" font-size="17" font-weight="700" fill="#45279C">六个序列的 +1</text>
+  <text x="652" y="520" font-size="13" fill="#646A73">产品 · 算法 · 工程 · 基础设施 · 质量 · 外联</text>
+  <text x="652" y="541" font-size="13" fill="#646A73">定目标和验收标准 · 确认方案 · 验收</text>
+  </g>
+<g id="card-ledger">
+  <rect x="1100" y="456" width="380" height="112" rx="14" ry="14" fill="#EEF3FF" stroke="#5B8DEF" stroke-width="2"/>
+  <circle cx="1144" cy="512" r="22" fill="#D9E5FF"/>
+  <g transform="translate(1144,512)"><rect x="-7.5" y="-9.5" width="15" height="19" rx="2.8" fill="none" stroke="#2F6BE6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><line x1="-3.5" y1="-4" x2="3.5" y2="-4" fill="none" stroke="#2F6BE6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><line x1="-3.5" y1="0" x2="3.5" y2="0" fill="none" stroke="#2F6BE6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><line x1="-3.5" y1="4" x2="0.5" y2="4" fill="none" stroke="#2F6BE6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <text x="1182" y="496" font-size="17" font-weight="700" fill="#1C3D8F">书记员 PMO-p0-ledger</text>
+  <text x="1182" y="520" font-size="13" fill="#646A73">唯一写工作项的会话</text>
+  <text x="1182" y="541" font-size="13" fill="#646A73">登记 · 确认节点 · 归档</text>
+  </g>
+<g id="card-local">
+  <rect x="40" y="664" width="380" height="112" rx="14" ry="14" fill="#EAF8F1" stroke="#3DBE8B" stroke-width="2"/>
+  <circle cx="84" cy="720" r="22" fill="#CFF0E0"/>
+  <g transform="translate(84,720)"><polygon points="-9.5,-7.5 -3.5,-7.5 -1,-4.5 9.5,-4.5 9.5,7.5 -9.5,7.5" fill="none" stroke="#1A9A68" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <text x="122" y="704" font-size="17" font-weight="700" fill="#0F5F45">本地项目目录</text>
+  <text x="122" y="728" font-size="13" fill="#646A73">代码 · 运行记录</text>
+  <text x="122" y="749" font-size="13" fill="#646A73">任务包的草稿</text>
+  </g>
+<g id="card-p0">
+  <rect x="570" y="664" width="380" height="112" rx="14" ry="14" fill="#F4EFFF" stroke="#9A7BEF" stroke-width="2"/>
+  <circle cx="614" cy="720" r="22" fill="#E4DAFF"/>
+  <g transform="translate(614,720)"><rect x="-9.5" y="-8" width="19" height="16" rx="3.2" fill="none" stroke="#6F4BD8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><polyline points="-5,-3 -1.5,0 -5,3" fill="none" stroke="#6F4BD8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><line x1="1" y1="3.5" x2="5" y2="3.5" fill="none" stroke="#6F4BD8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <text x="652" y="704" font-size="17" font-weight="700" fill="#45279C">三个序列的 +0</text>
+  <text x="652" y="728" font-size="13" fill="#646A73">工程 · 基础设施 · 质量</text>
+  <text x="652" y="749" font-size="13" fill="#646A73">先交方案，确认后执行，做完交付</text>
+  </g>
+<g id="card-meegle">
+  <rect x="1100" y="664" width="380" height="112" rx="14" ry="14" fill="#EAF8F1" stroke="#3DBE8B" stroke-width="2"/>
+  <circle cx="1144" cy="720" r="22" fill="#CFF0E0"/>
+  <g transform="translate(1144,720)"><rect x="-8.5" y="-8.5" width="17" height="17" rx="3.8" fill="none" stroke="#1A9A68" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><polyline points="-4,0.2 -1.2,3.4 4.4,-3.4" fill="none" stroke="#1A9A68" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <text x="1182" y="704" font-size="17" font-weight="700" fill="#0F5F45">飞书项目</text>
+  <text x="1182" y="728" font-size="13" fill="#646A73">任务台账</text>
+  <text x="1182" y="749" font-size="13" fill="#646A73">五类工作项，按节点流程走</text>
+  </g>
+<g id="card-wiki">
+  <rect x="570" y="872" width="380" height="112" rx="14" ry="14" fill="#EAF8F1" stroke="#3DBE8B" stroke-width="2"/>
+  <circle cx="614" cy="928" r="22" fill="#CFF0E0"/>
+  <g transform="translate(614,928)"><polygon points="0,-8.5 9.5,-4 0,0.5 -9.5,-4" fill="none" stroke="#1A9A68" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><polyline points="-9.5,0.3 0,4.8 9.5,0.3" fill="none" stroke="#1A9A68" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><polyline points="-9.5,4.6 0,9.1 9.5,4.6" fill="none" stroke="#1A9A68" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <text x="652" y="912" font-size="17" font-weight="700" fill="#0F5F45">飞书知识库</text>
+  <text x="652" y="936" font-size="13" fill="#646A73">任务包 · 需求文档</text>
+  <text x="652" y="957" font-size="13" fill="#646A73">实验方案 · 结论</text>
+  </g>
+</svg>
