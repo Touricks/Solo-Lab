@@ -58,7 +58,7 @@ def pool_checklist(target, manual=False):
         return lines
     print("开池清单：%s（共 %d 个会话，总上限 %d）。会话标题的前缀和侧栏分区的名字：%s" % (
         plan["project"], plan["total"], plan["max_sessions"], label))
-    print("会话按委托的方向一层开一层：+2 开本序列的 +1，+1 开 +0。侧栏里谁开的就嵌在谁下面。")
+    print("会话按委托的方向开：+2 开本序列的 +0，入口开路由，路由开书记员。侧栏里谁开的就嵌在谁下面。")
     for above in setup_core.plan_entries(plan):
         for child in above["children"]:
             if setup_core.model_tier(child["model"]) > setup_core.model_tier(above["model"]) >= 0:
@@ -84,7 +84,7 @@ def pool_checklist(target, manual=False):
         if pool.mode_class(own_mode(target)) == "bypass" and left:
             # measured 2026-11-13: in bypass mode the app asks the user before every start_session, in whichever session calls it
             print("注意：本会话是 bypass 模式。这个模式下，应用对每一次开会话都要研究员点一次确认，卡片弹在发起的那个会话里：本会话开 +2、"
-                  "+2 开 +1、+1 开 +0 都一样。还没开的 %d 个会话要点 %d 次；没点之前那个会话停着，--wait 会等到超时。" % (len(left), len(left)))
+                  "+2 开 +0 都一样。还没开的 %d 个会话要点 %d 次；没点之前那个会话停着，--wait 会等到超时。" % (len(left), len(left)))
             if claimed:
                 print("已经开出的会话也是 bypass 模式，换模式会让新旧会话之间的消息被扣下，所以接着在本会话开。开之前告诉研究员：每开一个会话，"
                       "到弹出卡片的那个会话里点一次 Allow once。")
@@ -94,7 +94,7 @@ def pool_checklist(target, manual=False):
                 print("2. 留在本会话：接着开，每开一个会话，研究员到弹出卡片的那个会话里点一次 Allow once。")
             print("")
         print("研究员的会话（做初始化的这个会话）只开下面这 %d 个 +2，分 %d 批、%d 轮开：" % (len(tops), len(batches), len(rounds)))
-        print("- 为什么分批、分轮：会话自己开出的会话（+2 开的 +1、+1 开的 +0），应用有两条上限，所有序列合在一起算：同时最多 %d 个在跑；"
+        print("- 为什么分批、分轮：会话自己开出的会话（+2 开的 +0、入口开的路由、路由开的书记员），应用有两条上限，所有序列合在一起算：同时最多 %d 个在跑；"
               "研究员每发一条消息以后最多开出 %d 个。所以一批只开一两个序列，等这一批的会话都认领、首轮都结束再开下一批；"
               "一轮开到 %d 个上下就停下，请研究员回一句话，再开下一轮。" % (setup_core.AUTO_RUNNING, setup_core.MESSAGE_STARTS, setup_core.ROUND_BUDGET))
         print("- 每一批做三件事，顺序不能换：1. 用会话管理工具 start_session 把这一批的 +2 都开出来；2. 马上对它们各调一次 detach_session，"

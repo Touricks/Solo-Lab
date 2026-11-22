@@ -126,7 +126,7 @@ class LedgerCase(unittest.TestCase):
         return self.fake.state_of(self.fake.item(item_id))
 
     def in_flight_execute(self, path, source):
-        """A 同序列需求 of the 执行 relation as one registered before 1.1.0: from 1.1.0 what a +1 hands to a +0 has
+        """A 同序列需求 of the 执行 relation as one registered before 1.1.0: from 1.1.0 a closed task has
         no work item, and the items of that relation that exist go on to their end. Its document is the one the
         scribe created then."""
         lg = self.lg()
@@ -369,7 +369,7 @@ class RegisterTest(LedgerCase):
         self.assertEqual((self.value(item_id, "same_seq", "task_ref"), self.value(item_id, "same_seq", "owner_session")), (task, "待委托"))
         doc = self.fake.doc_by(self.value(item_id, "same_seq", "main_doc").rsplit("/", 1)[1])
         self.assertEqual(doc["parent"], "node_same_seq_product")
-        self.assertIn("confirm %s --by <承接方的会话名>" % item_id, text)
+        self.assertIn("它先交方案（docs.py attach %s 方案 <方案文件>），发出方确认以后再请你确认第一步" % item_id, text)
 
     def test_a_package_names_its_task_when_the_space_has_none_or_several(self):
         text = self.fails(register, self.lg(), self.draft(ASSIGN))
@@ -383,7 +383,7 @@ class RegisterTest(LedgerCase):
         by_header = self.draft(ASSIGN, "h.md", edit=lambda t: t.replace("- 需要接收方做的事", "- 所属研究任务：#%s\n- 需要接收方做的事" % first, 1))
         self.assertEqual(self.value(self.quiet(register, self.lg(), by_header), "same_seq", "task_ref"), first)
 
-    def test_what_a_p1_hands_to_a_p0_has_no_work_item(self):
+    def test_a_closed_task_has_no_work_item(self):
         """1.1.0: a 需求包 of the 执行 relation is uploaded by the session that hands the task out, under the main
         document of the work item it belongs to, and takes the number <that item>-<n>. No work item is created
         and the scribe is not asked; the +0 uploads its delivery under the package, and the session that handed
@@ -401,14 +401,14 @@ class RegisterTest(LedgerCase):
         self.assertEqual((len(self.fake.items), lg.wrote("meegle")), (items, []))          # nothing in Feishu Project
         doc = self.fake.doc_of_link(url)
         parent = self.fake.doc_by(self.value(source, "same_seq", "main_doc").rsplit("/", 1)[1])["node_token"]
-        self.assertEqual((doc["parent"], doc["title"]), (parent, "%s｜需求包（Quality-p1-02）：在留出集上重评节点 #142" % ref))
+        self.assertEqual((doc["parent"], doc["title"]), (parent, "%s｜需求包（Quality-p2-01）：在留出集上重评节点 #142" % ref))
         self.assertIn("- 关联工作项：#%s（不建工作项，上级工作项 #%s）" % (ref, source), doc["body"])
         self.assertTrue(doc["body"].rstrip().endswith("## 交接记录"))
         self.assertIn("上传：执行关系的需求包不建工作项，编号 #%s，文档挂在 #%s 的主文档下：%s" % (ref, source, url), out)
         self.assertIn("接着给 +0 发【委托 #%s】，消息里单独写一行“会话名：Quality-p0-%s”" % (ref, ref), out)
         rec = self.local(ref)
         self.assertEqual((rec["status"], rec["local"], rec["type"], rec["relation"], rec["source"], rec["doc"], rec["by"], rec["state"]),
-                         ("registered", True, "same_seq", "execute", source, url, "Quality-p1-02", "执行中"))
+                         ("registered", True, "same_seq", "execute", source, url, "Quality-p2-01", "执行中"))
         with open(path, encoding="utf-8") as f:
             self.assertIn("- 关联工作项：#%s\n" % ref, f.read())                          # the draft names its number
         lg = self.lg()
@@ -418,7 +418,7 @@ class RegisterTest(LedgerCase):
         other = self.quiet(docs.upload, self.lg(), self.draft(EXECUTE, "e3.md", edit=bare), source=source)
         self.assertEqual(self.local("%s-2" % source)["doc"], other)                       # the next task under the same item
         # the scribe is not in it
-        self.assertIn("执行关系的需求包从 1.1.0 起不建工作项，也不用书记员登记：请 Quality-p1-02 自己运行",
+        self.assertIn("执行关系的需求包从 1.1.0 起不建工作项，也不用书记员登记：请 Quality-p2-01 自己运行",
                       self.fails(workitem.register, self.lg(), self.draft(EXECUTE, "e4.md", edit=bare), source=source))
         self.assertIn("#%s 没有工作项" % ref, self.fails(workitem.confirm, self.lg(), ref, "Quality-p0-01"))
         # the +0 delivers under the package
@@ -428,12 +428,12 @@ class RegisterTest(LedgerCase):
         lg = self.lg()
         link, out = self.out(docs.upload, lg, back)
         self.assertEqual((self.fake.doc_of_link(link)["parent"], lg.wrote("meegle")), (doc["node_token"], []))
-        self.assertIn("上传：交付包挂在 #%s 的需求包下面：%s\n#%s 没有工作项，不用找书记员：接着给派活的会话 Quality-p1-02 发【交付 #%s】" % (ref, link, ref, ref), out)
+        self.assertIn("上传：交付包挂在 #%s 的需求包下面：%s\n#%s 没有工作项，不用找书记员：接着给派活的会话 Quality-p2-01 发【交付 #%s】" % (ref, link, ref, ref), out)
         self.assertEqual((self.local(ref)["state"], [d["version"] for d in self.local(ref)["deliveries"]]), ("待验收", [1]))
         self.assertIn("没有工作项，交付不经书记员", self.fails(workitem.reply, self.lg(), back))
         self.assertEqual(ledger_core.local_summary(self.local(ref)).splitlines()[0],
-                         "#%s  没建工作项的任务（Quality-p1-02 派给 +0）  待验收  在留出集上重评节点 #142" % ref)
-        # the +1 does not accept: the task is open again, and the next version is a new document
+                         "#%s  没建工作项的任务（Quality-p2-01 派给 +0）  待验收  在留出集上重评节点 #142" % ref)
+        # the session that handed it out does not accept: the task is open again, and the next version is a new document
         self.assertIn("验收不通过要写哪里不行", self.fails(docs.accept, self.lg(), ref, "不通过"))
         _, out = self.out(docs.accept, self.lg(), ref, "不通过", "第 2 条没有证据")
         self.assertIn("验收：#%s 不通过，结论记在需求包末尾。" % ref, out)
@@ -466,27 +466,44 @@ class RegisterTest(LedgerCase):
         self.assertIn("补一句：只看留出集。", doc2["body"])
         self.assertIn("- 关联工作项：#%s" % ref2, doc2["body"])
         self.assertEqual((self.local(ref2)["version"], lg.wrote("meegle"), doc2["title"]),
-                         (2, [], "%s｜需求包（Quality-p1-02）：在留出集上重评节点 #142" % ref2))
+                         (2, [], "%s｜需求包（Quality-p2-01）：在留出集上重评节点 #142" % ref2))
         self.assertIn("已经验收：验收以后不再修订", self.fails(docs.revise, self.lg(), ref, self.draft(EXECUTE, "late.md", edit=lambda t: bare(t).replace(
             "第 1 版（2026-11-25）", "第 2 版（2026-11-27）")), "晚了"))
         self.assertIn("没有工作项，也没有自己的状态包", self.fails(docs.status_block, self.lg(), ref2, v2))
-        wrong = self.draft(ASSIGN, "e9.md", edit=lambda t: t.replace("产品 +2（Product-p2-01）", "产品 +1（Product-p1-03）"))
+        wrong = self.draft(ASSIGN, "e9.md", edit=lambda t: t.replace("产品 +2（Product-p2-01）", "产品 +0（Product-p0-01）"))
         self.assertIn("职级对不上", self.fails(register, self.lg(), wrong))
 
-    def test_a_p2_without_a_p1_hands_a_closed_task_to_its_p0(self):
-        """1.0.12: a sequence that opens with its +2 alone (产品, 算法 and 外联 by default) gives a closed task to a +0
-        itself: a request of the 执行 relation, under the work item the task belongs to. A +1 writes 执行 only.
-        1.1.0: such a task has no work item, whoever hands it out."""
+    def test_a_p0_hands_out_the_closed_parts_of_its_own_request(self):
+        """1.1.0: a sequence has no +1. The +0 that holds a 下发 request hands its closed parts to other +0s of its
+        sequence, as 执行 packages under that request; under any other item it may not."""
         task = self.task()
-        by_p2 = lambda t: t.replace("- 来源工作项：#2100\n", "").replace("质量 +1（Quality-p1-02）", "质量 +2（Quality-p2-01）")
+        held = self.quiet(register, self.lg(), self.draft(ASSIGN, "a.md", edit=lambda t: t.replace(
+            "产品 +2（Product-p2-01）", "质量 +2（Quality-p2-01）").replace("- 接收方：产品 +0", "- 接收方：质量 +0（Quality-p0-01）")))
+        self.assertEqual(self.value(held, "same_seq", "owner_session"), "Quality-p0-01")
+        by = lambda who: (lambda t: t.replace("- 关联工作项：待建\n- 来源工作项：#2100\n", "- 关联工作项：待建\n").replace(
+            "质量 +2（Quality-p2-01）", "质量 +0（%s）" % who))
+        url = self.quiet(docs.upload, self.lg(), self.draft(EXECUTE, "s1.md", edit=by("Quality-p0-01")), source=held)
+        rec = self.local("%s-1" % held)
+        self.assertEqual((rec["source"], rec["by"], rec["doc"]), (held, "Quality-p0-01", url))
+        for who, source in (("Quality-p0-02", held), ("Quality-p0-01", task)):       # not its request; not a request at all
+            text = self.fails(docs.upload, self.lg(), self.draft(EXECUTE, "s-%s-%s.md" % (who, source), edit=by(who)), source=source)
+            self.assertIn("+0 只给自己手上的下发需求派封闭的子任务", text)
+            self.assertIn("#%s 不是交给 %s 的同序列需求" % (source, who), text)
+
+    def test_a_p2_hands_a_closed_task_to_its_p0(self):
+        """A +2 gives a closed task to a +0 itself: a request of the 执行 relation, under the work item the task
+        belongs to (1.0.12, for a sequence that opened no +1; 1.1.0: no sequence has one). Such a task has no
+        work item. 下发, the relation whose +0 hands in a plan first, is a +2's alone."""
+        task = self.task()
+        by_p2 = lambda t: t.replace("- 来源工作项：#2100\n", "")
         url = self.quiet(docs.upload, self.lg(), self.draft(EXECUTE, "p2.md", edit=by_p2), source=task)
         rec = self.local("%s-1" % task)
         self.assertEqual((rec["source"], rec["by"], rec["doc"]), (task, "Quality-p2-01", url))
         self.assertIn("--source <上级工作项 ID>", self.fails(docs.upload, self.lg(), self.draft(EXECUTE, "p2b.md", edit=by_p2)))
-        down = self.draft(ASSIGN, "p1.md", edit=lambda t: t.replace("产品 +2（Product-p2-01）", "产品 +1（Product-p1-03）"))
+        down = self.draft(ASSIGN, "p0.md", edit=lambda t: t.replace("产品 +2（Product-p2-01）", "产品 +0（Product-p0-01）"))
         text = self.fails(register, self.lg(), down)
         self.assertIn("职级对不上", text)
-        self.assertIn("本序列没开 +1、直接发给 +0 的是执行", text)
+        self.assertIn("下发的需求只由 +2 发", text)
 
     def test_the_router_gets_the_receipts_of_a_cross_request(self):
         """1.0.12: the two +2 of a 跨序列需求 ask the scribe themselves and talk to each other, so each thing the
@@ -688,7 +705,7 @@ class RegisterTest(LedgerCase):
         for who, why in (("Algo-p2-01", "序列的简写只有 Product、Alg、RnD、Infra、Quality、PMO、Liaison，没有 Algo"),
                          ("Foo-p2-01", "序列的简写只有 Product、Alg、RnD、Infra、Quality、PMO、Liaison，没有 Foo"),
                          ("产品 +2（Alg-p2-01）", "Alg-p2-01 是算法 +2 的会话，前面写的序列和职级要和它一致，或者只写会话名"),
-                         ("算法 +1（Alg-p2-01）", "Alg-p2-01 是算法 +2 的会话，前面写的序列和职级要和它一致，或者只写会话名")):
+                         ("算法 +0（Alg-p2-01）", "Alg-p2-01 是算法 +2 的会话，前面写的序列和职级要和它一致，或者只写会话名")):
             self.assertEqual(lint(who), ["包头“执行方”写的是“%s”：%s" % (who, why)], who)
         self.assertIn("草稿没通过检查", self.fails(register, self.lg(), self.write(good.replace("Alg-p2-01\n- 研究员", "Algo-p2-01\n- 研究员"))))
         self.assertEqual(self.fake.items, {})
@@ -698,7 +715,7 @@ class RegisterTest(LedgerCase):
 
     def test_the_executor_is_a_p2_the_entry_or_the_router(self):
         """1.0.6 (the researcher, 2026-11-16): the session a decision package names as 执行方 answers for the matter:
-        a sequence's +2, the entry (项目管理 +2) or the router (项目管理 +1). A +1, a +0 and the scribe are sent back
+        a sequence's +2, the entry (项目管理 +2) or the router (项目管理 +1). A +0 and the scribe are sent back
         with what to write instead, and nothing is registered. A receipt that names another session from before
         is read and archived as it is."""
         good = example(DECISION)
@@ -709,21 +726,21 @@ class RegisterTest(LedgerCase):
         self.assertEqual(orgspec.executor_of(self.spec, "pmo-p1-01"), "PMO-p1-01")
         only = "执行方只收研究员、各序列的 +2、入口和路由。"
         how = "；要下级干的活，由 +2 用需求包委托"
-        for who, name, what, p2 in (("Alg-p1-01", "Alg-p1-01", "算法 +1 的会话", "Alg-p2-01"),
-                                    ("算法 +1（Alg-p1-02）", "Alg-p1-02", "算法 +1 的会话", "Alg-p2-01"),
+        for who, name, what, p2 in (("Alg-p0-01", "Alg-p0-01", "算法 +0 的会话", "Alg-p2-01"),
+                                    ("算法 +0（Alg-p0-02）", "Alg-p0-02", "算法 +0 的会话", "Alg-p2-01"),
                                     ("Quality-p0-2106", "Quality-p0-2106", "质量 +0 的会话", "Quality-p2-01"),
                                     ("rnd-p0-01", "RnD-p0-01", "工程 +0 的会话", "RnD-p2-01"),
                                     ("PMO-p0-01", "PMO-p0-01", "书记员", "PMO-p2-01")):
             self.assertEqual(lint(who), ["包头“执行方”写的是“%s”：%s 是%s：%s改写负责这件事的 +2 的会话名（比如 %s）%s" % (
                 who, name, what, only, p2, how)], who)
             self.assertIsNone(orgspec.executor_of(self.spec, who), who)
-        self.assertIn("草稿没通过检查", self.fails(register, self.lg(), self.write(named("Alg-p1-01"))))
+        self.assertIn("草稿没通过检查", self.fails(register, self.lg(), self.write(named("Alg-p0-01"))))
         self.assertEqual(self.fake.items, {})
-        # registered before 1.0.6 with a +1 as 执行方: its receipt is read as it is, in the queue's list and at the archive
+        # registered before 1.0.6 with another session as 执行方: its receipt is read as it is, in the queue's list and at the archive
         old = self.quiet(register, self.lg(), self.draft(DECISION, "old.md"))
-        self.edit_receipt(old, executor="Alg-p1-01")
+        self.edit_receipt(old, executor="Alg-p0-01")
         _, out = self.out(workitem.confirm, self.lg(), old, "研究员", ["决定内容=移进评测协议", "决定人=研究员"])
-        self.assertEqual(out.splitlines()[-1], "执行方：Alg-p1-01。")
+        self.assertEqual(out.splitlines()[-1], "执行方：Alg-p0-01。")
         self.assertEqual(self.quiet(ledger.query, self.lg("preview"), "queue"), [])          # a session carries it out
         self.quiet(workitem.archive, self.lg(), old)
         self.assertEqual(self.state(old), "归档")
@@ -941,8 +958,8 @@ class Template220Test(LedgerCase):
             text = self.fails(workitem.confirm, self.lg(), hand, "研究员", decided, executor="研究员")
             self.assertIn("--executor 只收会话名：要把 #%s 的执行方改成研究员，请发出方写下一版（包头“执行方”写“研究员”，“研究员要做的事”写清楚要他做什么），"
                           "书记员用 docs.py revise 换主文档以后再确认" % hand, text)
-            text = self.fails(workitem.confirm, self.lg(), hand, "研究员", decided, executor="Infra-p1-01")
-            self.assertIn("--executor 写的是“Infra-p1-01”：Infra-p1-01 是基础设施 +1 的会话：执行方只收研究员、各序列的 +2、入口和路由。"
+            text = self.fails(workitem.confirm, self.lg(), hand, "研究员", decided, executor="Infra-p0-01")
+            self.assertIn("--executor 写的是“Infra-p0-01”：Infra-p0-01 是基础设施 +0 的会话：执行方只收研究员、各序列的 +2、入口和路由。"
                           "改写负责这件事的 +2 的会话名（比如 Infra-p2-01）；要下级干的活，由 +2 用需求包委托", text)
             self.assertIn("--executor 写的是“PMO-p0-01”：PMO-p0-01 是书记员", self.fails(workitem.confirm, self.lg(), hand, "研究员", decided, executor="PMO-p0-01"))
             self.assertIn("序列的简写只有", self.fails(workitem.confirm, self.lg(), hand, "研究员", decided, executor="Infro-p2-01"))
@@ -1066,7 +1083,7 @@ class ReplyTest(LedgerCase):
         self.task()
         request = self.quiet(register, self.lg(), self.draft(ASSIGN))
         path = self.write(example(DELIVERY).replace("- 关联工作项：#2001", "- 关联工作项：#%s" % request), "back.md")
-        self.assertIn("这份交付包的文档还没上传：文档谁负责谁写，请 Product-p1-03 先运行", self.fails(workitem.reply, self.lg(), path))
+        self.assertIn("这份交付包的文档还没上传：文档谁负责谁写，请 Product-p0-2001 先运行", self.fails(workitem.reply, self.lg(), path))
         lg = self.lg()
         link, text = self.out(docs.upload, lg, path)
         parent = self.fake.doc_by(self.value(request, "same_seq", "main_doc").rsplit("/", 1)[1])["node_token"]
@@ -1091,15 +1108,15 @@ class ReplyTest(LedgerCase):
         request, the earlier document where it was; the scribe's reply puts the 交付包 field on the new link.
         The same version again, and a number that does not follow, stop the upload with the number to write."""
         self.task()
-        request = self.quiet(register, self.lg(), self.draft(ASSIGN, edit=lambda t: t.replace("- 接收方：产品 +1", "- 接收方：产品 +1（Product-p1-02）")))
-        self.quiet(workitem.confirm, self.lg(), request, "Product-p1-02")
+        request = self.quiet(register, self.lg(), self.draft(ASSIGN, edit=lambda t: t.replace("- 接收方：产品 +0", "- 接收方：产品 +0（Product-p0-01）")))
+        self.quiet(workitem.confirm, self.lg(), request, "Product-p2-01", ["方案=" + LINK])
         first = example(DELIVERY).replace("- 关联工作项：#2001", "- 关联工作项：#%s" % request)
         path = self.write(first, "back.md")
         v1 = self.quiet(reply, self.lg(), path)
         receipt = "packages/sent/reply-%s-back.md.json" % request
         with open(os.path.join(self.tmp, receipt), encoding="utf-8") as f:
             self.assertEqual(json.load(f)["version"], 1)
-        self.quiet(workitem.confirm, self.lg(), request, "Product-p1-02")
+        self.quiet(workitem.confirm, self.lg(), request, "Product-p0-01")
         self.assertEqual(self.state(request), "待验收")
         self.quiet(workitem.rollback, self.lg(), request, "执行", "第 2 条没有证据", by="Product-p2-01")
         self.assertEqual((self.state(request), self.value(request, "same_seq", "delivery_link")), ("执行中", ""))
@@ -1143,7 +1160,7 @@ class ReplyTest(LedgerCase):
         self.assertIn("交付包第 3 版已挂到", out)
         self.assertEqual((lg.wrote("docs", "+create"), len(self.fake.docs), self.value(request, "same_seq", "delivery_link")), ([], count + 1, v3))
         # a receipt from before 1.0.6 keeps no version: the next one only has to be higher than the first
-        self.quiet(workitem.confirm, self.lg(), request, "Product-p1-02")
+        self.quiet(workitem.confirm, self.lg(), request, "Product-p0-01")
         self.quiet(workitem.confirm, self.lg(), request, "Product-p2-01")
         self.assertEqual(self.state(request), "已验收")
         fourth = self.write(first.replace("第 1 版（2026-11-02）", "第 4 版（2026-11-07）"), "back-4.md")
@@ -1189,7 +1206,7 @@ class StepTest(LedgerCase):
         task = self.task()
         sets = STEPS[0][1]
         self.assertIn("加 --by <提出请求的会话名>", self.fails(workitem.confirm, self.lg(), task, None, sets))
-        for by in ("Alg-p2-01", "Product-p1-01", "PMO-p0-01"):
+        for by in ("Alg-p2-01", "Product-p0-01", "PMO-p0-01"):
             self.assertIn("不能请书记员确认这一步", self.fails(workitem.confirm, self.lg(), task, by, sets), by)
         self.assertEqual(self.state(task), "确定目标")
         self.quiet(workitem.confirm, self.lg(), task, "product-p2-01", sets)             # the sequence's +2, any case
@@ -1198,14 +1215,20 @@ class StepTest(LedgerCase):
 
     def test_the_issuers_and_the_assignees_steps(self):
         self.task()
-        request = self.quiet(register, self.lg(), self.draft(ASSIGN))           # Product-p2-01 → 产品 +1, nobody named yet
+        request = self.quiet(register, self.lg(), self.draft(ASSIGN))           # Product-p2-01 → 产品 +0, nobody named yet
         self.assertIn("加 --by", self.fails(workitem.confirm, self.lg(), request))
-        self.quiet(workitem.confirm, self.lg(), request, "Product-p1-02", ["owner_session=Product-p1-02"])
-        self.assertEqual(self.state(request), "执行中")
-        text = self.fails(workitem.confirm, self.lg(), request, "Product-p1-03", ["交付包=" + LINK])
-        self.assertIn("负责方是承接方（Product-p1-02）", text)
+        # 1.1.0, 定方案: the +0 hands in a plan, and the +2 that sent the request confirms the step with it
+        named = ["owner_session=Product-p0-01"]
+        self.assertIn("“定方案”这一步的负责方是发出方（Product-p2-01），Product-p0-01 不能请书记员确认这一步",
+                      self.fails(workitem.confirm, self.lg(), request, "Product-p0-01", named + ["方案=" + LINK]))
+        self.assertIn("要先填：方案", self.fails(workitem.confirm, self.lg(), request, "Product-p2-01", named))
+        self.assertEqual(self.state(request), "待开工")
+        self.quiet(workitem.confirm, self.lg(), request, "Product-p2-01", named + ["方案=" + LINK])
+        self.assertEqual((self.state(request), self.value(request, "same_seq", "plan_link")), ("执行中", LINK))
+        text = self.fails(workitem.confirm, self.lg(), request, "Alg-p0-01", ["交付包=" + LINK])
+        self.assertIn("负责方是承接方（Product-p0-01）", text)
         self.quiet(workitem.confirm, self.lg(), request, "Product-p2-01", ["交付包=" + LINK])      # the +2 of the assignee's sequence
-        self.assertIn("负责方是发出方（Product-p2-01）", self.fails(workitem.confirm, self.lg(), request, "Product-p1-02"))
+        self.assertIn("负责方是发出方（Product-p2-01）", self.fails(workitem.confirm, self.lg(), request, "Product-p0-01"))
         self.quiet(workitem.confirm, self.lg(), request, "Product-p2-01")
         self.assertEqual(self.state(request), "已验收")
 
@@ -1214,10 +1237,11 @@ class StepTest(LedgerCase):
         source = self.quiet(register, self.lg(), self.draft(ASSIGN, "a.md", edit=lambda t: t.replace("产品 +2（Product-p2-01）", "质量 +2（Quality-p2-01）")))
         request = self.in_flight_execute(self.draft(EXECUTE, "e.md", edit=lambda t: t.replace("- 来源工作项：#2100\n", "")), source)
         self.assertEqual(self.value(request, "same_seq", "owner_session"), "Quality-p0-%s" % request)   # the work name; registered before 1.1.0
-        for by in ("Alg-p0-01", "Quality-p1-02"):
-            self.assertIn("不能请书记员确认这一步", self.fails(workitem.confirm, self.lg(), request, by), by)
-        self.quiet(workitem.confirm, self.lg(), request, "Quality-p0-01")                # the pool slot of the +0 on the item
+        self.quiet(workitem.confirm, self.lg(), request, "Quality-p2-01", ["方案=" + LINK])
         self.assertEqual(self.state(request), "执行中")
+        self.assertIn("不能请书记员确认这一步", self.fails(workitem.confirm, self.lg(), request, "Alg-p0-01", ["交付包=" + LINK]))
+        self.quiet(workitem.confirm, self.lg(), request, "Quality-p0-01", ["交付包=" + LINK])   # the pool slot of the +0 on the item
+        self.assertEqual(self.state(request), "待验收")
 
     def test_a_preview_says_so_on_every_result_line(self):
         task = self.task()
@@ -1427,11 +1451,11 @@ class RollbackTest(LedgerCase):
 
     def test_a_delivery_that_is_not_accepted(self):
         self.task()
-        request = self.quiet(register, self.lg(), self.draft(ASSIGN, edit=lambda t: t.replace("- 接收方：产品 +1", "- 接收方：产品 +1（Product-p1-02）")))
-        self.assertEqual(self.value(request, "same_seq", "owner_session"), "Product-p1-02")
-        self.quiet(workitem.confirm, self.lg(), request, "Product-p1-02")
-        self.quiet(workitem.confirm, self.lg(), request, "Product-p1-02", ["交付包=" + LINK])
-        self.assertIn("负责方是发出方（Product-p2-01）", self.fails(workitem.rollback, self.lg(), request, "执行", "第 2 条没有证据", by="Product-p1-02"))
+        request = self.quiet(register, self.lg(), self.draft(ASSIGN, edit=lambda t: t.replace("- 接收方：产品 +0", "- 接收方：产品 +0（Product-p0-01）")))
+        self.assertEqual(self.value(request, "same_seq", "owner_session"), "Product-p0-01")
+        self.quiet(workitem.confirm, self.lg(), request, "Product-p2-01", ["方案=" + LINK])
+        self.quiet(workitem.confirm, self.lg(), request, "Product-p0-01", ["交付包=" + LINK])
+        self.assertIn("负责方是发出方（Product-p2-01）", self.fails(workitem.rollback, self.lg(), request, "执行", "第 2 条没有证据", by="Product-p0-01"))
         self.assertIn("不走决策", self.fails(workitem.rollback, self.lg(), request, "执行", "第 2 条没有证据", decision=self.decision()))
         _, text = self.out(workitem.rollback, self.lg(), request, "执行", "第 2 条没有证据", by="Product-p2-01")
         self.assertEqual((self.state(request), self.value(request, "same_seq", "delivery_link")), ("执行中", ""))
@@ -1604,7 +1628,7 @@ class WhoWritesTest(LedgerCase):
     document's owner: the session a work item's 发出方 names, or the +2 of its sequence when 发出方 is no
     session. The researcher's own session, which holds no claim, writes any document."""
 
-    CLAIMS = (("Alg-p2-01", "alg-p2"), ("Alg-p1-01", "alg-p1"), ("Product-p2-01", "product-p2"), ("PMO-p2-01", "pmo-p2"),
+    CLAIMS = (("Alg-p2-01", "alg-p2"), ("Alg-p0-01", "alg-p0"), ("Product-p2-01", "product-p2"), ("Product-p0-01", "product-p0"), ("PMO-p2-01", "pmo-p2"),
               ("PMO-p1-01", "pmo-router"), ("PMO-p0-01", "pmo-scribe"))
 
     def setUp(self):
@@ -1622,7 +1646,7 @@ class WhoWritesTest(LedgerCase):
         table = pool.empty()
         for name, role in self.CLAIMS:
             table["claims"][name] = {"name": name, "short": name.lower(), "role": role, "session_id": "sid-" + name, "desk": None}
-        table["pending"].append({"session_id": "sid-new", "name": "Alg-p1-02", "role": "alg-p1"})
+        table["pending"].append({"session_id": "sid-new", "name": "Alg-p0-02", "role": "alg-p0"})
         pool.save_json(pool.pool_path(self.tmp), table)
         self.env = dict(os.environ)
 
@@ -1650,12 +1674,28 @@ class WhoWritesTest(LedgerCase):
         self.as_session("sid-new")
         self.assertEqual((self.lg().caller, self.lg().origin), (None, "pending"))
 
+    def test_what_a_p1_wrote_before_1_1_0_is_its_p2s(self):
+        """1.1.0: a sequence has no +1. The documents and the tasks one of them wrote before the upgrade name a
+        session that is gone; the +2 of that sequence takes them over, and nobody else."""
+        self.as_session("Alg-p2-01")
+        ledger_core.must_be(self.lg(), "修订这份文档", names=["Alg-p1-01"])
+        for other in ("Product-p2-01", "Alg-p0-01", "PMO-p0-01"):
+            self.as_session(other)
+            with self.assertRaises(ledger_core.LedgerError, msg=other):
+                ledger_core.must_be(self.lg(), "修订这份文档", names=["Alg-p1-01"])
+        self.as_session("PMO-p2-01")                                                   # the router is no +1 of that kind
+        with self.assertRaises(ledger_core.LedgerError):
+            ledger_core.must_be(self.lg(), "修订这份文档", names=["PMO-p1-01"])
+        for mine, name, same in (("Alg-p0-01", "Alg-p0-2101-3", True), ("alg-p0-02", "Alg-p0-2101", True), ("Alg-p0-01", "Alg-p0-02", False),
+                                 ("Alg-p0-01", "Quality-p0-2101", False), ("Alg-p2-01", "Alg-p0-2101", False), ("Alg-p2-01", "alg-p2-01", True)):
+            self.assertEqual(ledger_core.same_session(mine, name), same, (mine, name))
+
     def test_a_revision_is_its_authors(self):
         self.as_session()
         self.task()
         item = self.quiet(register, self.lg(), self.draft(ASSIGN, "a.md"))            # from Product-p2-01
         v2 = lambda name: self.draft(ASSIGN, name, edit=lambda t: t.replace("第 1 版（2026-10-19）", "第 2 版（2026-10-20）"))
-        for other in ("Alg-p1-01", "Alg-p2-01", "PMO-p0-01", "PMO-p1-01"):
+        for other in ("Alg-p0-01", "Alg-p2-01", "PMO-p0-01", "PMO-p1-01"):
             self.as_session(other)
             self.assertEqual(self.fails(docs.revise, self.lg(), item, v2("o.md"), "x"),
                              "（%s）不能修订 #%s 的主文档：这份文档归 Product-p2-01 写，请它来修订。" % (other, item))
@@ -1700,19 +1740,34 @@ class WhoWritesTest(LedgerCase):
     def test_a_delivery_and_a_steps_document_are_their_sessions(self):
         self.as_session()
         task = self.task()
-        request = self.quiet(register, self.lg(), self.draft(ASSIGN, "a.md", edit=lambda t: t.replace("- 接收方：产品 +1", "- 接收方：产品 +1（Product-p1-03）")))
-        back = self.write(example(DELIVERY).replace("- 关联工作项：#2001", "- 关联工作项：#%s" % request), "back.md")   # from Product-p1-03
+        request = self.quiet(register, self.lg(), self.draft(ASSIGN, "a.md", edit=lambda t: t.replace("- 接收方：产品 +0", "- 接收方：产品 +0（Product-p0-2001）")))
+        back = self.write(example(DELIVERY).replace("- 关联工作项：#2001", "- 关联工作项：#%s" % request), "back.md")   # from Product-p0-2001
         self.as_session("Product-p2-01")
-        self.assertEqual(self.fails(docs.upload, self.lg(), back), "（Product-p2-01）不能上传这份交付包：这份交付包的发出方是 Product-p1-03，请它来上传。")
+        self.assertEqual(self.fails(docs.upload, self.lg(), back), "（Product-p2-01）不能上传这份交付包：这份交付包的发出方是 Product-p0-2001，请它来上传。")
+        # 1.1.0: the plan of a 下发 request is its +0's to upload, under either of its names, though the step is the +2's
+        with open(os.path.join(self.tmp, "plan.md"), "w", encoding="utf-8") as f:
+            f.write("# 方案\n\n先访谈，再看日志。\n")
+        self.as_session("Alg-p0-01")
+        self.assertEqual(self.fails(docs.attach, self.lg(), request, "方案", "plan.md"),
+                         "（Alg-p0-01）不能给 #%s 上传“方案”：“定方案”归发出方（Product-p2-01），主文档归 Product-p2-01 写。" % request)
+        self.as_session("Product-p0-01")                                               # its pool slot; the item names its work name
+        plan = self.quiet(docs.attach, self.lg(), request, "方案", "plan.md")
+        self.as_session("PMO-p0-01")
+        self.assertIn("Product-p0-01 不能请书记员确认这一步", self.fails(workitem.confirm, self.lg(), request, "Product-p0-01", ["方案=@plan.md"]))
+        _, out = self.out(workitem.confirm, self.lg(), request, "Product-p2-01", ["方案=@plan.md"])
+        self.assertIn("plan.md 用的是 Product-p0-01 上传的文档：%s" % plan, out)
+        self.assertEqual(self.value(request, "same_seq", "plan_link"), plan)
+        self.as_session("Product-p0-01")                                               # ...and so is the delivery
+        self.assertTrue(self.quiet(docs.upload, self.lg(), back))
         # a step's document: the session that answers for the step in progress, or the owner of the main document
         os.makedirs(os.path.join(self.tmp, "spec"))
         with open(os.path.join(self.tmp, "spec", "goal.md"), "w", encoding="utf-8") as f:
             f.write("# 调研\n\n三篇相关工作。\n")
         self.as_session()
         self.quiet(workitem.confirm, self.lg(), task, "Product-p2-01", STEPS[0][1])     # now at 前期调研, the algorithm +2's step
-        self.as_session("Alg-p1-01")
+        self.as_session("Alg-p0-01")
         self.assertEqual(self.fails(docs.attach, self.lg(), task, "调研文档", "spec/goal.md"),
-                         "（Alg-p1-01）不能给 #%s 上传“调研文档”：“前期调研”归算法 +2，主文档归 Product-p2-01 写。" % task)
+                         "（Alg-p0-01）不能给 #%s 上传“调研文档”：“前期调研”归算法 +2，主文档归 Product-p2-01 写。" % task)
         self.as_session("Alg-p2-01")
         link = self.quiet(docs.attach, self.lg(), task, "调研文档", "spec/goal.md")
         self.as_session("PMO-p0-01")
@@ -1773,7 +1828,7 @@ class WhoWritesTest(LedgerCase):
         self.assertEqual(self.fails(docs.append, self.lg(), task, self.write("[Product+2] 接手第 2 步。\n", "other.md")),
                          "交接记录第一行的会话标签要是自己的 [Alg+2]：每个会话只记自己的交接")
         self.as_session("sid-new")
-        self.assertIn("还没转正的会话不能追加 #%s 的交接记录" % task, self.fails(docs.append, self.lg(), task, self.write("[Alg+1] 接手。\n", "n2.md")))
+        self.assertIn("还没转正的会话不能追加 #%s 的交接记录" % task, self.fails(docs.append, self.lg(), task, self.write("[Alg+0] 接手。\n", "n2.md")))
         self.as_session("Alg-p2-01")
         self.assertEqual(self.fails(docs.ensure_node, self.lg(), "feedback"), "（Alg-p2-01）不能建知识库节点：知识库的节点由书记员建。")
         self.as_session("PMO-p0-01")
@@ -1901,7 +1956,7 @@ class ArchiveTest(LedgerCase):
         self.task()
         request = self.quiet(register, self.lg(), self.draft(ASSIGN))
         lg = self.lg()
-        self.assertIn("还没走到最后一步“归档”：现在在“开工”", self.fails(workitem.archive, lg, request))
+        self.assertIn("还没走到最后一步“归档”：现在在“定方案”", self.fails(workitem.archive, lg, request))
         # 1.0.11: an item made by mistake is not pushed through its steps; the message says how to ask the researcher
         self.assertIn("todo.py add --for", self.fails(workitem.archive, lg, request))
         self.assertIn("记进研究员任务清单，由研究员在网页上终止", self.fails(workitem.archive, lg, request))
@@ -1933,7 +1988,7 @@ class FieldsAndQueriesTest(LedgerCase):
         self.assertEqual((self.value(request, "same_seq", "blocked_reason"), self.value(request, "same_seq", "blocked_since")), ("", ""))
         self.assertEqual(self.quiet(ledger.query, self.lg("preview"), "blocked"), [])
         for ref in ("blocked_reason", "阻塞原因"):                                       # however the field is written
-            self.assertIn("阻塞原因用 update 写", self.fails(workitem.confirm, self.lg(), request, "Product-p1-01", [ref + "=x"]))
+            self.assertIn("阻塞原因用 update 写", self.fails(workitem.confirm, self.lg(), request, "Product-p2-01", [ref + "=x"]))
 
     def test_named_queries(self):
         lg = self.lg("offline")
@@ -2159,8 +2214,8 @@ class DocumentsTest(LedgerCase):
         lg = ledger_core.Ledger(self.tmp, "offline")
         self.quiet(workitem.comment, lg, "2101", "[紧急] 预算超了")
         self.assertIn("'%s [紧急] 预算超了'" % lg.tag, lg.planned[-1])
-        self.quiet(workitem.comment, lg, "2101", "[Alg+1] 收到")
-        self.assertIn("'[Alg+1] 收到'", lg.planned[-1])
+        self.quiet(workitem.comment, lg, "2101", "[Alg+0] 收到")
+        self.assertIn("'[Alg+0] 收到'", lg.planned[-1])
 
     def test_a_create_answer_without_an_id_stops(self):
         with self.assertRaises(ledger_core.LedgerError):
@@ -2609,7 +2664,7 @@ class DecisionStateTest(LedgerCase):
         self.assertIn("--option 只用在确认决策的“决定”这一步：#%s 是决策，现在是“已决定”；这一步已经确认过（比如研究员在网页上定的），"
                       "选的选项用 workitem.py comment 记一条评论" % first, text)
         request = self.quiet(register, self.lg(), self.draft(ASSIGN, "a.md"))
-        text = self.fails(workitem.confirm, self.lg(), request, "Product-p1-03", option="本机 Docker")
+        text = self.fails(workitem.confirm, self.lg(), request, "Product-p2-01", option="本机 Docker")
         self.assertTrue(text.endswith("--option 只用在确认决策的“决定”这一步：#%s 是同序列需求，现在是“待开工”" % request), text)
         # another decision names the same category and the researcher picks an option without it: nothing is taken back
         later = self.quiet(register, self.lg(), self.draft(PERMISSION, "later.md", edit=lambda t: t.replace(

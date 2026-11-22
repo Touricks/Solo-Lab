@@ -62,8 +62,7 @@ def notify(spec, root, role, text, work_item=None, sender=None):
 def agent_roles(spec):
     out = []
     for s, _, _ in spec.sequences():
-        for r in (2, 1, 0):
-            out.append("pmo-router" if (s, r) == ("pmo", 1) else "pmo-scribe" if (s, r) == ("pmo", 0) else "%s-p%d" % (s, r))
+        out += [spec.role_name(s, r) for r in spec.ranks_of(s)]
     return out
 
 

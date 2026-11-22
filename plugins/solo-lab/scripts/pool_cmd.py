@@ -72,14 +72,15 @@ def plan_entry(plan, name):
 
 
 def opener(policy, role, seq="本序列"):
-    """Whose session opens a new session of this role: the one a level above, so that it nests there."""
-    if policy["agents"][role]["rank"] >= 1:
-        return "%s +2" % seq
-    return "%s的一个 +1（这个序列没有 +1 时是 +2）" % seq
+    """Whose session opens a new session of this role, so that it nests there: the +2 of its sequence; the
+    scribe is the router's."""
+    if role == policy.get("scribe_role"):
+        return "路由"
+    return "%s +2" % seq
 
 
 def children_text(root, policy, claim):
-    """What a session opens below itself: a +2 its +1s, a +1 its +0s. The rows come from
+    """What a session opens below itself: a +2 its +0s (the entry the router, the router the scribe). The rows come from
     pool-plan.json, the ones already claimed marked, plus a ready row for the next free slot
     (for a refill). A session sits in the sidebar under the one that opened it, so the pool
     nests as work is handed down."""
@@ -99,29 +100,16 @@ def children_text(root, policy, claim):
     used = len(pl["claims"]) + len(pl["permits"])
     full = bool(cap) and used >= cap
 
-    def has(rank):                           # the sequence has a session of this rank: claimed, being opened, or planned
-        held = list(pl["claims"].values()) + list(pl["permits"]) + list(plan_walk(top))
-        return any(agents[c["role"]]["sequence"] == mine["sequence"] and agents[c["role"]]["rank"] == rank
-                   for c in held if c.get("role") in agents)
-
-    zero = next((t for t in top.get("child_roles", []) if agents[t["role"]]["rank"] == 0), None)
     # names the plan keeps for sessions another session of the sequence opens
     reserved = {e["name"] for e in plan_walk(top)} - {ch["name"] for ch, _, _ in rows}
     for tpl in ([] if full else top.get("child_roles", [])):
-        rank = agents[tpl["role"]]["rank"]
-        # a +2 opens +1s and a +1 opens +0s; a +2 opens +0s itself only where the sequence runs without +1s
-        wanted = rank == mine["rank"] - 1 or (mine["rank"] == 2 and rank == 0 and not sizes.get("p1") and not has(1))
-        if not wanted or pool.role_limit(policy, tpl["role"]) <= len(pool.claims_of(pl, tpl["role"])):
+        # a session opens the roles it hands work to: the assign edges of the dispatch graph (its policy's spawn)
+        if tpl["role"] not in (mine.get("spawn") or []) or pool.role_limit(policy, tpl["role"]) <= len(pool.claims_of(pl, tpl["role"])):
             continue
         name = next_slot(policy, pl, tpl["role"], reserved)
         if any(ch["name"] == name for ch, _, _ in rows):
             continue
-        row = child_row(tpl, name)
-        if (rank == 1 and zero and sizes.get("p0") and not has(0) and plan.get("opens")
-                and not (cap and used + 2 > cap)):
-            # the first +1 of a sequence that has no +0 brings one along, in its own first turn
-            row["brief"] = row["claim"] + plan["opens"] % (next_slot(policy, pl, zero["role"], reserved), name)
-        rows.append((row, False, True))
+        rows.append((child_row(tpl, name), False, True))
     if not rows:
         return ""
     lines = ["开局句点了名要你开的会话，照下表开其中还没认领的（开局句没提开会话的，不开，用 pool.py show 找回已有的会话）；"
@@ -251,10 +239,10 @@ def expect_cmd(spec, root, name, role, desk=None, session=None, card=False):
         mine, target = policy["agents"][me["role"]], policy["agents"][role]
         ok = ((me["role"] == policy.get("entry_role") and role in (policy.get("router_role"), policy.get("scribe_role")))
               or (mine["rank"] == 2 and me["role"] != policy.get("entry_role")
-                  and target["sequence"] == mine["sequence"] and target["rank"] in (0, 1))
-              or (mine["rank"] == 1 and target["sequence"] == mine["sequence"] and target["rank"] == 0))
+                  and target["sequence"] == mine["sequence"] and target["rank"] == 0)
+              or (me["role"] == policy.get("router_role") and role == policy.get("scribe_role")))
         if not ok:
-            print("出错：%s 不能预登记 %s：+2 只预登记本序列的 +1、+0，+1 只预登记本序列的 +0，入口只预登记路由和书记员。" % (me["name"], role))
+            print("出错：%s 不能预登记 %s：+2 只预登记本序列的 +0，入口只预登记路由和书记员，路由只预登记书记员。" % (me["name"], role))
             return 1
     elif origin != "researcher":
         print("出错：本会话（%s）不能预登记。" % origin)
@@ -448,7 +436,7 @@ def print_pool(root, policy, role=None, item=None):
 
 def queue_rows(root, policy, me, seq):
     """The 待开工 work items this claim dispatches: for the entry, cross-sequence requests waiting
-    for a +2 and 下发 packages it wrote; for a +2 or +1, the packages of its sequence it wrote."""
+    for a +2 and 下发 packages it wrote; for a +2, the packages of its sequence it wrote."""
     lg = ledger_core.Ledger(root, "preview")
     tag = "（%s）" % me["name"]
     rows = []
@@ -466,7 +454,7 @@ def queue_rows(root, policy, me, seq):
 
 
 def local_waiting(root, pl, me):
-    """The tasks without a work item this claim handed out that nobody holds yet (1.1.0: what a +1 hands to a +0),
+    """The tasks without a work item this claim handed out that nobody holds yet (1.1.0: closed tasks, 执行),
     from the receipts packages/sent/<ID>-<n>.json and the dispatch log alone: nothing here asks Feishu."""
     held = set(pl.get("owners") or {}) | set(pool.all_open_items(root, pl.get("owners")).get(me["name"], ({}, {}))[0])
     out = []
@@ -506,7 +494,7 @@ def queue_cmd(root, policy, name, offline=False):
     if not items and not handed:
         print("没有等你委托的工作项。没事就一句话结束本轮。")
     elif free:
-        print("有等你委托的事、又有空闲会话：先请书记员确认“开工”这一步（跨序列需求是请对方 +2 接单），再委托出去。")
+        print("有等你委托的事、又有空闲会话：委托出去。下发的需求，承接的 +0 先交方案，你确认了它才动手；跨序列需求是请对方 +2 接单。")
     return 0
 
 
@@ -653,16 +641,14 @@ def refill_cmd(spec, root, role, count=1):
                                    role, count, opener(policy, role, "那个序列"))})
     me, origin = pool.caller(root, policy)
     mine, target = (policy["agents"].get(me["role"]) if me else None), policy["agents"][role]
-    opens = bool(mine) and mine["sequence"] == target["sequence"] and me["role"] != role and (
-        mine["rank"] == target["rank"] + 1 or mine["rank"] == 2 and not (policy.get("pool") or {}).get("p1"))
+    opens = bool(mine) and me["role"] != role and role in (mine.get("spawn") or [])
     if opens:
         how = ("这个角色由你开：本轮接着提一张启动卡，照 `pool.py claim %s --as %s` 输出里“补位用”的那一行"
                "（先 expect --card，再 start_session，initiation 写 own_initiative）。" % (me["role"], me["name"]))
     else:
         pl, _ = pool.load(root)
         up = sorted(c["name"] for c in pl["claims"].values() if c.get("role") in policy["agents"]
-                    and policy["agents"][c["role"]]["sequence"] == target["sequence"]
-                    and policy["agents"][c["role"]]["rank"] == target["rank"] + 1)
+                    and role in (policy["agents"][c["role"]].get("spawn") or []))
         how = "这个角色由%s开：%s" % (opener(policy, role), "给 %s 发一条【%s】，请它为这条补位请求提启动卡。" % (
             "、".join(up), spec.term("msg", "notice")) if up else "那一级还没有会话，先请研究员开出来。")
     print("已记补位请求：%s ×%d。要研究员在提卡片的那个会话里点一下才会开，不会自动开；入口向研究员列出时附那个会话。%s新会话认领后这条请求自动销掉。" % (

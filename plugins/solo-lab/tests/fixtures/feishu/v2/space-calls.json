@@ -1640,6 +1640,11 @@
      "field_type": "link"
     },
     {
+     "field_key": "field_7c1e42",
+     "field_name": "方案",
+     "field_type": "link"
+    },
+    {
      "field_key": "field_fd4746",
      "field_name": "阻塞原因",
      "field_type": "text"
@@ -1674,7 +1679,7 @@
     "has_more": false,
     "page_num": 1,
     "page_size": 50,
-    "total": 36
+    "total": 37
    }
   }
  },
@@ -1994,7 +1999,7 @@
       ],
       "participants": [],
       "role_assignees": {
-       "assignee": [
+       "issuer": [
         {
          "email": "",
          "name": "",
@@ -2004,7 +2009,7 @@
       }
      },
      "basic": {
-      "name": "开工",
+      "name": "定方案",
       "next_node_keys": [
        "execute"
       ],
@@ -2013,7 +2018,17 @@
       "pre_node_keys": [],
       "status": "finished"
      },
-     "form_items": [],
+     "form_items": [
+      {
+       "field_key": "field_7c1e42",
+       "field_name": "方案",
+       "field_type": "link",
+       "form_item_type": "field",
+       "is_required": true,
+       "value": "https://project.feishu.cn/23d4bx",
+       "value_label": ""
+      }
+     ],
      "schedule": {
       "actual_begin_time": 1794458033676,
       "actual_finish_time": 1794458044250,

@@ -90,6 +90,7 @@
     "owner_session": "负责会话",
     "blocked_reason": "阻塞原因",
     "blocked_since": "阻塞开始日期",
+    "plan_link": "方案",
     "delivery_link": "交付包",
     "from_sequence": "发起序列",
     "to_sequence": "承接序列",

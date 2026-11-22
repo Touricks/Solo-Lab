@@ -1124,6 +1124,11 @@
           "field_type": "link"
         },
         {
+          "field_key": "field_7c1e42",
+          "name": "方案",
+          "field_type": "link"
+        },
+        {
           "field_key": "field_fd4746",
           "name": "阻塞原因",
           "field_type": "text"
@@ -1238,15 +1243,21 @@
           "nodes": [
             {
               "key": "started",
-              "name": "开工",
+              "name": "定方案",
               "prev": [],
               "next": [
                 "execute"
               ],
               "roles": [
-                "assignee"
+                "issuer"
               ],
-              "required": [],
+              "required": [
+                {
+                  "field_key": "field_7c1e42",
+                  "name": "方案",
+                  "field_type": "link"
+                }
+              ],
               "optional": []
             },
             {

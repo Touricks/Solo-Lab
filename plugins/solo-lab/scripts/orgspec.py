@@ -28,9 +28,13 @@ TOKEN = re.compile(r"\{(pkg|rel|wi|seq|rank|node|field|role|channel|abbrev|state
 RANK_NUM = {"p0": 0, "p1": 1, "p2": 2}
 # The dispatch graph's groups of edges (rules.json dispatch). assign is the hierarchy, and the roles a role
 # opens and hands work to are read from it alone (dispatch_targets); direct holds the edges beside it: a +2 to
-# the +2 of another sequence (跨序列需求, 1.0.12: until then every such message went through the entry), and a +2
-# to its own +0 where the sequence opened no +1.
+# the +2 of another sequence (跨序列需求, 1.0.12: until then every such message went through the entry), and a +0
+# that holds a 下发 request to another +0 of its sequence (the closed parts of that request).
+# 1.1.0: a sequence has two ranks, +2 and +0. The PMO alone keeps a +1, its router, and the router and the
+# scribe are named in the graph: a rank there (p2, p0) stands for the sequences' own roles only.
 DISPATCH_GROUPS = ("assign", "direct")
+PMO_RANKS = ("p0", "p1", "p2")
+SEQUENCE_RANKS = ("p0", "p2")
 
 
 def edge_groups(rule):
@@ -106,19 +110,27 @@ class OrgSpec:
             return "pmo-scribe"
         return "%s-p%d" % (seq, rank)
 
+    def ranks_of(self, seq):
+        """The ranks a sequence has, highest first: [2, 0], and [2, 1, 0] for the PMO."""
+        s = next(x for x in self.rules["sequences"] if x["id"] == seq)
+        return sorted((RANK_NUM[r] for r in s["ranks"]), reverse=True)
+
     def _edge_targets(self, role, seq, rank, edges, seqs):
         out = []
+        own = role == "%s-p%d" % (seq, rank)          # the router and the scribe go by their names, not by a rank
         for e in edges:
             src = e["from"]
-            if src != role and src != "p%d" % rank:
+            if src != role and not (own and src == "p%d" % rank):
                 continue
             to, scope = e["to"], e.get("scope")
-            if to in ("p0", "p1", "p2"):
-                r = int(to[1])
+            if to in RANK_NUM:
+                r = RANK_NUM[to]
                 for s in seqs:
                     if (scope == "same_sequence" and s != seq) or (scope == "other_sequences" and s == seq):
                         continue
-                    out.append(self.role_name(s, r))
+                    name = self.role_name(s, r)
+                    if name == "%s-p%d" % (s, r) and name not in out:
+                        out.append(name)
             elif to not in out:
                 out.append(to)
         return out
@@ -130,7 +142,7 @@ class OrgSpec:
     def dispatch_table(self):
         """The dispatch graph as text for org/org.md: who assigns work to whom, and the message kinds."""
         d = self.rules["dispatch"]
-        rank_cn = {"p0": "+0", "p1": "+1", "p2": "+2"}
+        rank_cn = {"p0": "+0", "p2": "+2"}
 
         def end(x):
             if x in rank_cn:
@@ -176,11 +188,12 @@ class OrgSpec:
         for rid, row in s["ranks"].items():
             ranks[RANK_NUM[rid]] = {"label": row["label"], "given": self.render(row["given"]),
                                    "outputs": self.render(row["outputs"]), "escalate": self.render(row["escalate"])}
-        if sorted(ranks) != [0, 1, 2]:
-            raise OrgSpecError("%s 序列的职级分工不是 +0、+1、+2 三行" % cn)
+        if sorted(s["ranks"]) != list(PMO_RANKS if sid == "pmo" else SEQUENCE_RANKS):
+            raise OrgSpecError("%s 序列的职级分工不是 %s" % (cn, "+0、+1、+2 三行" if sid == "pmo" else "+0、+2 两行"))
         return {"id": sid, "cn": cn, "abbrev": s["abbrev"], "title": s["title"],
                 "heading": "序列设置 - %s：%s" % (cn, s["title"]), "focus": self.render(s["focus"]),
-                "intro": self.render(s["intro"]), "ranks": ranks, "notes": self.render(s.get("notes") or "")}
+                "intro": self.render(s["intro"]), "ranks": ranks, "notes": self.render(s.get("notes") or ""),
+                "plan": self.render(s.get("plan") or "")}
 
     # ------------------------------------------------------- whole-org text
     def rank_rows(self):
@@ -366,15 +379,17 @@ class OrgSpec:
                     if m.group(2) not in self.terms.get(m.group(1), {}):
                         problems.append("%s：术语表里没有 %s" % (where, m.group(0)))
         walk(self.rules, "rules")
-        if [r["id"] for r in self.rules["ranks"]] != ["p0", "p1", "p2"]:
-            problems.append("ranks 要依次是 p0、p1、p2")
+        if [r["id"] for r in self.rules["ranks"]] != list(SEQUENCE_RANKS):
+            problems.append("ranks 要依次是 p0、p2")
         for s in self.rules["sequences"]:
             if s["id"] not in self.terms["seq"] or s["id"] not in self.terms["abbrev"]:
                 problems.append("序列 %s 缺中文名或简写" % s["id"])
             if self.terms["abbrev"].get(s["id"]) != s["abbrev"]:
                 problems.append("序列 %s 的简写和术语表不一致" % s["id"])
-            if sorted(s["ranks"]) != ["p0", "p1", "p2"]:
-                problems.append("序列 %s 的职级分工不全" % s["id"])
+            if sorted(s["ranks"]) != list(PMO_RANKS if s["id"] == "pmo" else SEQUENCE_RANKS):
+                problems.append("序列 %s 的职级分工要是 %s" % (s["id"], "p0、p1、p2" if s["id"] == "pmo" else "p0、p2"))
+            if s["id"] != "pmo" and not (s.get("plan") or "").strip():
+                problems.append("序列 %s 缺方案的填写要点（plan）" % s["id"])
         pids = [p["id"] for p in self.rules["packages"]]
         if sorted(pids) != sorted(self.terms["pkg"]):
             problems.append("包的标识和术语表对不上：%s" % pids)
@@ -400,8 +415,8 @@ class OrgSpec:
             if n not in tree["nodes"]:
                 problems.append("按序列分层的节点 %s 不在一级节点里" % n)
         d = self.rules.get("dispatch") or {}
-        roles = {self.role_name(x["id"], r) for x in self.rules["sequences"] for r in (0, 1, 2)}
-        ends = roles | {"p0", "p1", "p2"}
+        roles = {self.role_name(x["id"], RANK_NUM[r]) for x in self.rules["sequences"] for r in x["ranks"]}
+        ends = roles | set(SEQUENCE_RANKS)
         for group in DISPATCH_GROUPS:
             for e in d.get(group, []):
                 for end in (e.get("from"), e.get("to")):
@@ -556,6 +571,11 @@ class Contract:
         if main and (freeze.get("sealed_by") not in self.signatures() or freeze.get("sealed_by") not in main["fields"]
                      or freeze.get("checked_before") not in main["fields"]):
             problems.append("冻结核对引用的字段槽位不在主线类型上，或者 sealed_by 不是签字字段")
+        plan = flow.get("plan_gate") or {}
+        held = d["types"].get(plan.get("type")) or {}
+        if plan and (plan.get("field") not in held.get("fields", []) or plan.get("role") not in held.get("roles", [])
+                     or (d["fields"].get(plan.get("field")) or {}).get("type") != "link"):
+            problems.append("方案关引用的类型、链接字段或角色槽位不在约定里")
         for wid in flow.get("rollback_needs_decision", []):
             if wid not in d["types"]:
                 problems.append("rollback_needs_decision 里的 %s 不是类型槽位" % wid)
@@ -1094,8 +1114,10 @@ def lint_text(spec, text):
                 errors.append("模板里没有栏目“%s”，不临时加栏目" % h)
     if pid == "request" and relation in (spec.term("rel", "assign"), spec.term("rel", "cross")):
         m = re.search(r"\n## 方法\n(.*?)(?:\n## |\Z)", text, re.S)
-        if m and m.group(1).strip() not in ("由接收方决定。", "由接收方决定"):
-            errors.append("%s关系的方法只写“由接收方决定”" % relation)
+        # 1.1.0: the method of a 下发 request is the plan its +0 hands in; packages written before say 由接收方决定
+        left = "由接收方决定" if relation == spec.term("rel", "cross") else "由接收方写成方案"
+        if m and m.group(1).strip().rstrip("。") not in (left, "由接收方决定"):
+            errors.append("%s关系的方法只写“%s”" % (relation, left))
     return errors, warnings
 
 

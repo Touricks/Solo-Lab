@@ -38,19 +38,19 @@ LIST_DUE = ("先回答研究员，再跑 python3.12 -I .claude/solo-lab/bin/ledg
 QUEUED_TEXT = ("本轮有待定决策 #%s 转到你这里：在这一行状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和主文档链接，"
                "不超过 3 行。")
 DENIED = ("这一轮是其他 agent 会话叫醒的，研究员多半不在：不用 AskUserQuestion。要研究员拍板的事写成决策包，登记后发【需拍板】给路由；"
-          "+1、+0 写进交给上一级的交付包。")
+          "+0 写进交付包。")
 
 # How prompts start, as the hooks got them in the desktop app on 2026-11-15. Bodies are shortened
 # and the session IDs are placeholders.
 CROSS = ('<cross-session-message from="local_maint-entry" from-name="Maintenance-Entry">\n'
          '【通知 #1001】Maint-p2-01 → Test-p2-01：HOOKTEST 第二轮\n这一轮只看 hook。\n</cross-session-message>')
-SIDE = ('<system-reminder>\nThe session "Alg-p1-01" you started (local_alg-p1-01) finished a turn.\n</system-reminder>\n'
+SIDE = ('<system-reminder>\nThe session "Alg-p0-01" you started (local_alg-p1-01) finished a turn.\n</system-reminder>\n'
         '<system-reminder>\nIts last message: 已交付。\n</system-reminder>\n\n'
         '<side-sessions-event>None of the sessions you started is working now; read what they wrote.</side-sessions-event>')
-TYPED = ('<system-reminder>\nThe session "Alg-p0-01" you started (local_alg-p0-01) was stopped or archived by the user '
+TYPED = ('<system-reminder>\nThe session "Alg-p0-02" you started (local_alg-p0-01) was stopped or archived by the user '
          'before it began.\n</system-reminder>\n\n\n这个会话出bug了，重试')
 STARTED = ("Background (from the session that started this one):\n本目录是「示例项目」的智能体组织，按会话池运行。\n\n"
-           "Task:\n认领 alg-p1（会话名 Alg-p1-01）。先运行 pool.py claim alg-p1 --as Alg-p1-01")
+           "Task:\n认领 alg-p0（会话名 Alg-p0-01）。先运行 pool.py claim alg-p0 --as Alg-p0-01")
 NOTIFIED = "<task-notification>\n<task-id>bg-1</task-id>\n<status>completed</status>\n</task-notification>"
 REMINDERS = SIDE.split("<side-sessions-event>")[0]       # two reminder blocks: six lines before what follows them
 ONLY_REMINDERS = TYPED.split("这个会话出bug了")[0]          # the app's reminder and nothing after it
@@ -113,7 +113,7 @@ class TurnOriginTest(PoolProjectCase):
         self.assertEqual(self.origin(" \n\n"), ("system", None))
         # what follows the reminders decides, however many lines they take
         self.assertEqual(self.origin(REMINDERS + "<cross-session-message>\n继续\n</cross-session-message>"), ("agent", None))
-        self.assertEqual(self.origin(REMINDERS + "【委托 #2101】Alg-p2-01 → Alg-p1-01：需求包 x.md"), ("agent", "Alg-p2-01"))
+        self.assertEqual(self.origin(REMINDERS + "【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md"), ("agent", "Alg-p2-01"))
 
     def test_reminders_and_the_wrapper_come_off(self):
         self.assertEqual(pool_lib.strip_reminders(TYPED), "这个会话出bug了，重试")
@@ -132,9 +132,9 @@ class TurnOriginTest(PoolProjectCase):
         self.assertEqual(self.origin("<cross-session-message>\n继续\n</cross-session-message>"), ("agent", None))
 
     def test_headers_and_the_researchers_words(self):
-        self.assertEqual(self.origin("【委托 #2101】Alg-p2-01 → Alg-p1-01：需求包 x.md"), ("agent", "Alg-p2-01"))
+        self.assertEqual(self.origin("【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md"), ("agent", "Alg-p2-01"))
         self.assertEqual(self.origin("早，今天先看评测"), ("researcher", None))
-        self.assertEqual(self.origin("你上周收到的【委托 #2101】Alg-p2-01 → Alg-p1-01 那件事，结论再讲一遍。"),
+        self.assertEqual(self.origin("你上周收到的【委托 #2101】Alg-p2-01 → Alg-p0-01 那件事，结论再讲一遍。"),
                          ("researcher", None))
 
 
@@ -280,8 +280,8 @@ class InboxDeliveryTest(DeliveryCase):
         self.receipt("2302", type="decision", queue=True, urgent=True)
         self.assertIn("本轮有待定决策 #2302 转到你这里", self.context("s-entry", REMINDERS + self.carried("2302")))
         self.assertEqual(self.session("s-entry")["ask_ok"], "2302")
-        self.prompt("s-alg1", REMINDERS + wrap("【委托 #2101】Alg-p2-01 → Alg-p1-01：需求包 x.md", "[示例] Alg-p2-01"))
-        self.assertEqual(self.pool()["owners"]["2101"], "Alg-p1-01")
+        self.prompt("s-alg1", REMINDERS + wrap("【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md", "[示例] Alg-p2-01"))
+        self.assertEqual(self.pool()["owners"]["2101"], "Alg-p0-01")
         self.assertEqual(self.session("s-alg1")["work_item"], "2101")
 
     def test_other_work_items_put_nothing_into_the_queue(self):
@@ -298,11 +298,11 @@ class InboxDeliveryTest(DeliveryCase):
 
     def test_a_pool_session_woken_by_another_session_asks_nothing(self):
         self.receipt("2301", type="decision", queue=True, urgent=True)
-        text = self.context("s-alg1", wrap("【委托 #2101】Alg-p2-01 → Alg-p1-01：需求包 packages/drafts/alg/x.md", "[示例] Alg-p2-01"))
+        text = self.context("s-alg1", wrap("【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 packages/drafts/alg/x.md", "[示例] Alg-p2-01"))
         self.assertIn(WOKEN + "（来自 [示例] Alg-p2-01）：不向研究员提问，要拍板的事照规则写进包里；收尾里的提问会被 hook 去掉。", text)
         self.assertNotIn(QUEUED, text)
         self.assertEqual(self.session("s-alg1")["turn_origin"], "agent")
-        self.assertEqual(self.pool()["owners"]["2101"], "Alg-p1-01")          # the header inside the wrapper is read
+        self.assertEqual(self.pool()["owners"]["2101"], "Alg-p0-01")          # the header inside the wrapper is read
         text = self.context("s-alg2", self.carried("2301", to="Alg-p2-01"))      # only the entry mentions decisions
         self.assertIn("不向研究员提问", text)
         self.assertNotIn(QUEUED, text)
@@ -310,8 +310,8 @@ class InboxDeliveryTest(DeliveryCase):
         self.assertIn(WOKEN + "：不向研究员提问", self.context("s-q1", "<cross-session-message>\n继续\n</cross-session-message>"))
         self.assertIn(WOKEN + "，研究员多半不在。", self.context("s-entry", "<cross-session-message>\n继续\n</cross-session-message>"))
         # a bare header names its sender, and what the turn adds comes before the inbox
-        self.route("notify", "Alg-p1-01", "--text", "规格 v3 已签字", sid="s-entry")
-        text = self.context("s-alg1", "【委托 #2102】Alg-p2-01 → Alg-p1-01：需求包 x.md")
+        self.route("notify", "Alg-p0-01", "--text", "规格 v3 已签字", sid="s-entry")
+        text = self.context("s-alg1", "【委托 #2102】Alg-p2-01 → Alg-p0-01：需求包 x.md")
         self.assertIn(WOKEN + "（来自 Alg-p2-01）：", text)
         self.assertLess(text.index(WOKEN), text.index("规格 v3 已签字"))
         self.assertNotIn(SIDE_REPORT, text)
@@ -378,20 +378,20 @@ class InboxDeliveryTest(DeliveryCase):
         self.assertNotIn(WOKEN, text)
 
     def test_an_opening_line_behind_reminders_still_claims(self):
-        line = "认领 infra-p2（会话名 Infra-p2-01），然后照认领输出开出本序列的 +1 和 +0。"
+        line = "认领 infra-p2（会话名 Infra-p2-01），然后照认领输出开出本序列的 +0。"
         _, out = self.prompt("s-infra2", TYPED.replace("这个会话出bug了，重试", line))
         self.assertIn("已按开局句认领", out.get("additionalContext", ""))
         self.assertEqual(self.pool()["claims"]["Infra-p2-01"]["session_id"], "s-infra2")
         self.assertNotIn("researcher_at", self.session("s-infra2"))       # the opening line is no talk yet
         # another session's message is not the researcher's opening line
-        self.prompt("s-product2", wrap("认领 product-p2（会话名 Product-p2-01），然后照认领输出开出本序列的 +1 和 +0。"))
+        self.prompt("s-product2", wrap("认领 product-p2（会话名 Product-p2-01），然后照认领输出开出本序列的 +0。"))
         self.assertNotIn("Product-p2-01", self.pool()["claims"])
 
 
 # ------------------------------------------------------------------ guard
 class GuardDeliveryTest(DeliveryCase):
     def test_a_woken_pool_session_loses_the_question(self):
-        self.prompt("s-alg1", wrap("【委托 #2101】Alg-p2-01 → Alg-p1-01：需求包 x.md", "[示例] Alg-p2-01"))
+        self.prompt("s-alg1", wrap("【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md", "[示例] Alg-p2-01"))
         out = self.wrap_up("s-alg1", **self.ASK)
         self.assertEqual(out.get("permissionDecision"), "allow")
         self.assertEqual(out.get("updatedInput"), {"recap": "做完了"})
@@ -429,7 +429,7 @@ class GuardDeliveryTest(DeliveryCase):
         self.assertEqual((code, out.get("permissionDecision")), (0, "deny"))
         self.assertIn("要研究员拍板的事写成决策包，交路由登记进决策队列。", out.get("additionalContext", ""))
         # a session that is not the entry loses the question even with ask_ok in its state
-        self.prompt("s-alg2", wrap("【交付 #2101】Alg-p1-01 → Alg-p2-01：交付包 y.md", "[示例] Alg-p1-01"))
+        self.prompt("s-alg2", wrap("【交付 #2101】Alg-p0-01 → Alg-p2-01：交付包 y.md", "[示例] Alg-p0-01"))
         self.set_state("s-alg2", ask_ok="2302")
         self.assertEqual(self.wrap_up("s-alg2", **self.ASK).get("updatedInput"), {"recap": "做完了"})
         self.assertEqual(self.guard_log()[-1]["agent_turn_gate"], "stripped")
@@ -438,7 +438,7 @@ class GuardDeliveryTest(DeliveryCase):
         self.prompt("s-mine", wrap("【通知】PMO-p2-01 → PMO-p2-01：看一下", "[示例] PMO-p2-01"))
         self.assertEqual(self.session("s-mine")["turn_origin"], "agent")
         self.assertEqual(self.wrap_up("s-mine", **self.ASK), {})
-        self.prompt("s-alg1", wrap("【委托 #2101】Alg-p2-01 → Alg-p1-01：需求包 x.md", "[示例] Alg-p2-01"))
+        self.prompt("s-alg1", wrap("【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md", "[示例] Alg-p2-01"))
         self.assertEqual(self.wrap_up("s-alg1"), {})
         self.assertEqual(self.wrap_up("s-alg1", ask="", actions=[], blocked=False), {})
         self.assertNotIn("agent_turn_gate", self.guard_log()[-1])
@@ -452,10 +452,10 @@ class GuardDeliveryTest(DeliveryCase):
         self.assertEqual(out.get("permissionDecisionReason"), DENIED)
         self.assertIn("【需拍板】", out.get("additionalContext", ""))
         self.assertEqual(self.guard_log()[-1]["agent_turn_gate"], "denied")
-        self.prompt("s-alg0", wrap("【委托 #2106】Alg-p1-01 → Alg-p0-01：需求包 x.md\n会话名：Alg-p0-2106", "[示例] Alg-p1-01"))
+        self.prompt("s-alg0", wrap("【委托 #2106】Alg-p0-01 → Alg-p0-02：需求包 x.md\n会话名：Alg-p0-2106", "[示例] Alg-p0-01"))
         _, out = self.guard("s-alg0", "AskUserQuestion", {"questions": []})
         self.assertEqual(out.get("permissionDecision"), "deny")
-        self.assertIn("交给上一级的交付包", out.get("additionalContext", ""))
+        self.assertIn("要拍板的事写进交付包。", out.get("additionalContext", ""))
         self.prompt("s-alg2", "研究员：先停一下")
         self.assertEqual(self.ask("s-alg2"), (0, {}))
         self.assertNotIn("agent_turn_gate", self.guard_log()[-1])
@@ -481,15 +481,15 @@ class GuardDeliveryTest(DeliveryCase):
         self.wrap_up("s-entry")                                               # nothing asked
         self.prompt("s-entry", "早")
         self.wrap_up("s-entry", **self.ASK)                                   # the researcher is there
-        self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p1-01：需求包 x.md")   # a header without the app's wrapper
+        self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md")   # a header without the app's wrapper
         self.wrap_up("s-alg1", blocked=True)
         code, text = self.route("audit", sid="s-entry")
         self.assertEqual(code, 0, text)
         self.assertEqual(audit_lines(text, "池会话带提问的收尾，按这一轮是谁开的"), [
-            "- Alg-p1-01：其他 agent 叫醒的轮次 1 次，提问留下 0 次（其中插队决策放行 0 次）；研究员开的轮次 0 次；应用的轮次 0 次",
+            "- Alg-p0-01：其他 agent 叫醒的轮次 1 次，提问留下 0 次（其中插队决策放行 0 次）；研究员开的轮次 0 次；应用的轮次 0 次",
             "- PMO-p2-01：其他 agent 叫醒的轮次 2 次，提问留下 1 次（其中插队决策放行 1 次）；研究员开的轮次 1 次；应用的轮次 0 次"])
         self.assertEqual(audit_lines(text, "有插件抬头、没有桌面应用外壳的消息"),
-                         ["- Alg-p1-01：1 次；最近一次：【委托 #2101】Alg-p2-01 → Alg-p1-01：需求包 x.md"])
+                         ["- Alg-p0-01：1 次；最近一次：【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md"])
 
 
 # ----------------------------------------------------------------- replay
@@ -607,7 +607,7 @@ class GatesInboxTest(DeliveryCase):
         for item in ("2702", "2703"):                                             # what keeps waiting is the entry's
             self.assertIn(WAITS % item, woken)
         self.assertNotIn("#2704", woken)                                          # registered 2 hours ago
-        for sid, text in (("s-alg2", wrap("【交付 #2101】Alg-p1-01 → Alg-p2-01：交付包 y.md", "[示例] Alg-p1-01")), ("s-q1", "继续"),
+        for sid, text in (("s-alg2", wrap("【交付 #2101】Alg-p0-01 → Alg-p2-01：交付包 y.md", "[示例] Alg-p0-01")), ("s-q1", "继续"),
                           ("s-scribe", "继续")):
             self.assertNotIn("已到期", self.context(sid, text), sid)              # nobody else's
         talk = self.context("s-entry", "早")
@@ -687,7 +687,7 @@ class GatesInboxTest(DeliveryCase):
                    self.pending("2713", 1, title="不冻结什么"))
         line = (FROZEN_HEAD + "#2711（实验平台用什么隔离候选代码）：“特权应用：Docker”“`docker build`”“照某个选项改实验平台的计量和内存闸”；"
                 "#2712（运行记录怎么分目录）：“把已有的运行记录挪到新的目录结构下”。")
-        for sid, text in (("s-entry", "早"), ("s-alg1", wrap("【委托 #2101】Alg-p2-01 → Alg-p1-01：需求包 x.md", "[示例] Alg-p2-01")),
+        for sid, text in (("s-entry", "早"), ("s-alg1", wrap("【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md", "[示例] Alg-p2-01")),
                           ("s-alg0", NOTIFIED), ("s-scribe", "继续"), ("s-q1", "继续")):
             self.assertEqual(self.context(sid, text).count(line), 1, sid)
         self.assertNotIn("#2713", self.context("s-alg2", "继续"))                 # nothing frozen, nothing said

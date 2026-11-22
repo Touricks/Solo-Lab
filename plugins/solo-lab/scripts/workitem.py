@@ -462,8 +462,8 @@ def after_register(lg, wid, d, item_id):
         else:
             print("研究员主动发起的决策，但“决定”一节没写全决定内容和决定人：退回作者补上，再确认“决定”这一步。")
     elif wid == "same_seq":
-        print("请求方说马上委托下一级的（登记请求写了“开工”），接着确认：workitem.py confirm %s --by <承接方的会话名>；排队还没委托的留在“%s”。" % (
-            item_id, spec.term("state", "queued")))
+        print("接着由发出方委托承接的 +0：它先交方案（docs.py attach %s 方案 <方案文件>），发出方确认以后再请你确认第一步；"
+              "在那之前这条需求留在“%s”。这一步必填什么：ledger.py next %s" % (item_id, spec.term("state", "queued"), item_id))
     elif wid in (lg.contract.main_line(), "feedback"):
         print("接着看这一步要什么：ledger.py next %s" % item_id)
 

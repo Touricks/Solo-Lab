@@ -169,6 +169,12 @@ def local_layer(target, m):
         if stale:
             problems.append("现在的插件、规则或 feishu/ids.json 生成的内容和初始化时不同（%d 个文件：%s）；重跑 init 预览差异" % (
                 len(stale), "、".join(stale[:12]) + ("等" if len(stale) > 12 else "")))
+        # init writes files and takes none away: a role an earlier version had leaves its definition behind
+        roles_dir = os.path.join(target, ".claude", "agents")
+        gone = sorted(".claude/agents/" + n for n in (os.listdir(roles_dir) if os.path.isdir(roles_dir) else [])
+                      if n.endswith(".md") and ".claude/agents/" + n not in fresh.files)
+        if gone:
+            problems.append("这些角色定义是旧版留下的，现在的规则里没有这些角色（1.1.0 起各序列只有 +2 和 +0）：%s；请研究员删掉这些文件" % "、".join(gone))
     for rel, digest in sorted(m.get("files", {}).items()):
         path = os.path.join(target, rel)
         if not os.path.isfile(path):
@@ -444,6 +450,10 @@ def pool_health(target, manifest):
     held = {}
     for c in pl["claims"].values():
         held.setdefault(c["role"], []).append(c["name"])
+    retired = sorted(n for role, names in held.items() if role not in policy["agents"] for n in names)
+    if retired:
+        problems.append("认领表里有现在的规则没有的角色：%s（1.1.0 起各序列只有 +2 和 +0）。先让它们把手上的活交给本序列 +2，"
+                        "再请研究员归档这些会话，逐个运行 pool.py release <会话名>" % "、".join(retired))
     for role in (policy["entry_role"], policy["scribe_role"]):
         if len(held.get(role, [])) > 1:
             problems.append("%s 有 %d 条认领（%s），只能有一条；请研究员 pool.py release 多余的" % (role, len(held[role]), "、".join(held[role])))

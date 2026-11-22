@@ -12,11 +12,11 @@ printed as the request to send to the scribe.
     docs.py upload <交付包 draft>            a delivery: hung under the main document of the request it answers;
                                             the scribe's `workitem.py reply` fills the request's 交付包 field
     docs.py attach <ID> <field> <file>      a step's output document for one of the item's link fields
-    docs.py upload <执行关系的需求包>          what a +1 hands to a +0 has no work item (1.1.0): the package hangs
+    docs.py upload <执行关系的需求包>          a closed task (执行) has no work item (1.1.0): the package hangs
                                             under the main document of the item it belongs to (--source) and
                                             takes a number of its own, <source>-<n>; the +0's delivery hangs
                                             under the package
-    docs.py accept <number> --result R      the +1's verdict on such a task, a line at the end of the package
+    docs.py accept <number> --result R      the verdict of the session that handed it out, a line at the end of the package
     docs.py revise <ID> <draft> --note N    the next version of a 需求包 or 决策包: the main document's
                                             opening up to 状态包 replaced in place, a line in 交接记录
     docs.py status-block <ID> --file F      replace the 状态包 section (block_replace)
@@ -140,7 +140,7 @@ def upload_delivery(lg, d, path, doc=None):
     if not d.linked:
         raise core.LedgerError("包头的“关联工作项”要写它答复的工作项 ID，比如 #2003")
     if not d.author:
-        raise core.LedgerError("发出方要带会话名，比如“算法 +1（Alg-p1-01）”")
+        raise core.LedgerError("发出方要带会话名，比如“算法 +0（Alg-p0-2101）”")
     core.must_be(lg, "上传这份交付包", names=[d.author], why="这份交付包的发出方是 %s，请它来上传" % d.author)
     parent_id = core.item_id_of(d.linked[0])
     rel = os.path.relpath(path, lg.root)
@@ -233,8 +233,8 @@ def upload_delivery(lg, d, path, doc=None):
 
 
 def upload_local(lg, d, path, source=None, doc=None):
-    """A 需求包 in the 执行 relation: what a +1 hands to a +0 (or a +2 where its sequence opened no +1). From 1.1.0
-    it has no work item and the scribe is not asked: the session that hands the task out uploads the package
+    """A 需求包 in the 执行 relation: a closed task a +2 hands to a +0, or a +0 that holds a 下发 request hands to
+    another +0 of its sequence. From 1.1.0 it has no work item and the scribe is not asked: the session that hands the task out uploads the package
     under the main document of the work item it belongs to (--source, or the header's 来源工作项), and the
     task takes the number <source>-<n>. The number goes into the document's title and 关联工作项 line, into the
     draft, and into the receipt packages/sent/<number>.json, which keeps the task's state from then on
@@ -242,7 +242,7 @@ def upload_local(lg, d, path, source=None, doc=None):
     carry a work item's ID, and the +0's work name ends in it. Run again on the same draft, nothing is created."""
     spec = lg.spec
     if not core.SESSION_NAME.match(d.author or ""):
-        raise core.LedgerError("发出方要带会话名，比如“算法 +1（Alg-p1-01）”")
+        raise core.LedgerError("发出方要带会话名，比如“算法 +2（Alg-p2-01）”")
     core.must_be(lg, "上传这份需求包", names=[d.author], why="这份需求包的发出方是 %s，请它来上传" % d.author)
     seq = core.new_item_sequence(lg, d, None, "same_seq")
     rel = os.path.relpath(path, lg.root)
@@ -253,6 +253,13 @@ def upload_local(lg, d, path, source=None, doc=None):
     source = core.item_id_of(source or d.source or (known or {}).get("source")) if (source or d.source or (known or {}).get("source")) else None
     if not source or core.is_local(source):
         raise core.LedgerError("执行关系的需求包要写它所属的下发需求包：--source <上级工作项 ID>，或者在包头的“关联工作项”一行后面写“；来源工作项 #<ID>”")
+    if "-p0-" in d.author.lower() and lg.mode != "offline":
+        # a +0 hands out the closed parts of the 下发 request it holds, and of nothing else
+        held, wid = core.typed_item(lg, source)
+        holds = core.assignee_test(lg, wid, held) if held is not None else None
+        if held is not None and not (wid == "same_seq" and holds and holds(d.author)):
+            raise core.LedgerError("+0 只给自己手上的下发需求派封闭的子任务：--source 写那条下发需求的工作项 ID；#%s 不是交给 %s 的同序列需求。"
+                                   "别的活要拆给别人做，写进交付包，由本序列 +2 委托" % (source, d.author))
     parent = core.parent_node(lg, "same_seq", seq, d.rel, source)
     ref = (known or {}).get("work_item_id") or (core.next_local_ref(lg, source) if lg.mode == "apply" else "%s-<序号>" % source)
     core.link_line(d.text, "#0", "0")                  # a 关联工作项 line that is no placeholder stops here
@@ -401,6 +408,9 @@ def step_owner(lg, wid, it, item_id, what):
         if test(me["name"]):
             return None
         words.append("“%s”归%s" % (node["name"], who))
+    holds = core.assignee_test(lg, wid, it)
+    if holds and holds(me["name"]):
+        return None                                   # the session the item is handed to: the plan of a 下发 request
     names, seq, owner = core.doc_owner(lg, it)
     return core.must_be(lg, what, names=names, seq=seq, why="%s，主文档归 %s 写" % ("、".join(words) or "这条工作项没有进行中的步骤", owner))
 

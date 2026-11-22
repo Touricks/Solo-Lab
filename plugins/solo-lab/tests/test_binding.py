@@ -93,14 +93,14 @@ class FeishuTest(BindingCase):
     def test_preview_writes_nothing_and_apply_writes_the_binding(self):
         code, text = self.feishu([], True, False)
         self.assertEqual(code, 0)                                    # nothing to fix: 0 in a preview and when written
-        self.assertIn("约定核对（contract_version 1）：通过", text)
+        self.assertIn("约定核对（contract_version 2）：通过", text)
         self.assertIn("这是预览", text)
         self.assertEqual(os.listdir(os.path.join(self.tmp, "feishu")), [])
         code, text = self.feishu([], True, True)
         ids = json.loads(self.read("feishu/ids.json"))
         m = ids["meegle"]
         self.assertEqual((ids["schema"], m["contract_version"], m["project_key"], m["space_name"]),
-                         ("solo-lab/ids-v2", 1, SNAP["project_key"], "research_template"))
+                         ("solo-lab/ids-v2", 2, SNAP["project_key"], "research_template"))
         self.assertTrue(m["bound_at"])
         self.assertEqual(sorted(m["types"]), sorted(orgspec.Contract(orgspec.OrgSpec()).types()))
         self.assertEqual(ids["lark"]["researcher_open_id"], "ou_researcher")
@@ -151,7 +151,7 @@ class FeishuTest(BindingCase):
         _, text = self.feishu([], True, False, edit=renamed)
         self.assertIn("--map decision.sign_result=", text)
         _, text = self.feishu(["decision.sign_result=批不批"], True, False, edit=renamed)
-        self.assertIn("约定核对（contract_version 1）：通过", text)
+        self.assertIn("约定核对（contract_version 2）：通过", text)
         with self.assertRaises(setup_core.SetupError):
             self.feishu(["decision.nope=x"], True, False)
 
@@ -165,9 +165,9 @@ class FeishuTest(BindingCase):
         _, text = self.feishu([], True, False, edit=renamed)
         self.assertIn("--map decision=", text)
         code, text = self.feishu(["decision=拍板"], True, True, edit=renamed)
-        self.assertIn("约定核对（contract_version 1）：通过", text)
+        self.assertIn("约定核对（contract_version 2）：通过", text)
         code, text = self.feishu([], True, True, edit=renamed)                      # the next read, nothing pointed at
-        self.assertIn("约定核对（contract_version 1）：通过", text)
+        self.assertIn("约定核对（contract_version 2）：通过", text)
         self.assertEqual(json.loads(self.read("feishu/ids.json"))["meegle"]["types"]["decision"]["name"], "拍板")
 
     def test_every_session_may_read_the_space(self):
@@ -300,7 +300,7 @@ class FeishuTest(BindingCase):
     def test_a_space_made_from_2_2_0_binds_its_decided_state(self):
         code, text = self.feishu([], True, True, edit=made_from_2_2_0)
         self.assertEqual(code, 0)
-        self.assertIn("约定核对（contract_version 1）：通过", text)
+        self.assertIn("约定核对（contract_version 2）：通过", text)
         state = json.loads(self.read("feishu/ids.json"))["meegle"]["states"]["decision"]["decided"]
         self.assertEqual(state["name"], "待执行")
         self.feishu([], True, True)                                     # a space from 2.1.0 binds the same slot to 已决定

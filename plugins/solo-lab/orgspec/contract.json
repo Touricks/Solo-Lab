@@ -1,6 +1,6 @@
 {
   "_说明": "飞书模板和插件之间的约定：脚本按含义处理的槽位。每个槽位在一个空间里对应哪个类型、字段、角色和状态，记在项目的 feishu/ids.json；有哪些流程、节点怎么排、每一步必填什么，只在飞书空间里，脚本运行时读。这里只用英文标识，中文名在 terms.zh.json。槽位增减时 contract_version 加一。",
-  "contract_version": 1,
+  "contract_version": 2,
   "template": {
     "name": "Solo-Lab Template v3",
     "version": "1.1.0",
@@ -14,7 +14,7 @@
       "states": ["archived"]
     },
     "same_seq": {
-      "fields": ["sequence", "sender", "main_doc", "source_item", "task_ref", "owner_session", "relation", "delivery_link", "due", "blocked_reason", "blocked_since"],
+      "fields": ["sequence", "sender", "main_doc", "source_item", "task_ref", "owner_session", "relation", "plan_link", "delivery_link", "due", "blocked_reason", "blocked_since"],
       "roles": ["issuer", "assignee", "scribe"],
       "states": ["queued", "doing", "verifying", "accepted", "archived"]
     },
@@ -45,6 +45,7 @@
     "blocked_since": {"type": "date"},
     "owner_session": {"type": "text"},
     "relation": {"type": "select", "options": {"group": "rel", "ids": ["assign", "execute"]}},
+    "plan_link": {"type": "link"},
     "delivery_link": {"type": "link"},
     "from_sequence": {"type": "select", "options": {"group": "seq"}},
     "to_sequence": {"type": "select", "options": {"group": "seq"}},
@@ -69,6 +70,7 @@
     "archive_node": {"key": "archive", "role": "scribe", "state": "archived"},
     "sign_gate": {"type": "decision", "states": ["decided", "archived"], "result": "sign_result", "approved": "approved", "task": "task_ref"},
     "freeze": {"sealed_by": "hypothesis_signoff", "checked_before": "conclusion"},
+    "plan_gate": {"type": "same_seq", "field": "plan_link", "role": "issuer"},
     "rollback_needs_decision": ["research_task"],
     "closed": ["accepted", "archived"]
   }

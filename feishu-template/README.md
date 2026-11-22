@@ -5,7 +5,7 @@ Solo-Lab 插件把飞书项目空间当任务台账用。空间里有哪些工�
 | 项 | 现状 |
 | --- | --- |
 | 模板版本 | 1.1.0 |
-| 符合的约定 | `contract_version` 1，见 `plugins/solo-lab/orgspec/contract.json` |
+| 符合的约定 | `contract_version` 2，见 `plugins/solo-lab/orgspec/contract.json` |
 | 模板中心链接 | <https://project.feishu.cn/templates/detail/e66f7ed7cc364a60942ca1e719332625>，模板名“Solo-Lab Template v3”；同一个链接记在约定文件的 `template.url`。插件 1.0.5 到 1.0.12 用 2.2.0：<https://project.feishu.cn/templates/detail/67ba9ba510e046fe9bd35be99b883f26>，模板中心里叫“Solo-Lab Template v2”。插件 1.0.4 及以前用 2.1.0：<https://project.feishu.cn/templates/detail/7f032046eb974cab877ce8df79389895>，模板名 research_template |
 | 结构 | [结构.md](结构.md) |
 | 自己搭 | [搭建手册.md](搭建手册.md) |
@@ -18,7 +18,7 @@ Solo-Lab 插件把飞书项目空间当任务台账用。空间里有哪些工�
 | 类型 | 用途 | 流程 |
 | --- | --- | --- |
 | 研究任务 | 主线。一个空间可以有多条 | 正式实验：九步加归档；探索：定方向、探索、提出假设、归档 |
-| 同序列需求 | 序列内委托和交付 | 开工、执行、验收、归档 |
+| 同序列需求 | 序列内委托和交付 | 定方案、执行、验收、归档。承接的 +0 先交方案，发出方确认了才执行 |
 | 跨序列需求 | 序列之间 +2 对 +2 的请求 | 提出、接单、执行、验收、归档 |
 | 决策 | 研究员拍板和签字 | 决定、归档；状态依次是待决定、待执行、归档 |
 | 反馈 | 导师和研究员的反馈 | 解析、归档 |
@@ -60,7 +60,7 @@ python3.12 -I .claude/solo-lab/bin/space.py check --target .
 
 | 层 | 内容 | 在哪里 |
 | --- | --- | --- |
-| 约定 | 脚本按含义处理的槽位：5 个类型，18 个字段，9 个角色，各类型要有的状态，以及签字关和归档节点的规则 | 插件的 `orgspec/contract.json` |
+| 约定 | 脚本按含义处理的槽位：5 个类型，19 个字段，9 个角色，各类型要有的状态，以及签字关、方案关和归档节点的规则 | 插件的 `orgspec/contract.json` |
 | 绑定 | 每个槽位对应这个空间里的哪个类型、字段、角色和状态 | 项目的 `feishu/ids.json`，初始化时生成 |
 | 流程和表单 | 有哪些流程、节点怎么排、谁负责、必填什么 | 只在飞书空间里，插件运行时读 |
 

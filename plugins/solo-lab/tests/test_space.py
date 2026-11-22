@@ -144,6 +144,28 @@ class SnapshotTest(SpaceCase):
         self.assertTrue(any("探索" in n and "读不到" in n for n in notes))
         self.assertIn("还没有工作项", space.flows_md(snap))
 
+    def test_a_request_inside_a_sequence_starts_with_its_plan(self):
+        """1.1.0: a sequence has no +1, and the method of a 下发 request is the plan its +0 hands in. The first node
+        of 同序列需求 is the sender's, and its form requires the plan; a space that still starts with 开工, the
+        assignee's and with nothing required, is named with what to change."""
+        self.assertEqual(self.check()[0], [])
+        first = self.flow("same_seq", "默认同序列需求类型")["nodes"][0]
+        self.assertEqual((first["name"], first["roles"], [r["name"] for r in first["required"]]), ("定方案", ["issuer"], ["方案"]))
+        for change in (dict(roles=["assignee"]), dict(required=[])):
+            snap = json.loads(json.dumps(self.snap))
+            node = next(f for f in self.type("same_seq", snap)["flows"].values())["nodes"][0]
+            node.update(name="开工", **change)
+            binding, problems = space.bind(self.contract, snap)
+            more, _ = space.check(self.contract, snap, binding)
+            self.assertEqual(problems + more, [["同序列需求的流程“默认同序列需求类型”的第一个节点“开工”",
+                                               "负责角色要是“发出方”，完成时必填“方案”：承接的会话先交方案，发出方确认了才执行",
+                                               "报给模板维护者：把这个节点的负责角色改成“发出方”，在它的完成表单里把“方案”设成必填"]], change)
+        snap = json.loads(json.dumps(self.snap))                                    # a space from an earlier template: no such field
+        t = self.type("same_seq", snap)
+        t["fields"] = [f for f in t["fields"] if f["name"] != "方案"]
+        binding, problems = space.bind(self.contract, snap)
+        self.assertTrue(any("方案" in " ".join(map(str, p)) for p in problems), problems)
+
     def test_snapshot_keeps_structure_only(self):
         text = json.dumps(self.snap, ensure_ascii=False)
         for word in ("user_key", "7000000000000000001", "owners", "assignee_schedule_list"):
@@ -394,7 +416,7 @@ class CliTest(SpaceCase):
         self.assertEqual(sorted(ids["meegle"]["types"]), sorted(self.contract.types()))
         code, out = self.run_cli("check", "--target", self.tmp)
         self.assertEqual(code, 0)
-        self.assertIn("约定核对（contract_version 1）：通过", out)
+        self.assertIn("约定核对（contract_version 2）：通过", out)
         self.assertIn("研究任务：正式实验", self.run_cli("show", "--target", self.tmp)[1])
 
     def test_check_names_what_is_missing(self):
@@ -461,7 +483,7 @@ class CliTest(SpaceCase):
                 code, out = self.run_cli("check", "--space", "research_template")
                 snap = space.snapshot(space.find_project("research_template"), space.wanted_by(self.contract), workers=1)
             self.assertEqual(code, 0, out)
-            self.assertIn("约定核对（contract_version 1）：通过", out)
+            self.assertIn("约定核对（contract_version 2）：通过", out)
             self.assertIn(name, [s["name"] for s in self.type("decision", snap)["states"]])
 
     def test_commands_say_what_to_run_first(self):

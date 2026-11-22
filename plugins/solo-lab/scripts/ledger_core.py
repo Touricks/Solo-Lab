@@ -428,7 +428,7 @@ class Ledger:
     # reads
     def get(self, item_id, field_keys=None):
         if is_local(item_id):
-            raise LedgerError("#%s 没有工作项：+1 派给 +0 的活从 1.1.0 起不建工作项，它的需求包、交付和验收都在知识库和本地回执里。"
+            raise LedgerError("#%s 没有工作项：派给 +0 的封闭任务（执行关系）从 1.1.0 起不建工作项，它的需求包、交付和验收都在知识库和本地回执里。"
                               "看它用 ledger.py get %s；交付用 docs.py upload <交付包>，验收用 docs.py accept %s" % (
                                   str(item_id).lstrip("#"), str(item_id).lstrip("#"), str(item_id).lstrip("#")))
         args = ["workitem", "get", "--work-item-id", str(item_id)]
@@ -1429,10 +1429,11 @@ def new_item_sequence(lg, d, kind, wid):
         if not d.rel:
             raise LedgerError("同序列需求要写关系：下发或执行")
         rank = re.search(r"-p([0-2])-", d.author or "")
-        # +2 发下发关系的包，+1 发执行关系的包；本序列没开 +1 时 +2 直接委托 +0，写的也是执行关系（1.0.12）
-        expected = {"2": ("assign", "execute"), "1": ("execute",)}.get(rank.group(1), ()) if rank else ()
+        # 1.1.0: a sequence has two ranks. 下发 is a +2's (the +0 hands in a plan first); 执行, a closed task, is a +2's
+        # too, and a +0's that holds a 下发 request and hands its closed parts to other +0s of its sequence
+        expected = {"2": ("assign", "execute"), "0": ("execute",)}.get(rank.group(1), ()) if rank else ()
         if d.rel not in expected:
-            raise LedgerError("关系“%s”和发出方 %s 的职级对不上：+2 发给 +1 的同序列需求是下发，本序列没开 +1、直接发给 +0 的是执行；+1 发的是执行；退回作者改包头" % (
+            raise LedgerError("关系“%s”和发出方 %s 的职级对不上：下发的需求只由 +2 发；执行的任务由 +2 发，手上有下发需求的 +0 也可以把封闭的子任务派给本序列别的 +0；退回作者改包头" % (
                 spec.term("rel", d.rel), d.author))
     if wid == "cross_request" and not (d.sender_seq and d.receiver_seq):
         raise LedgerError("跨序列需求要认得出发起序列和承接序列")
@@ -1515,15 +1516,43 @@ def must_be(lg, what, names=(), roles=(), seq=None, why="", any_claim=False):
             return
         raise LedgerError("%s不能%s：先认领会话（pool.py claim），认领表有疑问的请研究员用 pool.py show 核对。" % (
             pool.ORIGIN_LABEL.get(lg.origin, "未认领的会话"), what))
-    mine = (me.get("name") or "").lower()
-    if any_claim or any(mine == (n or "").lower() for n in names) or me.get("role") in roles \
+    # 1.1.0: a sequence has no +1 any more. What one wrote or held before the upgrade is its sequence's +2's now.
+    heir = me.get("rank") == 2 and any(RETIRED_P1.match((n or "").lower()) and seq_of_session(lg, n) == me.get("sequence") for n in names)
+    if any_claim or any(same_session(me.get("name"), n) for n in names) or me.get("role") in roles or heir \
             or seq and me.get("sequence") == seq and me.get("rank") == 2:
         return
     raise LedgerError("（%s）不能%s%s。" % (me.get("name"), what, "：" + why if why else ""))
 
 
+RETIRED_P1 = re.compile(r"^(?!pmo-)[a-z]+-p1-\d+$")                    # Alg-p1-01: a session name from before 1.1.0
+P0_WORK_NAME = re.compile(r"^([a-z]+)-p0-(?:\d{3,}(?:-\d{1,2})?|\d+-\d{1,2})$")
+
+
+def same_session(mine, name):
+    """Is the session `mine` (a claim's name) the one a package or a field names? A +0 goes by two names: its
+    pool slot (Alg-p0-01) in the claims, and in a package a work name after the task (Alg-p0-2101, Alg-p0-2101-3).
+    Which +0 holds a task is in no table, so a work name stands for the +0s of its sequence, as it does where a
+    step's owner is checked (responsible)."""
+    mine, name = (mine or "").lower(), (name or "").lower()
+    if mine == name:
+        return True
+    m = P0_WORK_NAME.match(name)
+    return bool(m) and mine.startswith(m.group(1) + "-p0-")
+
+
+def assignee_test(lg, wid, it):
+    """test(by) -> bool for the session a work item is handed to (同序列需求的负责会话); None where the item
+    names no session there. That session uploads what the item asks of it, whoever confirms the step: the plan
+    of a 下发 request is its +0's, and the +2 that sent the request confirms it (1.1.0)."""
+    field = (lg.contract.role("assignee").get("field") or {}).get(wid)
+    value = (lg.text_of(it, field) or "").strip() if field and it else ""
+    if not SESSION_NAME.match(value):
+        return None
+    return lambda by: same_session(by, value)
+
+
 def seq_of_session(lg, name):
-    """The sequence a session name such as Alg-p1-02 belongs to, by its abbreviation; None for other text."""
+    """The sequence a session name such as Alg-p2-01 belongs to, by its abbreviation; None for other text."""
     if not SESSION_NAME.match(name or ""):
         return None
     head = name.split("-", 1)[0].lower()

@@ -424,7 +424,7 @@ def role_of(policy, name):
 
 
 def is_slot(name):
-    """+1 and +2 names are pool slots; a +0 name is a slot with two digits (Alg-p0-01)
+    """A +2's name (and the router's) is a pool slot; a +0 name is a slot with two digits (Alg-p0-01)
     and a work name with three or more (Alg-p0-2101, after the work item ID; Alg-p0-2101-3, after the number
     of a task without a work item)."""
     m = NAME_RE.match(name or "")
@@ -868,8 +868,10 @@ def addressed_to(policy, pool, msg, me):
 
 
 def _matches(policy, spec, role):
+    """An end of an edge names a role, or a rank: p2 and p0 stand for the sequences' own roles, and the
+    router and the scribe go by their names (orgspec._edge_targets reads the graph the same way)."""
     pol = policy["agents"].get(role)
-    return bool(pol) and (spec == role or spec == "p%d" % pol["rank"])
+    return bool(pol) and (spec == role or (spec == "p%d" % pol["rank"] and role == "%s-p%d" % (pol["sequence"], pol["rank"])))
 
 
 def edge_ok(policy, edge, a, b):
@@ -928,7 +930,7 @@ def receive_checks(policy, root, pool, msg, me):
             "进展、交付和要研究员拍板的事该发给路由，由它改状态包、把里程碑告诉你；这条转给路由，并请发出方以后直接发给它"
             if me["role"] == entry_role else "研究员的话该由入口照录交给路由，路由转给你；这条照常处理，回话发给路由，不发入口")))
     elif sender_claim and not kind_allowed(policy, kind, sender_claim["role"], me["role"]):
-        out.append("派发图里 %s（%s）不给 %s（%s）发【%s】；照规范该走本序列上一级，跨序列的该由两边的 +2 往来，接不接先和发出方确认" % (
+        out.append("派发图里 %s（%s）不给 %s（%s）发【%s】；照规范该走本序列 +2，跨序列的该由两边的 +2 往来，接不接先和发出方确认" % (
             sender, sender_claim["role"], me["name"], me["role"], names.get(kind, kind)))
     routing = sender_claim and sender_claim["role"] == policy.get("entry_role") and me["role"] == policy.get("router_role")
     if kind == "assign" and item and not receipt_exists(root, item):

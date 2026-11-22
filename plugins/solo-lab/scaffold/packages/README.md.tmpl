@@ -6,4 +6,4 @@
 - 写完先自查：`python3.12 -I .claude/solo-lab/bin/orgspec.py lint <草稿路径>`。
 - 写好以后作者自己上传：`python3.12 -I .claude/solo-lab/bin/docs.py upload <草稿路径> --apply`，`sent/` 里留一份上传回执 `upload-<草稿文件名>.json`。
 - 书记员登记后，脚本把工作项 ID 写回草稿包头的“关联工作项”，在 `sent/` 留一份登记回执 `<工作项 ID>.json`：草稿路径、飞书文档链接、工作项 ID、登记时间。作者再运行 `docs.py relink <工作项 ID> --apply` 把 ID 写进文档。草稿本身不删。
-- +1 派给 +0 的任务不建工作项，回执是 `sent/<上级工作项 ID>-<序号>.json`，记着它走到执行中、待验收还是已验收。
+- 派给 +0 的封闭任务（执行关系）不建工作项，回执是 `sent/<上级工作项 ID>-<序号>.json`，记着它走到执行中、待验收还是已验收。
