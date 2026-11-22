@@ -219,7 +219,7 @@ The full guide is [docs/使用说明.md](docs/使用说明.md), in Chinese.
 **The user only makes decisions**
 
 - Problem: the user's attention is very valuable. If everything waits for the user's confirmation, the project can move only when the user is free.
-- Our approach: the user has to be present when a work item reaches three nodes: task opening, acceptance criteria and final acceptance. Other questions that come up during a task are registered by the scribe session in the queue of decision work items in Feishu Project, and the user can decide them all in one go when free. When a new decision is made, the plugin pulls out the related earlier decisions and conclusions and attaches them to the decision package, so the user does not have to recall them.
+- Our approach: the user has to be present when a work item reaches three nodes: setting the task goal, reviewing the task's acceptance criteria, and deciding the direction after acceptance. Other questions that come up during a task are registered by the scribe session in the queue of decision work items in Feishu Project, and the user can decide them all in one go when free. When a new decision is made, the plugin pulls out the related earlier decisions and conclusions and attaches them to the decision package, so the user does not have to recall them.
 
 ## Upgrading
 
