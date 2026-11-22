@@ -122,7 +122,7 @@ def chosen_option(options, option, item_id):
 
 def changed_executor(lg, value, item_id):
     """The session `confirm --executor` hands a decision to, under the package header's own check
-    (orgspec.read_executor): a sequence's +2, the entry or the router. 研究员 is refused: what the researcher
+    (orgspec.read_executor): a sequence's +1, the entry or the router. 研究员 is refused: what the researcher
     is to do by hand has to be in the package, so that takes a new version."""
     if value is None:
         return None
@@ -1042,7 +1042,7 @@ def update(lg, item_id, pairs, wid_hint=None):
               json.dumps([v for _, v in sets], ensure_ascii=False), write=True)
 
 
-SESSION_TAG = re.compile(r"\s*\[[A-Za-z]+\+[0-2]\]")
+SESSION_TAG = re.compile(r"\s*" + core.SESSION_TAG)
 
 
 def comment(lg, item_id, text):

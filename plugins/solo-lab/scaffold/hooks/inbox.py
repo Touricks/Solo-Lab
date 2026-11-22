@@ -52,7 +52,7 @@ The hook also:
   the researcher. At most MAX_DUE such lines a turn; in the turn that opens a
   session they count against the role text's budget;
 - turns the researcher's opening line in a new top-level session
-  ("认领 <+2 角色>（会话名 …）", also after <system-reminder> blocks) into a claim
+  ("认领 <+1 角色>（会话名 …）", also after <system-reminder> blocks) into a claim
   and injects the role text;
 - marks the session busy and records its permission mode;
 - recognises a message header at the start of one of the first lines of the
@@ -369,7 +369,7 @@ def pool_prompt(data, policy, root):
     entry = who.origin == "claim" and who.role == policy.get("entry_role")
     pl, ok = pool.load(root)
     fresh = []                                          # (ID, receipt) of the decisions this message is the first word of
-    # 1.1.0: a decision reaches the entry from the router, as 【需拍板 #ID】, once its +2 has uploaded it and the scribe
+    # 1.1.0: a decision reaches the entry from the router, as 【需拍板 #ID】, once its +1 has uploaded it and the scribe
     # has registered it (until then the scribe's 【登记回执】 to the entry was that first word)
     if entry and ok and origin == "agent" and msg and msg["kind"] == "decide" and pool.addressed_to(policy, pl, msg, who.claim):
         # every item the header names: one message may carry several, 【需拍板 #A / #B】

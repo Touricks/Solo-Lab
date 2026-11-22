@@ -145,7 +145,7 @@ class SnapshotTest(SpaceCase):
         self.assertIn("还没有工作项", space.flows_md(snap))
 
     def test_a_request_inside_a_sequence_starts_with_its_plan(self):
-        """1.1.0: a sequence has no +1, and the method of a 下发 request is the plan its +0 hands in. The first node
+        """1.1.0: a sequence has no middle rank, and the method of a 下发 request is the plan its +0 hands in. The first node
         of 同序列需求 is the sender's, and its form requires the plan; a space that still starts with 开工, the
         assignee's and with nothing required, is named with what to change."""
         self.assertEqual(self.check()[0], [])

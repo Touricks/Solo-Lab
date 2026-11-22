@@ -174,7 +174,7 @@ def local_layer(target, m):
         gone = sorted(".claude/agents/" + n for n in (os.listdir(roles_dir) if os.path.isdir(roles_dir) else [])
                       if n.endswith(".md") and ".claude/agents/" + n not in fresh.files)
         if gone:
-            problems.append("这些角色定义是旧版留下的，现在的规则里没有这些角色（1.1.0 起各序列只有 +2 和 +0）：%s；请研究员删掉这些文件" % "、".join(gone))
+            problems.append("这些角色定义是旧版留下的，现在的规则里没有这些角色（1.1.0 起各序列只有 +1 和 +0 两级，带队的角色叫 <序列>-p1）：%s；请研究员删掉这些文件" % "、".join(gone))
     for rel, digest in sorted(m.get("files", {}).items()):
         path = os.path.join(target, rel)
         if not os.path.isfile(path):
@@ -452,7 +452,7 @@ def pool_health(target, manifest):
         held.setdefault(c["role"], []).append(c["name"])
     retired = sorted(n for role, names in held.items() if role not in policy["agents"] for n in names)
     if retired:
-        problems.append("认领表里有现在的规则没有的角色：%s（1.1.0 起各序列只有 +2 和 +0）。先让它们把手上的活交给本序列 +2，"
+        problems.append("认领表里有现在的规则没有的角色：%s。先让它们把手上的活交给本序列 +1，"
                         "再请研究员归档这些会话，逐个运行 pool.py release <会话名>" % "、".join(retired))
     for role in (policy["entry_role"], policy["scribe_role"]):
         if len(held.get(role, [])) > 1:

@@ -54,7 +54,7 @@ def upload(lg, path, source=None, doc=None):
     """Create the document of a new work item, before the work item exists (1.1.0: a document is written by
     the session that answers for it; the scribe registers the item afterwards and puts the link into it).
 
-    The draft is checked as register checks it; the session is the draft's sender, or the +2 of its sequence
+    The draft is checked as register checks it; the session is the draft's sender, or the +1 of its sequence
     for a sheet whose sender is no session. The document goes under the node its type has (a package in the
     执行 relation: under the main document of the item it comes from, --source), titled without a work item ID,
     its 关联工作项 line still a placeholder: `docs.py relink` fills both once the item exists. The receipt
@@ -233,7 +233,7 @@ def upload_delivery(lg, d, path, doc=None):
 
 
 def upload_local(lg, d, path, source=None, doc=None):
-    """A 需求包 in the 执行 relation: a closed task a +2 hands to a +0, or a +0 that holds a 下发 request hands to
+    """A 需求包 in the 执行 relation: a closed task a +1 hands to a +0, or a +0 that holds a 下发 request hands to
     another +0 of its sequence. From 1.1.0 it has no work item and the scribe is not asked: the session that hands the task out uploads the package
     under the main document of the work item it belongs to (--source, or the header's 来源工作项), and the
     task takes the number <source>-<n>. The number goes into the document's title and 关联工作项 line, into the
@@ -242,7 +242,7 @@ def upload_local(lg, d, path, source=None, doc=None):
     carry a work item's ID, and the +0's work name ends in it. Run again on the same draft, nothing is created."""
     spec = lg.spec
     if not core.SESSION_NAME.match(d.author or ""):
-        raise core.LedgerError("发出方要带会话名，比如“算法 +2（Alg-p2-01）”")
+        raise core.LedgerError("发出方要带会话名，比如“算法 +1（Alg-p1）”")
     core.must_be(lg, "上传这份需求包", names=[d.author], why="这份需求包的发出方是 %s，请它来上传" % d.author)
     seq = core.new_item_sequence(lg, d, None, "same_seq")
     rel = os.path.relpath(path, lg.root)
@@ -253,13 +253,13 @@ def upload_local(lg, d, path, source=None, doc=None):
     source = core.item_id_of(source or d.source or (known or {}).get("source")) if (source or d.source or (known or {}).get("source")) else None
     if not source or core.is_local(source):
         raise core.LedgerError("执行关系的需求包要写它所属的下发需求包：--source <上级工作项 ID>，或者在包头的“关联工作项”一行后面写“；来源工作项 #<ID>”")
-    if "-p0-" in d.author.lower() and lg.mode != "offline":
+    if core.is_p0_of(lg, d.author, seq) and lg.mode != "offline":
         # a +0 hands out the closed parts of the 下发 request it holds, and of nothing else
         held, wid = core.typed_item(lg, source)
         holds = core.assignee_test(lg, wid, held) if held is not None else None
         if held is not None and not (wid == "same_seq" and holds and holds(d.author)):
             raise core.LedgerError("+0 只给自己手上的下发需求派封闭的子任务：--source 写那条下发需求的工作项 ID；#%s 不是交给 %s 的同序列需求。"
-                                   "别的活要拆给别人做，写进交付包，由本序列 +2 委托" % (source, d.author))
+                                   "别的活要拆给别人做，写进交付包，由本序列 +1 委托" % (source, d.author))
     parent = core.parent_node(lg, "same_seq", seq, d.rel, source)
     ref = (known or {}).get("work_item_id") or (core.next_local_ref(lg, source) if lg.mode == "apply" else "%s-<序号>" % source)
     core.link_line(d.text, "#0", "0")                  # a 关联工作项 line that is no placeholder stops here
@@ -440,7 +440,7 @@ def retitle(lg, url, title, whole=None):
 
 
 SCRIBE_ROLE = "pmo-scribe"                    # the skeleton of knowledge-base nodes is the scribe's: no session's document
-STATUS_ROLES = ("pmo-router", "pmo-p2")       # who keeps a research task's 状态包, besides the document's owner
+STATUS_ROLES = ("pmo-router", "pmo-p1")       # who keeps a research task's 状态包, besides the document's owner
 
 
 def last_block_before(xml, end_id):
@@ -564,7 +564,7 @@ def revise(lg, item_id, path, note):
     value = m.group(2).strip() if m else ""
     if m and not core.is_placeholder(value) and not re.fullmatch(r"#?%s|\[#?%s\]\(\S+\)" % (item_id, item_id), value):
         raise core.LedgerError("修订稿的“关联工作项”写的是“%s”，要修订的是 #%s：写“#%s”，或者照新草稿写“待建”" % (value, item_id, item_id))
-    # a task without a work item (1.1.0: what a +1 hands to a +0): its package is revised by the session that
+    # a task without a work item (1.1.0: a closed task, 执行): its package is revised by the session that
     # handed it out, from its receipt alone; there is no work item to read and none to ask the scribe about
     local = core.local_task(lg, item_id)[1] if core.is_local(item_id) and lg.mode != "offline" else None
     if core.is_local(item_id) and (sheet or d.pid != "request" or d.rel != "execute"):
@@ -742,7 +742,7 @@ def revision_logged(lg, url, heads, version, date):
     after the line was added, or whose answer never came, is run again: the line is not added twice. Only the
     line revise writes counts: one that starts with the scribe's tag, at the start of a line or of a block
     (the answer may be Markdown or blocks in tags). Another session's note that names the version
-    (“[Infra+2] 准备出第 2 版（日期）：…”) is no such line. False when the section cannot be read, offline included."""
+    (“[Infra+1] 准备出第 2 版（日期）：…”) is no such line. False when the section cannot be read, offline included."""
     log = next((b for b, t in heads if t == "交接记录"), None)
     if not log or lg.mode == "offline":
         return False
@@ -769,7 +769,7 @@ def append(lg, item_id, path):
     with open(path, encoding="utf-8") as f:
         content = f.read()
     first = next((l for l in content.splitlines() if l.strip()), "")
-    if not re.search(r"\[[A-Za-z]+\+[0-2]\]", first):
+    if not re.search(core.SESSION_TAG, first):
         raise core.LedgerError("交接记录第一行要带会话标签，比如 [Alg+0]")
     core.must_be(lg, "追加 #%s 的交接记录" % item_id, any_claim=True)
     mine = (lg.caller or {}).get("tag")

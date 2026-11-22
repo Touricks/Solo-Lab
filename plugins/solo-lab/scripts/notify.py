@@ -62,7 +62,7 @@ def notify(spec, root, role, text, work_item=None, sender=None):
 def agent_roles(spec):
     out = []
     for s, _, _ in spec.sequences():
-        out += [spec.role_name(s, r) for r in spec.ranks_of(s)]
+        out += [role for role, _ in spec.roles_of(s)]
     return out
 
 
@@ -92,7 +92,7 @@ def pool_focus(spec, root, policy, action, target, topic):
             name = pool.resolve(policy, pl, target)
     name = name or (me or {}).get("name")
     if not name:
-        raise SystemExit("不知道是哪个会话：在池会话里运行时不用写名字；在别处运行写会话名，比如 Alg-p2-01")
+        raise SystemExit("不知道是哪个会话：在池会话里运行时不用写名字；在别处运行写会话名，比如 Alg-p1")
     with pool.locked(root) as pl:
         if name not in pl["claims"]:
             raise SystemExit("%s 不在认领表里" % name)
@@ -163,7 +163,7 @@ def main(argv=None):
     ap.add_argument("--offline", action="store_true")
     sub = ap.add_subparsers(dest="cmd")
     p = sub.add_parser("send")
-    p.add_argument("role", help="角色（alg-p2）或会话池里的会话名（Alg-p2-01）")
+    p.add_argument("role", help="角色（alg-p1）或会话池里的会话名（Alg-p1）")
     p.add_argument("--text", required=True)
     p.add_argument("--work-item")
     p.add_argument("--from", dest="sender")

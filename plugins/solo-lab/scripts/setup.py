@@ -101,7 +101,7 @@ def announce(target, name=None, task_path=None, seq_arg=None):
         "- 飞书知识空间 1 个：%s" % setup_core.space_names(task, ids)[1],
         "- 知识库节点 %d 个" % len(spec.node_keys(seqs)),
         "- 研究任务 1 条和它的主文档",
-        "- 桌面会话 %d 个%s，侧栏分区 1 个：%s" % (plan["total"], "（%s只开 +2）" % later if later else "", plan["label"]),
+        "- 桌面会话 %d 个%s，侧栏分区 1 个：%s" % (plan["total"], "（%s只开 +1）" % later if later else "", plan["label"]),
         "- 项目目录 %s 里的 %s，以及 .env 里的两行链接" % (target, "、".join(LOCAL_TOPS)),
         "中途要你做的：%s。" % "；".join(asks),
         "权限模式：本会话用 auto 模式时，开池不用你点。用 bypass 模式时，应用每开一个会话都要你点一次确认，这个池共 %d 次。" % plan["total"],

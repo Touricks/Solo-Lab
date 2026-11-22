@@ -6,7 +6,7 @@ to. A session becomes a role by claiming it, and a claim needs a permit:
 - a pre-registration (pool.py expect) by the session that opened it, keyed by the new
   session's desktop ID (or, in a terminal, its session ID); or
 - the opening line the researcher pastes into a new top-level session,
-  "认领 <角色>（会话名 <名字>）…", for +2 roles only.
+  "认领 <角色>（会话名 <名字>）…", for +1 roles only.
 Hooks turn a permit into a claim; the commands (pool_cmd.py) only write permits and pending entries.
 
 A claim belongs to one session ID. Its desktop ID moves it to a new session ID only after
@@ -51,10 +51,17 @@ import json
 import os
 import re
 
-OPENING_RE = re.compile(r"^\s*认领\s*([a-z]+-p2)\s*[（(]\s*会话名\s*[：:]?\s*([A-Za-z]+-p2-\d+)\s*[)）]")
-NAME_RE = re.compile(r"^([A-Za-z]+)-p([0-2])-(\d+(?:-\d{1,2})?)$")     # a +0's work name may end in a task number: Alg-p0-2101-3
-NAME_IN_TEXT = r"[A-Za-z]+-[pP][0-2]-\d+(?:-\d{1,2}(?!\d))?"
-# A work item ID, or the number of a task without a work item (1.1.0: what a +1 hands to a +0), <ID>-<n>.
+# Session names, from 1.1.0. A sequence's lead (+1) is named without a number, Alg-p1: there is one. Its members
+# (+0) are pool slots, Alg-p0-01; on a package or a work item a member goes by a work name after the task,
+# Alg-p0-2101 or Alg-p0-2101-3. The PMO's lead is the entry, PMO-p1, and its two fixed members are
+# PMO-p0-router and PMO-p0-ledger (the scribe).
+# A name from before 1.1.0 is read where an old message, package or work item still carries one (current_name).
+OPENING_RE = re.compile(r"^\s*认领\s*([a-z]+-p1)\s*[（(]\s*会话名\s*[：:]?\s*([A-Za-z]+-[pP][0-2][\w-]*)\s*[)）]")
+FIXED_WORDS = ("router", "ledger")
+NAME_RE = re.compile(r"^([A-Za-z]+)-[pP](?:(1)|(0)-(router|ledger|\d+(?:-\d{1,2})?))$")
+NAME_IN_TEXT = r"[A-Za-z]+-[pP](?:1(?![\w-])|0-(?:router|ledger)(?![\w-])|[0-2]-\d+(?:-\d{1,2}(?!\d))?)"
+FORMER_NAME = re.compile(r"^([A-Za-z]+)-[pP]([12])-(\d+)$")
+# A work item ID, or the number of a task without a work item (1.1.0: a closed task, 执行), <ID>-<n>.
 ITEM_IN_TEXT = r"\d{3,}(?:-\d{1,2}(?![\d-]))?"
 HEADER_LINES = 5                      # a message header starts one of the first non-empty lines
 REATTACH_WINDOW = datetime.timedelta(seconds=60)
@@ -100,8 +107,11 @@ def pool_path(root):
     return os.path.join(state_dir(root), "pool.json")
 
 
+POOL_VERSION = 2                      # 2: sessions are named as 1.1.0 names them (renamed_1_1_0)
+
+
 def empty():
-    return {"version": 1, "claims": {}, "permits": [], "pending": [], "tombstones": [], "owners": {},
+    return {"version": POOL_VERSION, "claims": {}, "permits": [], "pending": [], "tombstones": [], "owners": {},
             "refills": [], "focus": {}, "reattach": [], "todos": []}
 
 
@@ -154,8 +164,51 @@ def load(root):
     if not well_formed(data):
         return empty(), False
     for key, value in empty().items():
-        data.setdefault(key, value)
+        if key != "version":
+            data.setdefault(key, value)
+    if data.get("version", 1) < POOL_VERSION:
+        renamed_1_1_0(data)
     return data, True
+
+
+def renamed_1_1_0(data):
+    """A pool written before 1.1.0, with its sessions as they are called now; whoever next writes pool.json
+    under the lock saves it so. A lead keeps its claim under its new name and role (Alg-p2-01, alg-p2: Alg-p1,
+    alg-p1), and so do the entry, the router and the scribe; a +0 keeps its name. A session of the middle rank
+    sequences had until then has no role any more: its claim goes, and the session is told so as one whose claim
+    was released. The work items it held are its lead's."""
+    def middle(name):
+        m = FORMER_NAME.match(name or "")
+        return bool(m) and m.group(2) == "1" and m.group(1).lower() != "pmo"
+
+    def role_now(role):
+        return role[:-1] + "1" if (role or "").endswith("-p2") else role
+
+    def entry_now(e):
+        e = dict(e)
+        for key in ("name", "by", "card_in"):
+            if isinstance(e.get(key), str):
+                e[key] = current_name(e[key])
+        if isinstance(e.get("name"), str):
+            e["short"] = short_name(e["name"]) if "short" in e else e.get("short")
+        if "role" in e:
+            e["role"] = role_now(e["role"])
+        return {k: v for k, v in e.items() if not (k == "short" and v is None)}
+
+    claims = {}
+    for name, claim in data["claims"].items():
+        if middle(name):
+            data["tombstones"].append(dict(claim, released_at=stamp(), released_by="1.1.0"))
+        else:
+            claims[current_name(name)] = entry_now(claim)
+    data["claims"] = claims
+    for key in ("permits", "pending"):
+        data[key] = [entry_now(e) for e in data[key] if not middle(e.get("name"))]
+    # a request for another session of a role that is gone (alg-p1 then) is dropped; one for a +0 stays
+    data["refills"] = [entry_now(r) for r in data["refills"] if not re.search(r"-p[12]$", r.get("role") or "")]
+    data["owners"] = {item: current_name(name) if isinstance(name, str) else name for item, name in data["owners"].items()}
+    data["focus"] = {current_name(name): value for name, value in data["focus"].items()}
+    data["version"] = POOL_VERSION
 
 
 @contextlib.contextmanager
@@ -400,48 +453,85 @@ def mode_class(mode):
 
 
 # ---------------------------------------------------------------- names
-def name_map(policy):
-    return {(pol["abbrev"].lower(), pol["rank"]): role for role, pol in policy["agents"].items()}
+def current_name(name):
+    """A session name as it is written from 1.1.0 on, for one written before: Alg-p2-01 was the lead, now Alg-p1;
+    Alg-p1-02 was a session of the middle rank sequences had then, and its work is the lead's now; PMO-p2-01 was
+    the entry (PMO-p1), PMO-p1-01 the router (PMO-p0-router), PMO-p0-01 the scribe (PMO-p0-ledger). Any other
+    text comes back as it is."""
+    name = (name or "").strip()
+    m = FORMER_NAME.match(name)
+    if m:
+        if m.group(2) == "1" and m.group(1).lower() == "pmo":
+            return "%s-p0-router" % m.group(1)
+        return "%s-p1" % m.group(1)
+    if name.lower() == "pmo-p0-01":
+        return name[:3] + "-p0-ledger"
+    return name
+
+
+def parse_name(name):
+    """(abbreviation as written, rank, rest) of a session name: rest is None for a lead, router or ledger for the
+    PMO's fixed members, else a member's slot or work number. None when the text is no session name."""
+    m = NAME_RE.match(current_name(name))
+    if not m:
+        return None
+    return (m.group(1), 1, None) if m.group(2) else (m.group(1), 0, m.group(4))
+
+
+def role_named(policy, name):
+    """The role a session name belongs to, case aside; None when it names none."""
+    parsed = parse_name(name)
+    if not parsed:
+        return None
+    abbrev, rank, rest = parsed
+    for role, pol in policy["agents"].items():
+        if (pol.get("abbrev") or "").lower() != abbrev.lower() or pol.get("rank") != rank:
+            continue
+        word = (pol.get("fixed_session") or "").rsplit("-", 1)[-1].lower()
+        if (word if word in FIXED_WORDS else None) == (rest if rest in FIXED_WORDS else None):
+            return role
+    return None
 
 
 def canonical(policy, name):
-    """Alg-p1-01 for alg-p1-01 or ALG-P1-01; None when the name names no role."""
-    m = re.match(r"^([A-Za-z]+)-[pP]([0-2])-(\d+(?:-\d{1,2})?)$", (name or "").strip())
-    if not m:
-        return None
-    role = name_map(policy).get((m.group(1).lower(), int(m.group(2))))
+    """Alg-p0-01 for alg-p0-01 or ALG-P0-01, Alg-p1 for alg-p1, and for Alg-p2-01 as the lead was called before
+    1.1.0; None when the name names no role."""
+    role = role_named(policy, name)
     if not role:
         return None
-    return "%s-p%s-%s" % (policy["agents"][role]["abbrev"], m.group(2), m.group(3))
+    _, rank, rest = parse_name(name)
+    return "%s-p%d%s" % (policy["agents"][role]["abbrev"], rank, "" if rest is None else "-" + rest)
 
 
 def role_of(policy, name):
-    c = canonical(policy, name)
-    if not c:
-        return None
-    m = NAME_RE.match(c)
-    return name_map(policy).get((m.group(1).lower(), int(m.group(2))))
+    return role_named(policy, name)
 
 
 def is_slot(name):
-    """A +2's name (and the router's) is a pool slot; a +0 name is a slot with two digits (Alg-p0-01)
-    and a work name with three or more (Alg-p0-2101, after the work item ID; Alg-p0-2101-3, after the number
-    of a task without a work item)."""
-    m = NAME_RE.match(name or "")
-    return bool(m) and "-" not in m.group(3) and (m.group(2) != "0" or len(m.group(3)) == 2)
+    """A lead's name, the router's and the scribe's are pool slots; a +0 name is a slot with two digits
+    (Alg-p0-01) and a work name with three or more (Alg-p0-2101, after the work item ID; Alg-p0-2101-3, after
+    the number of a task without a work item)."""
+    parsed = parse_name(name)
+    if not parsed:
+        return False
+    _, rank, rest = parsed
+    return rank == 1 or rest in FIXED_WORDS or ("-" not in rest and len(rest) == 2)
 
 
 def work_item_of(name):
     """The work item ID in a +0 work name (Alg-p0-2101 → 2101), or the task number (Alg-p0-2101-3 → 2101-3);
     None for any other name."""
-    m = NAME_RE.match(name or "")
-    if m and m.group(2) == "0" and ("-" in m.group(3) or len(m.group(3)) >= 3):
-        return m.group(3)
+    parsed = parse_name(name)
+    if parsed and parsed[1] == 0 and parsed[2] not in FIXED_WORDS and ("-" in parsed[2] or len(parsed[2]) >= 3):
+        return parsed[2]
     return None
 
 
 def slot_name(pol, n):
-    return "%s-p%d-%02d" % (pol["abbrev"], pol["rank"], n)
+    """The name of a role's n-th session: a lead and the PMO's fixed members have one name each."""
+    if pol.get("fixed_session"):
+        return pol["fixed_session"]
+    return "%s-p1" % pol["abbrev"] if pol["rank"] == 1 else "%s-p0-%02d" % (pol["abbrev"], n)
 
 
 def short_name(name):
@@ -527,7 +617,7 @@ def first_writes_due(root):
 
 
 def single_roles(policy):
-    return policy.get("single_claim_roles") or [policy.get("entry_role", "pmo-p2"), policy.get("scribe_role", "pmo-scribe")]
+    return policy.get("single_claim_roles") or [policy.get("entry_role", "pmo-p1"), policy.get("scribe_role", "pmo-scribe")]
 
 
 def role_limit(policy, role):
@@ -582,7 +672,7 @@ def promote(pool, policy, permit, sid, desk, at=None):
              "desk": desk or permit.get("desk"), "claimed_at": stamp(at), "via": permit.get("via"),
              "by": permit.get("by")}
     pool["claims"][name] = claim
-    # the permit that was used, and any other one for this same session: a +2 opened by the researcher's
+    # the permit that was used, and any other one for this same session: a +1 opened by the researcher's
     # session is pre-registered by its desktop ID and may claim through its opening line first
     pool["permits"] = [p for p in pool["permits"] if p is not permit
                        and not (sid and p.get("session_id") == sid) and not (claim["desk"] and p.get("desk") == claim["desk"])]
@@ -731,14 +821,14 @@ def identify(data, policy, root, env=None, promote_permits=True):
 
 # --------------------------------------------------------------- opening
 def opening_permit(root, policy, sid, desk, prompt):
-    """The researcher's opening line in a new top-level session: a permit for a +2 role."""
+    """The researcher's opening line in a new top-level session: a permit for a +1 role."""
     m = OPENING_RE.match(prompt or "")
     if not m:
         return None, None
     role, name = m.group(1), canonical(policy, m.group(2))
     pol = policy["agents"].get(role)
-    if not pol or pol["rank"] != 2 or role_of(policy, name) != role:
-        return None, "开局句里的角色 %s 和会话名 %s 对不上，或者不是 +2；只有 +2 能用开局句认领" % (role, m.group(2))
+    if not pol or pol["rank"] != 1 or role_of(policy, name) != role:
+        return None, "开局句里的角色 %s 和会话名 %s 对不上，或者不是 +1；只有 +1 能用开局句认领" % (role, m.group(2))
     if pol.get("fixed_session") and name != pol["fixed_session"]:
         return None, "%s 的会话名固定是 %s，开局句写错了；改成“认领 %s（会话名 %s）”再开一个会话" % (
             role, pol["fixed_session"], role, pol["fixed_session"])
@@ -868,7 +958,7 @@ def addressed_to(policy, pool, msg, me):
 
 
 def _matches(policy, spec, role):
-    """An end of an edge names a role, or a rank: p2 and p0 stand for the sequences' own roles, and the
+    """An end of an edge names a role, or a rank: p1 and p0 stand for the sequences' own roles, and the
     router and the scribe go by their names (orgspec._edge_targets reads the graph the same way)."""
     pol = policy["agents"].get(role)
     return bool(pol) and (spec == role or (spec == "p%d" % pol["rank"] and role == "%s-p%d" % (pol["sequence"], pol["rank"])))
@@ -930,7 +1020,7 @@ def receive_checks(policy, root, pool, msg, me):
             "进展、交付和要研究员拍板的事该发给路由，由它改状态包、把里程碑告诉你；这条转给路由，并请发出方以后直接发给它"
             if me["role"] == entry_role else "研究员的话该由入口照录交给路由，路由转给你；这条照常处理，回话发给路由，不发入口")))
     elif sender_claim and not kind_allowed(policy, kind, sender_claim["role"], me["role"]):
-        out.append("派发图里 %s（%s）不给 %s（%s）发【%s】；照规范该走本序列 +2，跨序列的该由两边的 +2 往来，接不接先和发出方确认" % (
+        out.append("派发图里 %s（%s）不给 %s（%s）发【%s】；照规范该走本序列 +1，跨序列的该由两边的 +1 往来，接不接先和发出方确认" % (
             sender, sender_claim["role"], me["name"], me["role"], names.get(kind, kind)))
     routing = sender_claim and sender_claim["role"] == policy.get("entry_role") and me["role"] == policy.get("router_role")
     if kind == "assign" and item and not receipt_exists(root, item):
@@ -938,7 +1028,8 @@ def receive_checks(policy, root, pool, msg, me):
                     "#%s 在 packages/sent/ 里没有登记回执；委托要先登记，先跟委托方确认") % item)
     if kind == "assign" and not item and not routing:
         out.append("委托消息没写工作项 ID；先跟委托方确认是否已登记")
-    if kind == "assign" and (policy["agents"].get(me["role"]) or {}).get("rank") == 0 and not msg.get("p0_name"):
+    mine = policy["agents"].get(me["role"]) or {}
+    if kind == "assign" and mine.get("rank") == 0 and not mine.get("fixed_session") and not msg.get("p0_name"):
         out.append("委托 +0 的消息要单独写一行“会话名：<简写>-p0-<工作项 ID>”；先按需求包里的工作项 ID 定会话名")
     if kind == "report" and item:
         owner = (pool.get("owners") or {}).get(item)
@@ -947,7 +1038,7 @@ def receive_checks(policy, root, pool, msg, me):
             if owner_claim and sender_claim:
                 o, s = policy["agents"].get(owner_claim["role"]) or {}, policy["agents"].get(sender_claim["role"]) or {}
                 above = s.get("sequence") == o.get("sequence") and s.get("rank", 0) > o.get("rank", 0)
-            # the owner's own +2 or +1 passing the result up, and whoever reports to the entry, is the normal
+            # the owner's own +1 passing the result up, and whoever reports to the entry, is the normal
             # way; a report from elsewhere may be a late one from the session the item was taken from
             if not above and me["role"] != policy.get("entry_role"):
                 out.append("#%s 的负责会话是 %s，这条交付是 %s 发的；可能是重新委托后旧会话迟到的交付，先核对再用" % (item, owner, sender))
@@ -984,7 +1075,7 @@ def all_open_items(root, owners=None):
                 theirs.pop(item)
             elif item in theirs and rec.get("in_graph"):
                 # delivered to somebody else, along an edge of the graph: a 跨序列需求 the entry passed on before
-                # 1.0.12 is answered to the +2 that asked for it, and the entry is owed nothing more
+                # 1.0.12 is answered to the +1 that asked for it, and the entry is owed nothing more
                 waiting = theirs.pop(item)
                 if sent.get(waiting, {}).get(item) == frm:
                     sent[waiting].pop(item)

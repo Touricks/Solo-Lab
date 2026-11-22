@@ -389,8 +389,8 @@ def check(contract, snap, binding):
                    if c.get("required") and c["field_key"] in required - set(keys.values())]
         if outside:
             notes.append("%s新建时必填的“%s”不在约定里：登记时用 --set 按字段名传" % (cn, "”“".join(outside)))
-    # 1.1.0: a 同序列需求 starts with the plan. The +0 it is handed to uploads one, and the +2 that sent it confirms
-    # the first node, whose form requires the plan: this is where the +1 a sequence no longer has decided the method.
+    # 1.1.0: a 同序列需求 starts with the plan. The +0 it is handed to uploads one, and the +1 that sent it confirms
+    # the first node, whose form requires the plan: this is where the middle rank a sequence no longer has decided the method.
     gate = contract.flow.get("plan_gate") or {}
     held = gate.get("type")
     if held in (binding.get("types") or {}):

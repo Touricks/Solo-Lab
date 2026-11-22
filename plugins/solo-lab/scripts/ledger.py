@@ -219,7 +219,7 @@ def main(argv=None):
 
 def run_command(lg, args):
     if args.cmd in ("get", "next", "status") and core.is_local(args.id):
-        rec = core.local_task(lg, core.item_id_of(args.id))[1]     # a task a +1 handed to a +0: no work item, a local receipt
+        rec = core.local_task(lg, core.item_id_of(args.id))[1]     # a closed task (执行): no work item, a local receipt
         print(core.local_summary(rec))
         if args.cmd == "next":
             ref, by = rec["work_item_id"], rec.get("by") or "派活的会话"

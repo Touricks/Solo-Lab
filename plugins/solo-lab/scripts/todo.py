@@ -61,7 +61,7 @@ def todo_cmd(spec, root, action, n=None, text=None, item=None, done_when=None, n
             print("#%s 已经在研究员任务清单里了（第 %d 条，%s 提），没有再记。" % (item, same["n"], same.get("by")))
             return 0
         pool.log_event(root, {"event": "todo", "n": number, "by": by, "item": item, "kind": kind, "line": text.strip()[:200]})
-        entry = policy["agents"][policy["entry_role"]].get("fixed_session") or "PMO-p2-01"
+        entry = policy["agents"][policy["entry_role"]].get("fixed_session") or "PMO-p1"
         if kind:
             said = "研究员任务清单 %d：飞书项目里的 #%s 等研究员%s（%s）。这类工作项不管有几条，合成一件事跟研究员说，不算决策；他说处理完了，运行 pool.py show --prune --apply 核对。" % (
                 number, item, pool.ITEM_KINDS[kind], text.strip())

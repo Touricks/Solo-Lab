@@ -61,8 +61,10 @@ TRUE_WORDS = {"是", "true", "True", "1", "yes", "要"}
 FALSE_WORDS = {"否", "false", "False", "0", "no", "不要"}
 RESEARCHER = "研究员"
 FIRST_TASK = "packages/drafts/pmo/研究任务单-首条.md"    # the sheet init writes; the scribe registers it while the pool opens
-SESSION_NAME = re.compile(r"^[A-Za-z]+-p[0-2]-\w+(?:-\d{1,2})?$")      # Alg-p1-02; a +0's work name: Alg-p0-2101, Alg-p0-2101-3
-# 1.1.0: what a +1 hands to a +0 (a 需求包 in the 执行 relation) has no work item. It goes by a number of its own,
+# Alg-p1, PMO-p0-router; a +0's slot and its work names: Alg-p0-01, Alg-p0-2101, Alg-p0-2101-3; and the names of
+# before 1.1.0 (Alg-p2-01), which pool.current_name reads as they are called now
+SESSION_NAME = re.compile(r"^%s$" % pool.NAME_IN_TEXT)
+# 1.1.0: a closed task handed to a +0 (a 需求包 in the 执行 relation) has no work item. It goes by a number of its own,
 # <the work item it belongs to>-<a running number>, 2101-3: in the message headers, in the +0's work name, in the
 # receipts packages/sent/2101-3.json. Its documents hang under the main document of #2101; its state is local.
 LOCAL_REF = re.compile(r"^(\d{3,})-(\d{1,2})$")
@@ -248,7 +250,7 @@ class Ledger:
         self.nodes = wiki.get("nodes") or {}
         self.tenant = wiki.get("tenant_domain")
         self.caller, self.origin = who(root)        # the session that runs the script; None for the researcher's own
-        self.tag = (self.caller or {}).get("tag") or os.environ.get("SOLO_LAB_TAG", "[PMO+0]")
+        self.tag = (self.caller or {}).get("tag") or os.environ.get("SOLO_LAB_TAG", "[PMO-ledger]")
         self.planned = []
         self._me = None
 
@@ -713,8 +715,8 @@ def header_of(text):
 
 
 def sequence_named(spec, who):
-    """The sequence a 发出方 or 接收方 line names: by the sequence's name in front (算法 +2（Alg-p2-01）)
-    or, when only a session is written (Alg-p2-01), by its abbreviation. None for 研究员 and the like."""
+    """The sequence a 发出方 or 接收方 line names: by the sequence's name in front (算法 +1（Alg-p1）)
+    or, when only a session is written (Alg-p1), by its abbreviation. None for 研究员 and the like."""
     who = (who or "").strip()
     for s, _, abbrev in spec.sequences():
         if who.startswith(spec.term("seq", s)):
@@ -800,9 +802,9 @@ class Draft:
         self.rel = rels.get(self.header.get("关系", "").strip())
         title = title_of(self.text)
         self.task = re.split(r"[：:]", title, 1)[-1].strip() if title else os.path.basename(path)
-        m = re.search(r"（([A-Za-z]+-p[0-2]-[\w]+(?:-\d{1,2})?)）", self.header.get("发出方", ""))
+        m = re.search(r"（(%s)）" % pool.NAME_IN_TEXT, self.header.get("发出方", ""))
         self.author = m.group(1) if m else None
-        m = re.search(r"（([A-Za-z]+-p[0-2]-[\w]+(?:-\d{1,2})?)）", self.header.get("接收方", ""))
+        m = re.search(r"（(%s)）" % pool.NAME_IN_TEXT, self.header.get("接收方", ""))
         self.receiver = m.group(1) if m else None
         seq_by_cn = {spec.term("seq", s): s for s, _, _ in spec.sequences()}
         self.sender_seq = sequence_named(spec, self.header.get("发出方", ""))
@@ -858,7 +860,7 @@ class Sheet(Draft):
         sender = self.header.get("发出方", "").strip()
         if re.search(r"[<>]", self.task + sender + self.header.get("流程", "")):
             raise LedgerError("%s的标题或开头几行还是模板里的占位（<…>），先填好再登记" % word)
-        m = re.search(r"（([A-Za-z]+-p[0-2]-[\w]+)）", sender)
+        m = re.search(r"（(%s)）" % pool.NAME_IN_TEXT, sender)
         self.author = m.group(1) if m else (sender or None)        # a session, or 研究员, 导师 ...
         self.sender_seq = sequence_named(spec, sender)
         src = re.search(r"来源工作项[：:\s]*#?(\d+)", self.text)
@@ -1412,7 +1414,7 @@ def check_new(d, kind):
     """A draft of a new work item: its sender is a session (a sheet's may be 研究员, 导师) and a package is
     its first version."""
     if not d.author:
-        raise LedgerError("发出方要带会话名，比如“算法 +2（Alg-p2-01）”")
+        raise LedgerError("发出方要带会话名，比如“算法 +1（Alg-p1）”")
     if not kind and d.version != 1:
         raise LedgerError("登记的是新工作项，包头“版本”写第 1 版，现在是第 %s 版：已经登记过的包改了内容，用 docs.py revise <工作项 ID> <新草稿> 换主文档" % d.version)
 
@@ -1428,12 +1430,12 @@ def new_item_sequence(lg, d, kind, wid):
     if wid == "same_seq":
         if not d.rel:
             raise LedgerError("同序列需求要写关系：下发或执行")
-        rank = re.search(r"-p([0-2])-", d.author or "")
-        # 1.1.0: a sequence has two ranks. 下发 is a +2's (the +0 hands in a plan first); 执行, a closed task, is a +2's
+        named = pool.parse_name(d.author or "")
+        # 1.1.0: a sequence has two ranks. 下发 is a +1's (the +0 hands in a plan first); 执行, a closed task, is a +1's
         # too, and a +0's that holds a 下发 request and hands its closed parts to other +0s of its sequence
-        expected = {"2": ("assign", "execute"), "0": ("execute",)}.get(rank.group(1), ()) if rank else ()
+        expected = {1: ("assign", "execute"), 0: ("execute",)}.get(named[1], ()) if named else ()
         if d.rel not in expected:
-            raise LedgerError("关系“%s”和发出方 %s 的职级对不上：下发的需求只由 +2 发；执行的任务由 +2 发，手上有下发需求的 +0 也可以把封闭的子任务派给本序列别的 +0；退回作者改包头" % (
+            raise LedgerError("关系“%s”和发出方 %s 的职级对不上：下发的需求只由 +1 发；执行的任务由 +1 发，手上有下发需求的 +0 也可以把封闭的子任务派给本序列别的 +0；退回作者改包头" % (
                 spec.term("rel", d.rel), d.author))
     if wid == "cross_request" and not (d.sender_seq and d.receiver_seq):
         raise LedgerError("跨序列需求要认得出发起序列和承接序列")
@@ -1493,7 +1495,7 @@ def who(root):
 
 def doc_owner(lg, it=None, d=None):
     """Who writes an item's main document: (session names, sequence, words). The session its 发出方 names; when
-    that is no session (研究员, 导师), the +2 of the item's sequence, 项目管理 where the item has none. Before
+    that is no session (研究员, 导师), the +1 of the item's sequence, 项目管理 where the item has none. Before
     the item exists, or offline, the draft says both."""
     sender = (lg.text_of(it, "sender") if it else None) or (getattr(d, "author", None) if d else None) or ""
     if SESSION_NAME.match(sender.strip()):
@@ -1501,12 +1503,12 @@ def doc_owner(lg, it=None, d=None):
     by_cn = {cn: s for s, cn, _ in lg.spec.sequences()}
     seq = by_cn.get((lg.text_of(it, "sequence") or "").strip()) if it else None
     seq = seq or (getattr(d, "sender_seq", None) if d else None) or "pmo"
-    return [], seq, "%s +2" % lg.spec.term("seq", seq)
+    return [], seq, "%s +1" % lg.spec.term("seq", seq)
 
 
 def must_be(lg, what, names=(), roles=(), seq=None, why="", any_claim=False):
     """Stop unless the session running the script may do `what`: one of the sessions in names, a session of
-    one of the roles, the +2 of seq, any session that holds a claim (any_claim), or the researcher's own
+    one of the roles, the +1 of seq, any session that holds a claim (any_claim), or the researcher's own
     session. why says whose it is, for the message. Offline nothing is written and nothing is asked."""
     me = lg.caller
     if lg.mode == "offline":
@@ -1516,15 +1518,13 @@ def must_be(lg, what, names=(), roles=(), seq=None, why="", any_claim=False):
             return
         raise LedgerError("%s不能%s：先认领会话（pool.py claim），认领表有疑问的请研究员用 pool.py show 核对。" % (
             pool.ORIGIN_LABEL.get(lg.origin, "未认领的会话"), what))
-    # 1.1.0: a sequence has no +1 any more. What one wrote or held before the upgrade is its sequence's +2's now.
-    heir = me.get("rank") == 2 and any(RETIRED_P1.match((n or "").lower()) and seq_of_session(lg, n) == me.get("sequence") for n in names)
-    if any_claim or any(same_session(me.get("name"), n) for n in names) or me.get("role") in roles or heir \
-            or seq and me.get("sequence") == seq and me.get("rank") == 2:
+    if any_claim or any(same_session(me.get("name"), n) for n in names) or me.get("role") in roles \
+            or seq and me.get("sequence") == seq and me.get("rank") == 1:
         return
     raise LedgerError("（%s）不能%s%s。" % (me.get("name"), what, "：" + why if why else ""))
 
 
-RETIRED_P1 = re.compile(r"^(?!pmo-)[a-z]+-p1-\d+$")                    # Alg-p1-01: a session name from before 1.1.0
+SESSION_TAG = r"\[[A-Za-z]+(?:\+[0-2]|-(?:router|ledger))\]"         # [Alg+1], [Alg+0]; the PMO's fixed members: [PMO-router], [PMO-ledger]
 P0_WORK_NAME = re.compile(r"^([a-z]+)-p0-(?:\d{3,}(?:-\d{1,2})?|\d+-\d{1,2})$")
 
 
@@ -1533,17 +1533,17 @@ def same_session(mine, name):
     pool slot (Alg-p0-01) in the claims, and in a package a work name after the task (Alg-p0-2101, Alg-p0-2101-3).
     Which +0 holds a task is in no table, so a work name stands for the +0s of its sequence, as it does where a
     step's owner is checked (responsible)."""
-    mine, name = (mine or "").lower(), (name or "").lower()
+    mine, name = (mine or "").lower(), pool.current_name(name).lower()
     if mine == name:
         return True
     m = P0_WORK_NAME.match(name)
-    return bool(m) and mine.startswith(m.group(1) + "-p0-")
+    return bool(m) and mine.startswith(m.group(1) + "-p0-") and not mine.endswith(tuple("-" + w for w in pool.FIXED_WORDS))
 
 
 def assignee_test(lg, wid, it):
     """test(by) -> bool for the session a work item is handed to (同序列需求的负责会话); None where the item
     names no session there. That session uploads what the item asks of it, whoever confirms the step: the plan
-    of a 下发 request is its +0's, and the +2 that sent the request confirms it (1.1.0)."""
+    of a 下发 request is its +0's, and the +1 that sent the request confirms it (1.1.0)."""
     field = (lg.contract.role("assignee").get("field") or {}).get(wid)
     value = (lg.text_of(it, field) or "").strip() if field and it else ""
     if not SESSION_NAME.match(value):
@@ -1552,19 +1552,22 @@ def assignee_test(lg, wid, it):
 
 
 def seq_of_session(lg, name):
-    """The sequence a session name such as Alg-p2-01 belongs to, by its abbreviation; None for other text."""
+    """The sequence a session name such as Alg-p1 belongs to, by its abbreviation; None for other text."""
     if not SESSION_NAME.match(name or ""):
         return None
     head = name.split("-", 1)[0].lower()
     return next((s for s, _, abbrev in lg.spec.sequences() if abbrev.lower() == head), None)
 
 
-def is_p2_of(lg, name, seq):
-    return seq_of_session(lg, name) == seq and "-p2-" in (name or "").lower()
+def is_lead_of(lg, name, seq):
+    """Is this session name the lead (+1) of the sequence? A name from before 1.1.0 is read as it is called now."""
+    named = pool.parse_name(name or "")
+    return bool(named) and named[1] == 1 and seq_of_session(lg, name) == seq
 
 
 def is_p0_of(lg, name, seq):
-    return seq_of_session(lg, name) == seq and "-p0-" in (name or "").lower()
+    named = pool.parse_name(name or "")
+    return bool(named) and named[1] == 0 and named[2] not in pool.FIXED_WORDS and seq_of_session(lg, name) == seq
 
 
 def role_slot(lg, wid, node):
@@ -1588,17 +1591,17 @@ def responsible(lg, wid, it, node):
     if who == "researcher":
         return RESEARCHER, lambda by: by == RESEARCHER
     if who == "sequence":
-        return "%s +2" % cn, lambda by: by == RESEARCHER or is_p2_of(lg, by, slot)
+        return "%s +1" % cn, lambda by: by == RESEARCHER or is_lead_of(lg, by, slot)
     value = (lg.text_of(it, rule["field"][wid]) or "").strip()
     by_cn = {cn_: s for s, cn_, _ in lg.spec.sequences()}
     if value in by_cn:
-        return "%s（%s +2）" % (cn, value), lambda by: by == RESEARCHER or is_p2_of(lg, by, by_cn[value])
+        return "%s（%s +1）" % (cn, value), lambda by: by == RESEARCHER or is_lead_of(lg, by, by_cn[value])
     if SESSION_NAME.match(value):
         seq = seq_of_session(lg, value)
         # a +0 goes by two names: its pool slot (Alg-p0-01) and, on a work item, a work name after the item (Alg-p0-2101)
-        p0 = "-p0-" in value.lower()
+        p0 = is_p0_of(lg, value, seq)
         return "%s（%s）" % (cn, value), lambda by: by == RESEARCHER or by.lower() == value.lower() or bool(seq) and (
-            is_p2_of(lg, by, seq) or p0 and is_p0_of(lg, by, seq))
+            is_lead_of(lg, by, seq) or p0 and is_p0_of(lg, by, seq))
     if value == RESEARCHER:
         return "%s（研究员）" % cn, lambda by: by == RESEARCHER
     return "%s（工作项上还没记是谁）" % cn, lambda by: bool(by)
@@ -1792,7 +1795,7 @@ def query_all(lg, mql):
 
 def also_to_router(lg, item_id):
     """One more line for the scribe once it has written on a 跨序列需求: the receipt goes to the router too. From
-    1.0.12 the two +2 of such a request talk to each other and ask the scribe themselves, the entry is not in
+    1.0.12 the two +1 of such a request talk to each other and ask the scribe themselves, the entry is not in
     between; the router keeps the record of who waits for whom, and a receipt is what wakes it. The type is
     read from the registration receipt (packages/sent/<ID>.json): nothing more is asked of the space."""
     kind = receipt_of(lg, str(item_id).lstrip("#")).get("type") if lg.mode == "apply" and item_id else None

@@ -451,7 +451,7 @@ class DecisionsFileTest(ProjectCase):
             self.assertIn(gone, before)
             self.assertNotIn(gone, after)
         for part in ("hook 不拦清单里的命令，也不按待定决策冻结：命令的权限照会话自己的权限检查",
-                     "执行方写会话的，只收各序列的 +2、入口和路由；要下级干的活，由 +2 用需求包委托。",
+                     "执行方写会话的，只收各序列的 +1、入口和路由；要下级干的活，由 +1 用需求包委托。",
                      "书记员确认“决定”时用 `workitem.py confirm --executor <会话名>` 把执行方改成那个会话。",
                      "研究员定过一次、又回滚到待决定的决策也一直等研究员，不再走到期默认。",
                      "- 可逆决策的到期时长：登记后 24 小时。研究员可以改这一行的数字"):
@@ -524,16 +524,16 @@ class DecisionsFileTest(ProjectCase):
     def test_dispatch_lists_and_entry(self):
         with open(os.path.join(self.hooks, "policy.json"), encoding="utf-8") as f:
             pol = json.load(f)
-        self.assertEqual((pol["entry_role"], pol["scribe_role"]), ("pmo-p2", "pmo-scribe"))
+        self.assertEqual((pol["entry_role"], pol["scribe_role"]), ("pmo-p1", "pmo-scribe"))
         for key in ("mode", "main_agent"):
             self.assertNotIn(key, pol)
         agents = pol["agents"]
-        self.assertEqual(agents["pmo-p2"]["spawn"], ["pmo-router"])          # 1.1.0: the entry talks to the router alone,
-        self.assertIn("alg-p2", agents["pmo-router"]["spawn"])              # which passes the researcher's words on
-        self.assertEqual(agents["alg-p2"]["spawn"], ["alg-p0"])            # 1.1.0: a +2 hands work to its +0s
+        self.assertEqual(agents["pmo-p1"]["spawn"], ["pmo-router"])          # 1.1.0: the entry talks to the router alone,
+        self.assertIn("alg-p1", agents["pmo-router"]["spawn"])              # which passes the researcher's words on
+        self.assertEqual(agents["alg-p1"]["spawn"], ["alg-p0"])            # 1.1.0: a +1 hands work to its +0s
         self.assertEqual(agents["alg-p0"]["spawn"], [])
         self.assertTrue(agents["pmo-scribe"]["ledger_write"])
-        self.assertFalse(agents["pmo-p2"]["ledger_write"])
+        self.assertFalse(agents["pmo-p1"]["ledger_write"])
         with open(os.path.join(self.tmp, ".claude", "settings.json"), encoding="utf-8") as f:
             self.assertNotIn("agent", json.load(f))                       # every role is a pool session
 
@@ -564,22 +564,22 @@ class HookTest(ProjectCase):
 
     def test_only_scribe_writes_ledger(self):
         cmd = {"command": "python3.12 -I .claude/solo-lab/bin/workitem.py register packages/drafts/alg/x.md --apply"}
-        _, out = self.guard("alg-p2", "Bash", cmd)
+        _, out = self.guard("alg-p1", "Bash", cmd)
         self.assertEqual(out.get("permissionDecision"), "deny")
         _, out = self.scribe("Bash", cmd)
         self.assertNotEqual(out.get("permissionDecision"), "deny")
         _, out = self.guard("pmo-scribe", "Bash", cmd)                    # a subagent of that type holds no claim
         self.assertEqual(out.get("permissionDecision"), "deny")
-        _, out = self.guard("alg-p2", "Bash", {"command": "python3.12 -I .claude/solo-lab/bin/ledger.py query open"})
+        _, out = self.guard("alg-p1", "Bash", {"command": "python3.12 -I .claude/solo-lab/bin/ledger.py query open"})
         self.assertNotEqual(out.get("permissionDecision"), "deny")
 
     def test_tampered_script_not_trusted(self):
         cmd = {"command": "python3.12 -I .claude/solo-lab/bin/ledger.py query open"}
-        _, out = self.guard("alg-p2", "Bash", cmd)
+        _, out = self.guard("alg-p1", "Bash", cmd)
         self.assertNotEqual(out.get("permissionDecision"), "deny")
         with open(os.path.join(self.tmp, ".claude", "solo-lab", "bin", "ledger.py"), "a", encoding="utf-8") as f:
             f.write("\n# changed\n")
-        _, out = self.guard("alg-p2", "Bash", cmd)
+        _, out = self.guard("alg-p1", "Bash", cmd)
         self.assertEqual(out.get("permissionDecision"), "deny")
 
     def test_meegle_write_only_scribe(self):
@@ -630,8 +630,8 @@ class RouteTest(ProjectCase):
             self.assertEqual((out["row"], out.get("next_hop")), (row, hop), block)
         steps = "\n".join(route.classify_draft(self.spec, self.tmp, self.draft(2, "c.md"))["steps"])
         self.assertIn("路由对照台账查重复和冲突", steps)
-        self.assertIn("发起方 +2 自己上传需求包（docs.py upload <草稿路径> --apply），把草稿路径用【通知】发给路由", steps)
-        self.assertIn("把工作项 ID 用【通知 #ID】回给发起方，由它写回文档（docs.py relink）、直接委托 alg-p2", steps)
+        self.assertIn("发起方 +1 自己上传需求包（docs.py upload <草稿路径> --apply），把草稿路径用【通知】发给路由", steps)
+        self.assertIn("把工作项 ID 用【通知 #ID】回给发起方，由它写回文档（docs.py relink）、直接委托 alg-p1", steps)
 
     def test_in_sequence_package_not_routed(self):
         out = route.classify_draft(self.spec, self.tmp, self.draft(0))
@@ -699,9 +699,9 @@ class SecondRoundTest(ProjectCase):
         for cmd in ("python3.12 -I .claude/solo-lab/bin/ledger.py \\\n  confirm 1 执行中 --apply",
                     "python3.12 -I .claude/solo-lab/bin/ledger.py 'register' --apply x.md",
                     "bash -c 'python3 .claude/solo-lab/bin/workitem.py update --apply 1 --set a=b'"):
-            _, out = self.guard("alg-p2", "Bash", {"command": cmd})
+            _, out = self.guard("alg-p1", "Bash", {"command": cmd})
             self.assertEqual(out.get("permissionDecision"), "deny", cmd)
-        _, out = self.guard("alg-p2", "Bash", {"command": "python3.12 -I .claude/solo-lab/bin/ledger.py mql queue"})
+        _, out = self.guard("alg-p1", "Bash", {"command": "python3.12 -I .claude/solo-lab/bin/ledger.py mql queue"})
         self.assertNotEqual(out.get("permissionDecision"), "deny")
 
 
@@ -869,12 +869,12 @@ class FifthRoundTest(ProjectCase):
                     'git commit -m "ledger.py: fix confirm"', f"python3.12 -I {L} query open 2>/dev/null || echo 'ledger.py: 查询失败'",
                     "python3.12 -I .claude/solo-lab/bin/route.py classify --text 'workitem.py confirm 2030 要改'"], [])
         cmd = "python3.12 -I .claude/solo-lab/bin/route.py classify --text 'workitem.py confirm 2030 要改'"
-        _, out = self.guard("alg-p2", "Bash", {"command": cmd})
+        _, out = self.guard("alg-p1", "Bash", {"command": cmd})
         self.assertNotEqual(out.get("permissionDecision"), "deny")
 
     def test_feishu_commands_after_a_comment_or_in_find(self):
         cmd = "ls  # 先看看\nlark-cli docs +update --doc https://x.feishu.cn/wiki/A --command append --content 'no tag' --as user"
-        _, out = self.guard("alg-p2", "Bash", {"command": cmd})
+        _, out = self.guard("alg-p1", "Bash", {"command": cmd})
         self.assertEqual(out.get("permissionDecision"), "deny")
         cmd = "# 改字段\nmeegle workitem update --work-item-id 1 --project-key pk --fields '[]'"
         _, out = self.guard("alg-p0", "Bash", {"command": cmd})
@@ -892,7 +892,7 @@ class FifthRoundTest(ProjectCase):
         _, out = self.scribe("Bash", {"command": cmd})       # must not hang on the FIFO
         self.assertEqual(out.get("permissionDecision"), "deny")           # 1.1.0: a document is written through docs.py only
         self.assertIn("交接记录用 docs.py status-block、append", out.get("permissionDecisionReason", ""))
-        code, out = self.guard("alg-p2", "Bash", {"command": "python3.12 -I %s register \ud800 --apply" % self.L})
+        code, out = self.guard("alg-p1", "Bash", {"command": "python3.12 -I %s register \ud800 --apply" % self.L})
         self.assertIn(code, (0, 2))
         if code == 0:
             self.assertEqual(out.get("permissionDecision"), "deny")
@@ -917,10 +917,10 @@ class FifthRoundLedgerTest(ProjectCase):
         for cmd in ("python3 -IW ignore w.py",
                     "python3 -IBc \"import subprocess; subprocess.run(['lark-cli','docs','+update'])\"",
                     "python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['lark-cli', 'docs', '+update'])\nEOF"):
-            _, out = self.guard("alg-p2", "Bash", {"command": cmd})
+            _, out = self.guard("alg-p1", "Bash", {"command": cmd})
             self.assertEqual(out.get("permissionDecision"), "deny", cmd)
         cmd = "cat > packages/drafts/alg/n.md <<'EOF'\n用 lark-cli docs +fetch 读\nEOF\npython3 - <<'PY'\nprint(1)\nPY"
-        _, out = self.guard("alg-p2", "Bash", {"command": cmd})
+        _, out = self.guard("alg-p1", "Bash", {"command": cmd})
         self.assertNotEqual(out.get("permissionDecision"), "deny")
 
 
@@ -971,7 +971,7 @@ class SixthRoundHookTest(ProjectCase):
             self.assertEqual(denied, deny, "%s: %s → %s" % (role, cmd, out.get("permissionDecisionReason")))
 
     def test_interpreters_by_path_cd_and_direct_scripts(self):
-        self.check([("alg-p2", c, True) for c in (
+        self.check([("alg-p1", c, True) for c in (
             ".venv/bin/python runs/alg/r.py", "/usr/bin/python3 runs/alg/r.py", "/bin/bash runs/alg/r.sh",
             "\"python3\" runs/alg/r.py", "ipython runs/alg/r.py", "cd runs/alg && python3 r.py", "cd runs/alg && bash r.sh",
             "cd runs/alg && python3 r2.py", "./runs/alg/rx.sh", "./runs/alg/rx.py", "uv run runs/alg/r.py",
@@ -984,97 +984,97 @@ class SixthRoundHookTest(ProjectCase):
         pyl = "python3 - <<'PY'\nimport subprocess\nsubprocess.run(['python3', '-I', '%s', 'archive', '2106', '--apply'])\nPY" % L
         pyf = "python3 - <<'PY'\nimport subprocess\nsubprocess.run(%r.split())\nPY" % W
         self.check([
-            ("alg-p2", g + pyl, True), ("alg-p2", g + pyf, True),
-            ("alg-p2", "TITLE=\"$(cat <<'EOF'\n周报\nEOF\n)\"\ncat > packages/drafts/alg/n.md <<'EOF'\n用 lark-cli docs +fetch 读原文\nEOF\n"
+            ("alg-p1", g + pyl, True), ("alg-p1", g + pyf, True),
+            ("alg-p1", "TITLE=\"$(cat <<'EOF'\n周报\nEOF\n)\"\ncat > packages/drafts/alg/n.md <<'EOF'\n用 lark-cli docs +fetch 读原文\nEOF\n"
                        "python3 - <<'PY'\nprint(1)\nPY", False),
-            ("alg-p2", "TITLE=\"$(cat <<'EOF'\n周报\nEOF\n)\"\ncat > packages/drafts/alg/n.md <<'EOF'\npython3.12 -I %s register n.md --apply\nEOF\n"
+            ("alg-p1", "TITLE=\"$(cat <<'EOF'\n周报\nEOF\n)\"\ncat > packages/drafts/alg/n.md <<'EOF'\npython3.12 -I %s register n.md --apply\nEOF\n"
                        "python3 - <<'PY'\nprint(1)\nPY" % L, False),
-            ("alg-p2", "X=\"$(python3 - <<'PY'\nimport subprocess\nsubprocess.run(['python3', '%s', 'archive', '2106', '--apply'])\nPY\n)\"" % L, True),
-            ("alg-p2", "X=\"$(python3 - <<'PY'\nimport subprocess\nsubprocess.run(%r.split())\nPY\n)\"" % W, True),
-            ("alg-p2", "MSG=$(cat <<'EOF'\nfix\nEOF\n) && bash <<'SH'\npython3.12 -I %s archive 2106 --apply\nSH" % L, True),
-            ("alg-p2", "# drafts are written with cat <<EOF, not here\npython3.12 -I %s archive 2106 --apply" % L, True),
+            ("alg-p1", "X=\"$(python3 - <<'PY'\nimport subprocess\nsubprocess.run(['python3', '%s', 'archive', '2106', '--apply'])\nPY\n)\"" % L, True),
+            ("alg-p1", "X=\"$(python3 - <<'PY'\nimport subprocess\nsubprocess.run(%r.split())\nPY\n)\"" % W, True),
+            ("alg-p1", "MSG=$(cat <<'EOF'\nfix\nEOF\n) && bash <<'SH'\npython3.12 -I %s archive 2106 --apply\nSH" % L, True),
+            ("alg-p1", "# drafts are written with cat <<EOF, not here\npython3.12 -I %s archive 2106 --apply" % L, True),
             ("alg-p0", "ls runs/alg  # then cat <<'EOF' > notes\nmeegle workitem update --work-item-id 1 --project-key pk --fields '[]'", True),
-            ("alg-p2", "grep -rn \"<<EOF\" runs/alg || true\n" + W, True),
-            ("alg-p2", "echo 'use <<EOF for drafts'\npython3.12 -I %s archive 2106 --apply" % L, True),
-            ("alg-p2", "git commit -q -m \"$(cat <<'EOF'\nSay \"use lark-cli docs +fetch first\nEOF\n)\"", False),
-            ("alg-p2", "ls runs/alg # list \\\npython3.12 -I %s archive 2106 --apply" % L, True),
-            ("alg-p2", "python3 - <<'PY'\nimport json\n# doc.json was saved earlier by lark-cli docs +fetch\n"
+            ("alg-p1", "grep -rn \"<<EOF\" runs/alg || true\n" + W, True),
+            ("alg-p1", "echo 'use <<EOF for drafts'\npython3.12 -I %s archive 2106 --apply" % L, True),
+            ("alg-p1", "git commit -q -m \"$(cat <<'EOF'\nSay \"use lark-cli docs +fetch first\nEOF\n)\"", False),
+            ("alg-p1", "ls runs/alg # list \\\npython3.12 -I %s archive 2106 --apply" % L, True),
+            ("alg-p1", "python3 - <<'PY'\nimport json\n# doc.json was saved earlier by lark-cli docs +fetch\n"
                        "print(json.load(open('runs/alg/doc.json'))['title'])\nPY", False),
-            ("alg-p2", "python3 -m json.tool <<'EOF'\n{\"c\": \"lark-cli docs +update\"}\nEOF", False),
+            ("alg-p1", "python3 -m json.tool <<'EOF'\n{\"c\": \"lark-cli docs +update\"}\nEOF", False),
         ])
 
     def test_code_that_builds_the_command(self):
         L = self.L
         self.check([
-            ("alg-p2", "python3 runs/alg/batch.py", True), ("alg-p2", "python3 runs/alg/batch2.py", True),
-            ("alg-p2", "python3 runs/alg/batch3.py", True),
-            ("alg-p2", "python3 - <<'PY'\nimport subprocess\nL = '%s'\nfor i in (2106, 2107):\n"
+            ("alg-p1", "python3 runs/alg/batch.py", True), ("alg-p1", "python3 runs/alg/batch2.py", True),
+            ("alg-p1", "python3 runs/alg/batch3.py", True),
+            ("alg-p1", "python3 - <<'PY'\nimport subprocess\nL = '%s'\nfor i in (2106, 2107):\n"
                        "    subprocess.run(f'python3.12 -I {L} archive {i} --apply', shell=True)\nPY" % L, True),
-            ("alg-p2", "python3 runs/alg/report.py", False),
+            ("alg-p1", "python3 runs/alg/report.py", False),
         ])
 
     def test_cli_names_used_as_data(self):
         self.check([
-            ("alg-p2", "python3 -c \"import json; print(json.load(open('feishu/ids.json'))['meegle']['project_key'])\"", False),
-            ("alg-p2", "python3 - <<'PY'\nimport json\nids = json.load(open('feishu/ids.json'))\nprint(ids['meegle']['project_key'])\nPY", False),
-            ("alg-p2", "python3 runs/alg/pk.py", False),
-            ("alg-p2", "meegle workitem get --work-item-id 2106 --project-key \"$(python3 runs/alg/pk.py)\"", False),
-            ("alg-p2", "python3 -c \"import json; print(json.load(open('feishu/ids.json')).get('meegle', {}))\"", False),
-            ("alg-p2", "python3 -c \"import subprocess,sys; subprocess.run(['meegle'] + sys.argv[1:])\" workitem update --work-item-id 1", True),
-            ("alg-p2", "python3 -c \"import json; print(len(json.load(open('runs/alg/meegle.json'))))\"", False),
-            ("alg-p2", "node -e \"const d=require('./runs/alg/meegle.json'); console.log(d.length)\"", False),
-            ("alg-p2", "python3 runs/alg/readdoc.py", False),
+            ("alg-p1", "python3 -c \"import json; print(json.load(open('feishu/ids.json'))['meegle']['project_key'])\"", False),
+            ("alg-p1", "python3 - <<'PY'\nimport json\nids = json.load(open('feishu/ids.json'))\nprint(ids['meegle']['project_key'])\nPY", False),
+            ("alg-p1", "python3 runs/alg/pk.py", False),
+            ("alg-p1", "meegle workitem get --work-item-id 2106 --project-key \"$(python3 runs/alg/pk.py)\"", False),
+            ("alg-p1", "python3 -c \"import json; print(json.load(open('feishu/ids.json')).get('meegle', {}))\"", False),
+            ("alg-p1", "python3 -c \"import subprocess,sys; subprocess.run(['meegle'] + sys.argv[1:])\" workitem update --work-item-id 1", True),
+            ("alg-p1", "python3 -c \"import json; print(len(json.load(open('runs/alg/meegle.json'))))\"", False),
+            ("alg-p1", "node -e \"const d=require('./runs/alg/meegle.json'); console.log(d.length)\"", False),
+            ("alg-p1", "python3 runs/alg/readdoc.py", False),
         ])
 
     def test_arguments_are_not_subcommands(self):
         L = self.L
         self.check([
-            ("alg-p2", "python3.12 -I %s query open --json > /tmp/open.json && python3 - /tmp/open.json <<'PY'\n"
+            ("alg-p1", "python3.12 -I %s query open --json > /tmp/open.json && python3 - /tmp/open.json <<'PY'\n"
                        "import json, sys\nprint(len(json.load(open(sys.argv[1]))))\nPY" % L, False),
-            ("alg-p2", "python3.12 -I %s query open --json > runs/alg/open.json && python3 \"$CLAUDE_PROJECT_DIR/runs/alg/stats.py\" runs/alg/open.json" % L, False),
-            ("alg-p2", "python3 \"$(git rev-parse --show-toplevel)/runs/alg/stats.py\" runs/alg/ledger-open.json", False),
-            ("alg-p2", "for f in %s; do python3 $f archive 2106 --apply; done" % L, True),
-            ("alg-p2", "python3 runs/alg/summarize_ledger.py runs/alg/open.json", False),
-            ("alg-p2", "python3 runs/alg/summarize_ledger.py --top 5 runs/alg/open.json", False),
-            ("alg-p2", "cp %s /tmp/my_ledger.py && python3 /tmp/my_ledger.py archive 2106 --apply" % L, True),
+            ("alg-p1", "python3.12 -I %s query open --json > runs/alg/open.json && python3 \"$CLAUDE_PROJECT_DIR/runs/alg/stats.py\" runs/alg/open.json" % L, False),
+            ("alg-p1", "python3 \"$(git rev-parse --show-toplevel)/runs/alg/stats.py\" runs/alg/ledger-open.json", False),
+            ("alg-p1", "for f in %s; do python3 $f archive 2106 --apply; done" % L, True),
+            ("alg-p1", "python3 runs/alg/summarize_ledger.py runs/alg/open.json", False),
+            ("alg-p1", "python3 runs/alg/summarize_ledger.py --top 5 runs/alg/open.json", False),
+            ("alg-p1", "cp %s /tmp/my_ledger.py && python3 /tmp/my_ledger.py archive 2106 --apply" % L, True),
         ])
 
     def test_shell_options_pipes_and_here_strings(self):
         L, W = self.L, self.LARK_W
         self.check([
-            ("alg-p2", "bash runs/alg/r.sh -c configs/a.yaml", True), ("alg-p2", "bash -eo pipefail runs/alg/r.sh", True),
-            ("alg-p2", "bash runs/alg/push.sh -c configs/a.yaml", True), ("alg-p2", "bash -euo pipefail runs/alg/push.sh", True),
-            ("alg-p2", "bash -o pipefail -c 'python3 %s archive --apply 1'" % L, True),
-            ("alg-p2", "cat <<'EOF' | python3 -\nimport subprocess\nsubprocess.run(['python3', '-I', '%s', 'archive', '2106', '--apply'])\nEOF" % L, True),
-            ("alg-p2", "cat <<'EOF' | python3 -\nimport subprocess\nsubprocess.run(%r.split())\nEOF" % W, True),
-            ("alg-p2", "cat <<'EOF' | bash\npython3.12 -I %s archive 2106 --apply\nEOF" % L, True),
-            ("alg-p2", "bash <<< \"python3.12 -I %s archive 2106 --apply\"" % L, True),
-            ("alg-p2", "python3 - <<< \"import subprocess; subprocess.run(['python3', '%s', 'archive', '2106'])\"" % L, True),
-            ("alg-p2", "python3 - <<< \"import subprocess; subprocess.run(%r.split())\"" % W, True),
-            ("alg-p2", "grep ';' runs/alg/r.sh", False),
-            ("alg-p2", "source .venv/bin/activate && python3.12 -I %s query open" % L, False),
+            ("alg-p1", "bash runs/alg/r.sh -c configs/a.yaml", True), ("alg-p1", "bash -eo pipefail runs/alg/r.sh", True),
+            ("alg-p1", "bash runs/alg/push.sh -c configs/a.yaml", True), ("alg-p1", "bash -euo pipefail runs/alg/push.sh", True),
+            ("alg-p1", "bash -o pipefail -c 'python3 %s archive --apply 1'" % L, True),
+            ("alg-p1", "cat <<'EOF' | python3 -\nimport subprocess\nsubprocess.run(['python3', '-I', '%s', 'archive', '2106', '--apply'])\nEOF" % L, True),
+            ("alg-p1", "cat <<'EOF' | python3 -\nimport subprocess\nsubprocess.run(%r.split())\nEOF" % W, True),
+            ("alg-p1", "cat <<'EOF' | bash\npython3.12 -I %s archive 2106 --apply\nEOF" % L, True),
+            ("alg-p1", "bash <<< \"python3.12 -I %s archive 2106 --apply\"" % L, True),
+            ("alg-p1", "python3 - <<< \"import subprocess; subprocess.run(['python3', '%s', 'archive', '2106'])\"" % L, True),
+            ("alg-p1", "python3 - <<< \"import subprocess; subprocess.run(%r.split())\"" % W, True),
+            ("alg-p1", "grep ';' runs/alg/r.sh", False),
+            ("alg-p1", "source .venv/bin/activate && python3.12 -I %s query open" % L, False),
         ])
 
     def test_find_runners_and_inline_flags(self):
         L, W = self.L, self.LARK_W
         self.check([
-            ("alg-p2", "find runs/alg -name 'analyze_*.py' -exec python3 {} runs/alg/ledger-open.json \;", False),
-            ("alg-p2", "find .claude/solo-lab/bin \\( -name ledger.py \\) -execdir python3.12 -I {} archive 2106 --apply \;", True),
-            ("alg-p2", "find runs/alg -name '*.py' -exec python3 {} runs/alg/data.json \;", False),
-            ("alg-p2", "find runs/alg -name '*.py' -exec python3 {} --limit 5 \;", False),
-            ("alg-p2", "find .claude -name 'ledger*' -exec python3 {} archive --apply 1 \;", True),
-            ("alg-p2", "conda run -n base --cwd . python %s archive 2106 --apply" % L, True),
-            ("alg-p2", "uv --directory . run python %s archive 2106 --apply" % L, True),
-            ("alg-p2", "poetry -C . run python %s archive 2106 --apply" % L, True),
-            ("alg-p2", "uv --directory . run " + W, True), ("alg-p2", "conda run -n base --cwd . " + W, True),
-            ("alg-p2", "perl -we 'system(\"python3\", \"%s\", \"archive\", \"2106\", \"--apply\")'" % L, True),
-            ("alg-p2", "node -pe \"require('child_process').execFileSync('python3', ['%s', 'archive', '2106', '--apply']).toString()\"" % L, True),
-            ("alg-p2", "node --eval=\"require('child_process').execFileSync('python3', ['%s', 'archive', '2106'])\"" % L, True),
-            ("alg-p2", "node -r dotenv/config -e \"require('child_process').execFileSync('lark-cli', ['docs', '+update', '--doc', 'X', "
+            ("alg-p1", "find runs/alg -name 'analyze_*.py' -exec python3 {} runs/alg/ledger-open.json \;", False),
+            ("alg-p1", "find .claude/solo-lab/bin \\( -name ledger.py \\) -execdir python3.12 -I {} archive 2106 --apply \;", True),
+            ("alg-p1", "find runs/alg -name '*.py' -exec python3 {} runs/alg/data.json \;", False),
+            ("alg-p1", "find runs/alg -name '*.py' -exec python3 {} --limit 5 \;", False),
+            ("alg-p1", "find .claude -name 'ledger*' -exec python3 {} archive --apply 1 \;", True),
+            ("alg-p1", "conda run -n base --cwd . python %s archive 2106 --apply" % L, True),
+            ("alg-p1", "uv --directory . run python %s archive 2106 --apply" % L, True),
+            ("alg-p1", "poetry -C . run python %s archive 2106 --apply" % L, True),
+            ("alg-p1", "uv --directory . run " + W, True), ("alg-p1", "conda run -n base --cwd . " + W, True),
+            ("alg-p1", "perl -we 'system(\"python3\", \"%s\", \"archive\", \"2106\", \"--apply\")'" % L, True),
+            ("alg-p1", "node -pe \"require('child_process').execFileSync('python3', ['%s', 'archive', '2106', '--apply']).toString()\"" % L, True),
+            ("alg-p1", "node --eval=\"require('child_process').execFileSync('python3', ['%s', 'archive', '2106'])\"" % L, True),
+            ("alg-p1", "node -r dotenv/config -e \"require('child_process').execFileSync('lark-cli', ['docs', '+update', '--doc', 'X', "
                        "'--command', 'overwrite', '--content', 'x', '--as', 'user'])\"", True),
-            ("alg-p2", "ipython -c \"import subprocess; subprocess.run(['lark-cli', 'docs', '+update', '--doc', 'X', '--command', "
+            ("alg-p1", "ipython -c \"import subprocess; subprocess.run(['lark-cli', 'docs', '+update', '--doc', 'X', '--command', "
                        "'overwrite', '--content', 'x', '--as', 'user'])\"", True),
-            ("alg-p2", "ruby -rtime -e \"system('lark-cli docs +update --doc X --command overwrite --content x --as user')\"", True),
+            ("alg-p1", "ruby -rtime -e \"system('lark-cli docs +update --doc X --command overwrite --content x --as user')\"", True),
         ])
 
     def test_a_lark_write_fed_by_a_heredoc_is_read(self):
@@ -1083,9 +1083,9 @@ class SixthRoundHookTest(ProjectCase):
         the same; the scribe's own script is not stopped."""
         append = "lark-cli docs +update --doc https://x.feishu.cn/wiki/A --command append --doc-format markdown --content - --as user"
         self.check([
-            ("pmo-scribe", "cat > /tmp/prev.md <<'EOF'\n[PMO+0] 上一条记录\nEOF\n%s <<'EOF'\n没有会话标签的记录\nEOF" % append, True),
-            ("pmo-scribe", "cat > /tmp/prev.md <<'EOF'\n没有标签\nEOF\n%s <<'EOF'\n[PMO+0] 记录\nEOF" % append, True),
-            ("pmo-scribe", "cat <<'EOF' | %s\n[PMO+0] 记录\nEOF" % append, True),
+            ("pmo-scribe", "cat > /tmp/prev.md <<'EOF'\n[PMO-ledger] 上一条记录\nEOF\n%s <<'EOF'\n没有会话标签的记录\nEOF" % append, True),
+            ("pmo-scribe", "cat > /tmp/prev.md <<'EOF'\n没有标签\nEOF\n%s <<'EOF'\n[PMO-ledger] 记录\nEOF" % append, True),
+            ("pmo-scribe", "cat <<'EOF' | %s\n[PMO-ledger] 记录\nEOF" % append, True),
             ("pmo-scribe", "python3.12 -I %s register packages/drafts/alg/x.md --apply" % self.L, False),
         ])
 
@@ -1156,7 +1156,7 @@ class SeventhRoundTest(ProjectCase):
         os.chmod(os.path.join(tools, "hello.js"), 0o755)
         draft_writer = ("python3 - <<'PY'\nfrom pathlib import Path\nPath('packages/drafts/alg/req.md').write_text("
                         "'# 执行请求\\n请书记员运行 workitem.py register packages/drafts/alg/req.md\\n')\nPY")
-        self.check([("alg-p2", c, False) for c in (
+        self.check([("alg-p1", c, False) for c in (
             'cat "runs/alg/notes [2024-11-01].md"', 'tail -n 100 "runs/alg/train [lr=3e-4].log"',
             '"$PY" -m pytest "tests/test_math.py::test_sub[5-3-2]"', "./tools/hello.js world",
             "python3 - <<'PY'\nrows = [1,2]\nprint(f\"{len(rows)} update(s) pending in ledger\")\nPY",
@@ -1169,14 +1169,14 @@ class SeventhRoundTest(ProjectCase):
     def test_hook_still_sees_writes_after_arithmetic_and_crlf(self):
         L = self.L
         self.check([
-            ("alg-p2", "x=1; (( y = x << n ))\npython3.12 -I %s archive 2106 --apply" % L, True),
-            ("alg-p2", "cat > /tmp/a.md <<'EOF'\r\nhello\r\nEOF\r\npython3.12 -I %s archive 2106 --apply\r\n" % L, True),
-            ("alg-p2", "x=1; (( y = x << n ))\nlark-cli docs +update --doc https://x.feishu.cn/wiki/A --command overwrite --content x --as user", True),
+            ("alg-p1", "x=1; (( y = x << n ))\npython3.12 -I %s archive 2106 --apply" % L, True),
+            ("alg-p1", "cat > /tmp/a.md <<'EOF'\r\nhello\r\nEOF\r\npython3.12 -I %s archive 2106 --apply\r\n" % L, True),
+            ("alg-p1", "x=1; (( y = x << n ))\nlark-cli docs +update --doc https://x.feishu.cn/wiki/A --command overwrite --content x --as user", True),
         ])
 
     def test_a_multi_line_lark_write_is_read(self):
         cmd = ("lark-cli docs +update \\\n  --doc https://x.feishu.cn/wiki/A \\\n  --command append --doc-format markdown \\\n"
-               "  --content - --as user <<'EOF'\n[PMO+0] 记录\nEOF")
+               "  --content - --as user <<'EOF'\n[PMO-ledger] 记录\nEOF")
         self.check([("pmo-scribe", cmd, True)])              # 1.1.0: nobody's to run; read as one command all the same
 
 
@@ -1325,7 +1325,7 @@ class SpecAndRoutingTest(ProjectCase):
         fake = fake_space.FakeSpace()
         lg = fake_space.SimLedger(self.tmp, "apply", fake)
         item = str(fake.create("decision", [{"field_key": "name", "field_value": "x"}, workitem.flow_entry(lg, "decision"),
-                                            lg.entry("decision", "sequence", "算法"), lg.entry("decision", "sender", "Alg-p2-01"),
+                                            lg.entry("decision", "sequence", "算法"), lg.entry("decision", "sender", "Alg-p1"),
                                             lg.entry("decision", "urgency", "今天"),
                                             lg.entry("decision", "main_doc", "https://example.feishu.cn/wiki/wikMain")])["work_item_id"])
         section = {"data": {"document": {"content": "<h2>状态包</h2><h3>简介</h3><p>访谈提纲</p>"}}}
@@ -1417,7 +1417,7 @@ class SpecAndRoutingTest(ProjectCase):
         self.assertFalse([r for r in allow if "ledger.py index" in r])
 
     def test_drafters_see_their_documents(self):
-        alg, quality, rnd = (self.read(".claude/agents/%s.md" % n) for n in ("alg-p2", "quality-p2", "rnd-p0"))
+        alg, quality, rnd = (self.read(".claude/agents/%s.md" % n) for n in ("alg-p1", "quality-p1", "rnd-p0"))
         self.assertIn("以及你起草的 `spec/spec.md`", alg)
         self.assertIn("你负责起草实验规格 `spec/spec.md`：用技能 `solo-lab:spec`", alg)
         self.assertIn("你负责起草评测协议 `spec/eval-protocol.md`", quality)
@@ -1532,15 +1532,15 @@ class FeishuDocsTest(ProjectCase):
 
 
 # ---------------------------------------------------------- pool mode
-def assign_targets(seq, rank, seqs):
+def assign_targets(role, seq, rank, seqs):
     """Who a role hands work to, written out by hand to check the assign edges in rules.json."""
-    if (seq, rank) == ("pmo", 2):                      # 1.1.0: the entry hands everything to the router,
+    if role == "pmo-p1":                               # 1.1.0: the entry hands everything to the router,
         return ["pmo-router"]
-    if (seq, rank) == ("pmo", 1):                      # which passes it on to the +2 of each sequence
-        return ["%s-p2" % s for s in seqs if s != "pmo"] + ["pmo-scribe"]
+    if role == "pmo-router":                           # which passes it on to the +1 of each sequence
+        return ["%s-p1" % s for s in seqs if s != "pmo"] + ["pmo-scribe"]
     if rank == 0:
         return []
-    return ["%s-p0" % seq]                             # 1.1.0: a sequence has two ranks, and a +2 hands work to its +0s
+    return ["%s-p0" % seq]                             # 1.1.0: a sequence has two ranks, and a +1 hands work to its +0s
 
 
 class PoolProjectCase(unittest.TestCase):
@@ -1646,14 +1646,14 @@ class PoolProjectCase(unittest.TestCase):
 
     def started_pool(self):
         """Entry, scribe and the algorithm sequence claimed; sessions named after their roles."""
-        self.opening("pmo-p2", "PMO-p2-01", "s-entry")
-        self.route("expect", "PMO-p0-01", "--role", "pmo-scribe", "--desk", "d-scribe", sid="s-entry")
-        self.claim("pmo-scribe", "PMO-p0-01", "s-scribe", desk="d-scribe")
-        self.opening("alg-p2", "Alg-p2-01", "s-alg2")
+        self.opening("pmo-p1", "PMO-p1", "s-entry")
+        self.route("expect", "PMO-p0-ledger", "--role", "pmo-scribe", "--desk", "d-scribe", sid="s-entry")
+        self.claim("pmo-scribe", "PMO-p0-ledger", "s-scribe", desk="d-scribe")
+        self.opening("alg-p1", "Alg-p1", "s-alg2")
         for name, role, sid in (("Alg-p0-01", "alg-p0", "s-alg1"), ("Alg-p0-02", "alg-p0", "s-alg0")):
             self.route("expect", name, "--role", role, "--desk", "d-" + sid, sid="s-alg2")
             self.claim(role, name, sid, desk="d-" + sid)
-        self.opening("quality-p2", "Quality-p2-01", "s-q2")
+        self.opening("quality-p1", "Quality-p1", "s-q2")
         self.route("expect", "Quality-p0-01", "--role", "quality-p0", "--desk", "d-q1", sid="s-q2")
         self.claim("quality-p0", "Quality-p0-01", "s-q1", desk="d-q1")
         return self.pool()
@@ -1682,8 +1682,11 @@ class PoolSetupTest(PoolProjectCase):
         for key in ("lark_ask", "meegle_ask", "docs_create_parents"):
             self.assertNotIn(key, policy["agents"]["alg-p0"])
         # 1.1.0: a sequence has two ranks; the PMO keeps its router
-        self.assertEqual(sorted(policy["agents"]), sorted(["%s-p%d" % (s, r) for s in policy["sequences"] if s != "pmo" for r in (2, 0)]
-                                                          + ["pmo-p2", "pmo-router", "pmo-scribe"]))
+        self.assertEqual(sorted(policy["agents"]), sorted(role for s in policy["sequences"] for role, _ in self.spec.roles_of(s)))
+        self.assertEqual([(r, policy["agents"][r]["rank"], policy["agents"][r]["fixed_session"], policy["agents"][r]["tag"])
+                          for r in ("pmo-p1", "pmo-router", "pmo-scribe", "alg-p1", "alg-p0")],
+                         [("pmo-p1", 1, "PMO-p1", "[PMO+1]"), ("pmo-router", 0, "PMO-p0-router", "[PMO-router]"),
+                          ("pmo-scribe", 0, "PMO-p0-ledger", "[PMO-ledger]"), ("alg-p1", 1, "Alg-p1", "[Alg+1]"), ("alg-p0", 0, None, "[Alg+0]")])
         self.assertEqual(policy["owned_paths"][".claude/state/**"], [])
         self.assertIn("spec/spec.md", policy["soft_owned"])
         for rel in (".claude/hooks/pool.py", ".claude/solo-lab/bin/pool.py"):
@@ -1693,8 +1696,8 @@ class PoolSetupTest(PoolProjectCase):
         claude = self.read("CLAUDE.md")
         for part in ("按会话池运行", "pool.py claim", "## 本目录怎样落实全局约定", "## Compact Instructions", "不回 ACK"):
             self.assertIn(part, claude)
-        self.assertNotIn("主会话以 `pmo-p2`", claude)
-        entry = self.read(".claude/agents/pmo-p2.md")
+        self.assertNotIn("主会话以 `pmo-p1`", claude)
+        entry = self.read(".claude/agents/pmo-p1.md")
         self.assertIn("在会话池里是研究员平时对话的会话", entry)
         self.assertNotIn("替换了 Claude Code 的默认系统提示", entry)
         self.assertNotIn("{{", entry)
@@ -1705,53 +1708,51 @@ class PoolSetupTest(PoolProjectCase):
         self.assertIn("【登记请求】", self.read(".claude/agents/alg-p0.md"))
         self.assertIn("【登记回执", self.read(".claude/agents/pmo-scribe.md"))
         # every step of a request has someone who asks the scribe for it
-        lead = self.read(".claude/agents/alg-p2.md")                        # 1.1.0: whoever delivers uploads; the scribe fills the field
-        self.assertIn("docs.py upload <交付包路径> --apply` 自己上传，它挂在需求的主文档下面。再给 `PMO-p0-01` 发【登记请求】：写 `workitem.py reply <交付包路径> --apply`，"
+        lead = self.read(".claude/agents/alg-p1.md")                        # 1.1.0: whoever delivers uploads; the scribe fills the field
+        self.assertIn("docs.py upload <交付包路径> --apply` 自己上传，它挂在需求的主文档下面。再给 `PMO-p0-ledger` 发【登记请求】：写 `workitem.py reply <交付包路径> --apply`，"
                       "再写一行“确认节点：#<需求 ID>，由 <你的会话名> 提出”", lead)
         self.assertIn("- 验收工作项（下发的需求、跨序列需求）：", lead)
         p0 = self.read(".claude/agents/alg-p0.md")                          # a closed task has no work item: nobody else is asked
         self.assertIn("docs.py upload <交付包路径> --apply` 自己上传。执行的任务，包头“关联工作项”写委托给你的任务编号（#<上级工作项 ID>-<序号>），它挂在需求包下面，不找书记员。", p0)
-        self.assertIn("下发的需求，包头“关联工作项”写那条工作项的 ID，上传以后给 `PMO-p0-01` 发【登记请求】：写 `workitem.py reply <交付包路径> --apply`", p0)
+        self.assertIn("下发的需求，包头“关联工作项”写那条工作项的 ID，上传以后给 `PMO-p0-ledger` 发【登记请求】：写 `workitem.py reply <交付包路径> --apply`", p0)
         self.assertNotIn("- 验收", p0)
-        lead = self.read(".claude/agents/alg-p2.md")
-        # 1.0.12: a request to another sequence starts at the router, and the two +2 then talk to each other
-        self.assertIn("自己上传，再给路由 `PMO-p1-01` 发 `【通知】<你的会话名> → PMO-p1-01：跨序列需求包 <包路径>`", lead)
-        self.assertIn("你运行 `docs.py relink <ID> --apply`，再直接给承接方 +2 发 `【委托 #<工作项 ID>】<你的会话名> → <承接方 +2 的会话名>：<包名> <包路径>`", lead)
-        self.assertIn("先接单：给 `PMO-p0-01` 发【登记请求】", lead)
+        lead = self.read(".claude/agents/alg-p1.md")
+        # 1.0.12: a request to another sequence starts at the router, and the two +1 then talk to each other
+        self.assertIn("自己上传，再给路由 `PMO-p0-router` 发 `【通知】<你的会话名> → PMO-p0-router：跨序列需求包 <包路径>`", lead)
+        self.assertIn("你运行 `docs.py relink <ID> --apply`，再直接给承接方 +1 发 `【委托 #<工作项 ID>】<你的会话名> → <承接方 +1 的会话名>：<包名> <包路径>`", lead)
+        self.assertIn("先接单：给 `PMO-p0-ledger` 发【登记请求】", lead)
         self.assertIn("拿到【登记回执】后用【通知 #ID】把这三项告诉发起方", lead)
-        self.assertIn("委托方就是发起它的那个 +2：交付直接发给它，不经入口和路由。", lead)
+        self.assertIn("委托方就是发起它的那个 +1：交付直接发给它，不经入口和路由。", lead)
         self.assertIn("改范围、改成功标准、改冻结项不在往来里谈定：写决策包，照上面登记后交路由。", lead)
-        # 1.1.0: a decision package is uploaded by its +2, registered by the scribe and handed to the router, not the entry
-        self.assertIn("再给路由 `PMO-p1-01` 发 `【需拍板 #<工作项 ID>】<你的会话名> → PMO-p1-01：<事项一句话> <主文档链接>`。路由转告入口，入口讲给研究员；你不直接找入口。", lead)
-        self.assertIn("进展和里程碑发给路由 `PMO-p1-01`，不发入口", lead)
-        # 1.1.0: no +1. What needs judgement on the way goes to a +0 as a 下发 request, plan first; a closed task as before
+        # 1.1.0: a decision package is uploaded by its +1, registered by the scribe and handed to the router, not the entry
+        self.assertIn("再给路由 `PMO-p0-router` 发 `【需拍板 #<工作项 ID>】<你的会话名> → PMO-p0-router：<事项一句话> <主文档链接>`。路由转告入口，入口讲给研究员；你不直接找入口。", lead)
+        self.assertIn("进展和里程碑发给路由 `PMO-p0-router`，不发入口", lead)
+        # 1.1.0: no middle rank. What needs judgement on the way goes to a +0 as a 下发 request, plan first; a closed task as before
         self.assertIn("- 同序列的活委托给 +0，分两种，看一件事做到一半还需不需要新的信息或新的判断。", lead)
         self.assertIn("- 确认方案：承接的 +0 用【通知 #ID】把方案交给你。", lead)
         self.assertIn("本序列的方案是实验方案，写明要跑的变体、配置、种子、每个变体的验收标准，以及什么结果算假设被证伪。", lead)
         self.assertIn("写“确认节点：#<ID>，由 <你的会话名> 提出，必填项：方案=@<方案文件>”，拿到【登记回执】后给那个 +0 发【继续 #ID】让它动手", lead)
         self.assertIn("- 委托封闭任务：需求包写执行关系。这类活不建工作项，也不找书记员", lead)
         self.assertIn("和在途的 +0 有没有改同一批文件", lead)
-        self.assertNotIn("+1", lead.replace("PMO-p1-01", ""))
         self.assertNotIn("本序列开池时只有你一个会话", lead)                  # this pool opens every sequence in full
         for gone in ("交付包发给入口", "由入口转交", "由入口用【", "交给入口，由它请书记员"):
             self.assertNotIn(gone, lead, gone)
-        self.assertFalse(os.path.exists(os.path.join(self.tmp, ".claude", "agents", "alg-p1.md")))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, ".claude", "agents", "alg-p2.md")))     # two ranks: p1 leads, p0 works
         own = self.read(".claude/agents/alg-p0.md")
         self.assertIn("- 下发的需求先交方案：照 `.claude/solo-lab/templates/plan.md` 写，本序列的方案是实验方案，", own)
         self.assertIn("docs.py attach <工作项 ID> 方案 <方案文件> --apply` 自己上传，再给委托方发 `【通知 #<工作项 ID>】<你的会话名> → <委托方会话名>：方案 <方案文件的路径>`", own)
         self.assertIn("方案确认以后，范围内的调整自己定，记进交付包的“和方案的出入”一节。", own)
         self.assertIn("写进方案的“拆分”一节，方案确认以后由你派给本序列别的 +0", own)
         self.assertIn("子任务都验收以后，把它们的结论写进你的交付包的“子任务汇总”一节。", own)
-        self.assertNotIn("+1", own.replace("PMO-p1-01", ""))
         self.assertIn("## 拆分", self.read(".claude/solo-lab/templates/plan.md"))
         self.assertIn("任务中途第二次被要求转向", self.read(".claude/agents/alg-p0.md"))
         self.assertIn("告诉委托方“这个任务不是封闭任务”", self.read(".claude/agents/alg-p0.md"))
         router = self.read(".claude/agents/pmo-router.md")
         for part in ("**跨序列需求的委托。**", "**协调记录。**", "packages/drafts/pmo/跨序列协调记录.md", "route.py cross <工作项 ID>",
-                     "【通知 #<工作项 ID>】PMO-p1-01 → <发起方 +2 的会话名>：已登记，可以委托", "都没有就一句话结束本轮，不给入口发消息"):
+                     "【通知 #<工作项 ID>】PMO-p0-router → <发起方 +1 的会话名>：已登记，可以委托", "都没有就一句话结束本轮，不给入口发消息"):
             self.assertIn(part, router, part)
-        entry = self.read(".claude/agents/pmo-p2.md")
-        self.assertIn("跨序列需求不经你：发起方 +2 交路由查重、登记，再直接委托承接方 +2", entry)
+        entry = self.read(".claude/agents/pmo-p1.md")
+        self.assertIn("跨序列需求不经你：发起方 +1 交路由查重、登记，再直接委托承接方 +1", entry)
         self.assertIn("看进展用 `route.py cross` 和路由的协调记录", entry)
         for gone in ("各序列交来的包怎么转", "跨序列需求的接单和交付，登记请求都由你发给书记员"):
             self.assertNotIn(gone, entry, gone)
@@ -1760,15 +1761,15 @@ class PoolSetupTest(PoolProjectCase):
         # a command that was stopped is no reason to widen a session's permission mode
         for part in ("不建议提升会话的权限模式", "两类之间的消息双向被扣", "研究员在被拦的那个会话里亲口说允许", "发消息得到“未送达”（undelivered）时不连续重发"):
             self.assertIn(part, claude, part)
-        self.assertIn("登记请求里把字段写成 `<字段>=@<本地文件>`，书记员照文件找到那份文档、填上链接", lead)   # what the +2 writes itself
+        self.assertIn("登记请求里把字段写成 `<字段>=@<本地文件>`，书记员照文件找到那份文档、填上链接", lead)   # what the +1 writes itself
         self.assertIn("验收通过以后用承接方那份交付包文档的链接", lead)       # what it hands down
         self.assertIn("链接字段给的是 `@文件` 时不读内容", self.read(".claude/agents/pmo-scribe.md"))
         scribe = self.read(".claude/agents/pmo-scribe.md")
         self.assertIn("你接任何会话的登记请求", scribe)
         self.assertIn("新建由路由来提（它先查过重复和冲突；入口自己发起的由入口提）", scribe)
         self.assertIn("输出里写着“回执另发一份给路由”的，把同一条回执也发给路由。", scribe)
-        self.assertIn("【通知 #<任务 ID>】PMO-p0-01 → <那个 +2 的会话名>：研究任务走到“<节点>”", scribe)
-        self.assertIn("它请书记员确认这一步，接着归档这条研究任务", self.read(".claude/agents/pmo-p2.md"))
+        self.assertIn("【通知 #<任务 ID>】PMO-p0-ledger → <那个 +1 的会话名>：研究任务走到“<节点>”", scribe)
+        self.assertIn("它请书记员确认这一步，接着归档这条研究任务", self.read(".claude/agents/pmo-p1.md"))
         self.assertIn("### 派发图", self.read("org/org.md"))
         self.assertIn("初始池", self.read("org/grants.md"))
 
@@ -1777,27 +1778,27 @@ class PoolSetupTest(PoolProjectCase):
         entries = list(setup_core.plan_entries(plan))
         names = [e["name"] for e in entries]
         self.assertEqual((plan["version"], plan["total"], len(plan["top"]), len(set(names))), (6, 15, 7, 15))
-        # the +2s are opened in batches: what a batch opens below itself stays within what the app runs at once
-        self.assertEqual(plan["batches"], [["PMO-p2-01", "Product-p2-01", "Alg-p2-01"],
-                                           ["RnD-p2-01", "Infra-p2-01", "Quality-p2-01", "Liaison-p2-01"]])
+        # the +1s are opened in batches: what a batch opens below itself stays within what the app runs at once
+        self.assertEqual(plan["batches"], [["PMO-p1", "Product-p1", "Alg-p1"],
+                                           ["RnD-p1", "Infra-p1", "Quality-p1", "Liaison-p1"]])
         # ...and the batches in rounds: after one message of the researcher the app lets sessions open ten sessions
         self.assertEqual(plan["rounds"], [[1, 2]])
         self.assertEqual(plan["order"], [t["name"] for t in plan["top"]])
-        self.assertEqual(plan["order"][0], "PMO-p2-01")                     # the scribe is two levels below the entry
-        for t in plan["top"]:                                                # a +2 opens its +0; the entry the router, the router the scribe
+        self.assertEqual(plan["order"][0], "PMO-p1")                     # the scribe is two levels below the entry
+        for t in plan["top"]:                                                # a +1 opens its +0; the entry the router, the router the scribe
             self.assertTrue(t["opening"].startswith("认领 %s（会话名 %s）" % (t["role"], t["name"])))
             one = t["children"][0]
             self.assertIn("开出 %s，" % one["name"], t["brief"])
-            if t["role"] == "pmo-p2":
-                self.assertEqual(([c["name"] for c in t["children"]], [c["name"] for c in one["children"]]), (["PMO-p1-01"], ["PMO-p0-01"]))
-                self.assertIn("开出 PMO-p0-01，", one["brief"])
+            if t["role"] == "pmo-p1":
+                self.assertEqual(([c["name"] for c in t["children"]], [c["name"] for c in one["children"]]), (["PMO-p0-router"], ["PMO-p0-ledger"]))
+                self.assertIn("开出 PMO-p0-ledger，", one["brief"])
                 one = one["children"][0]
             else:
                 self.assertEqual([c["name"] for c in t["children"]], ["%s-p0-01" % t["name"].split("-")[0]])
             self.assertEqual(one["children"], [])
             self.assertIn("就结束本轮，等委托消息", one["brief"])
         pmo = plan["top"][0]
-        self.assertEqual((pmo["children"][0]["name"], pmo["children"][0]["children"][0]["name"]), ("PMO-p1-01", "PMO-p0-01"))
+        self.assertEqual((pmo["children"][0]["name"], pmo["children"][0]["children"][0]["name"]), ("PMO-p0-router", "PMO-p0-ledger"))
         for e in entries:
             self.assertTrue(re.fullmatch(r"[a-z0-9-]{1,24}", e["short"]))
             self.assertIn("pool.py claim %s --as %s" % (e["role"], e["name"]), e["brief"])
@@ -1817,7 +1818,7 @@ class PoolSetupTest(PoolProjectCase):
         with open(self.task_path, "w", encoding="utf-8") as f:
             json.dump(task, f, ensure_ascii=False)
         doc = json.loads(setup_core.build_plan(self.tmp, self.task_path, None).files[".claude/solo-lab/pool-plan.json"][0])
-        self.assertEqual((doc["label"], doc["top"][0]["title"]), ("CodeOpt", "[CodeOpt] PMO-p2-01"))
+        self.assertEqual((doc["label"], doc["top"][0]["title"]), ("CodeOpt", "[CodeOpt] PMO-p1"))
         for bad in ("[x]", "长" * 41, 3):
             task["pool"]["label"] = bad
             with open(self.task_path, "w", encoding="utf-8") as f:
@@ -1834,16 +1835,16 @@ class PoolSetupTest(PoolProjectCase):
             json.dump(task, f, ensure_ascii=False)
         doc = json.loads(setup_core.build_plan(self.tmp, self.task_path, None).files[".claude/solo-lab/pool-plan.json"][0])
         self.assertEqual(doc["total"], 12)
-        self.assertEqual((doc["batches"], doc["rounds"]), ([["PMO-p2-01", "Product-p2-01", "Alg-p2-01", "RnD-p2-01", "Infra-p2-01"],
-                                                            ["Quality-p2-01", "Liaison-p2-01"]], [[1, 2]]))
-        for role in ("liaison-p2", "product-p2", "alg-p2"):
+        self.assertEqual((doc["batches"], doc["rounds"]), ([["PMO-p1", "Product-p1", "Alg-p1", "RnD-p1", "Infra-p1"],
+                                                            ["Quality-p1", "Liaison-p1"]], [[1, 2]]))
+        for role in ("liaison-p1", "product-p1", "alg-p1"):
             self.assertEqual(next(t for t in doc["top"] if t["role"] == role)["children"], [], role)
-        self.assertEqual(len(next(t for t in doc["top"] if t["role"] == "rnd-p2")["children"]), 1)
+        self.assertEqual(len(next(t for t in doc["top"] if t["role"] == "rnd-p1")["children"]), 1)
         few = setup_core.build_plan(self.tmp, self.task_path, "pmo,quality,alg")   # the default says nothing of a sequence that is off
         self.assertEqual(json.loads(few.files[".claude/solo-lab/pool-plan.json"][0])["total"], 6)
-        lone = few.files[".claude/agents/alg-p2.md"][0]                        # a +2 that opens alone is told what to open, and when
+        lone = few.files[".claude/agents/alg-p1.md"][0]                        # a +1 that opens alone is told what to open, and when
         self.assertIn("- 本序列开池时只有你一个会话：活自己做。有封闭任务（查文献、跑一段分析、独立复核这类），或者有可以先交方案再做的问题时补 +0。", lone)
-        self.assertNotIn("本序列开池时只有你一个会话", few.files[".claude/agents/quality-p2.md"][0])
+        self.assertNotIn("本序列开池时只有你一个会话", few.files[".claude/agents/quality-p1.md"][0])
 
     def test_a_space_name_that_cannot_head_a_title_needs_a_label(self):
         with open(self.task_path, encoding="utf-8") as f:
@@ -1882,14 +1883,14 @@ class PoolSetupTest(PoolProjectCase):
             json.dump(task, f, ensure_ascii=False)
         plan = setup_core.build_plan(self.tmp, self.task_path, None)
         doc = json.loads(plan.files[".claude/solo-lab/pool-plan.json"][0])
-        liaison = next(t for t in doc["top"] if t["role"] == "liaison-p2")
+        liaison = next(t for t in doc["top"] if t["role"] == "liaison-p1")
         self.assertEqual(liaison["children"], [])
-        alg = next(t for t in doc["top"] if t["role"] == "alg-p2")
-        self.assertEqual([c["name"] for c in alg["children"]], ["Alg-p0-01", "Alg-p0-02"])      # the +0s hang under their +2
+        alg = next(t for t in doc["top"] if t["role"] == "alg-p1")
+        self.assertEqual([c["name"] for c in alg["children"]], ["Alg-p0-01", "Alg-p0-02"])      # the +0s hang under their +1
         self.assertEqual([c["children"] for c in alg["children"]], [[], []])
-        # two sessions below a +2: two sequences to a batch; one that opens nothing joins the last batch
-        self.assertEqual(doc["batches"], [["PMO-p2-01", "Product-p2-01"], ["Alg-p2-01", "RnD-p2-01"],
-                                          ["Infra-p2-01", "Quality-p2-01", "Liaison-p2-01"]])
+        # two sessions below a +1: two sequences to a batch; one that opens nothing joins the last batch
+        self.assertEqual(doc["batches"], [["PMO-p1", "Product-p1"], ["Alg-p1", "RnD-p1"],
+                                          ["Infra-p1", "Quality-p1", "Liaison-p1"]])
         self.assertEqual(doc["rounds"], [[1, 2], [3]])                       # 4 + 4 sessions below, then 4
 
     def test_injection_fits_every_role(self):
@@ -1943,42 +1944,42 @@ class PoolSetupTest(PoolProjectCase):
     def test_dispatch_targets_are_the_assign_edges(self):
         seqs = [s for s, _, _ in self.spec.sequences()]
         for seq in seqs:
-            for rank in self.spec.ranks_of(seq):
-                role = setup_core.agent_name(seq, rank)
-                self.assertEqual(self.spec.dispatch_targets(role, seq, rank, seqs), assign_targets(seq, rank, seqs), role)
-        self.assertEqual((self.spec.ranks_of("alg"), self.spec.ranks_of("pmo")), ([2, 0], [2, 1, 0]))
+            for role, rank in self.spec.roles_of(seq):
+                self.assertEqual(self.spec.dispatch_targets(role, seq, rank, seqs), assign_targets(role, seq, rank, seqs), role)
+        self.assertEqual((self.spec.roles_of("alg"), self.spec.roles_of("pmo")),
+                         ([("alg-p1", 1), ("alg-p0", 0)], [("pmo-p1", 1), ("pmo-router", 0), ("pmo-scribe", 0)]))
         some = ["pmo", "quality", "alg"]
-        self.assertEqual(self.spec.dispatch_targets("pmo-p2", "pmo", 2, some), assign_targets("pmo", 2, some))
+        self.assertEqual(self.spec.dispatch_targets("pmo-p1", "pmo", 1, some), assign_targets("pmo-p1", "pmo", 1, some))
 
     def test_pool_checklist(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(pool_cmd.main(["open", "--target", self.tmp]), 0)
         text = out.getvalue()
-        self.assertIn("1. PMO-p2-01（未认领）", text)
-        self.assertIn("只开下面这 7 个 +2，分 2 批、1 轮开", text)                   # 1.1.0: 15 sessions, six fewer than with the +1s
-        self.assertIn("\n第 1 轮（研究员说完初始化那句话以后）\n第 1 批\n1. PMO-p2-01", text)
-        self.assertIn("\n第 2 批\n4. RnD-p2-01", text)
+        self.assertIn("1. PMO-p1（未认领）", text)
+        self.assertIn("只开下面这 7 个 +1，分 2 批、1 轮开", text)                   # 1.1.0: 15 sessions, six fewer than with the +1s
+        self.assertIn("\n第 1 轮（研究员说完初始化那句话以后）\n第 1 批\n1. PMO-p1", text)
+        self.assertIn("\n第 2 批\n4. RnD-p1", text)
         self.assertNotIn("第 2 轮", text)
         self.assertIn("   └ Alg-p0-01（", text)
         self.assertIn("--wait 180 --batch", text)
         self.assertLess(text.index("各调一次 detach_session"), text.index("逐个运行它们的 expect"))   # top level first, then the permit
         self.assertNotIn("注意：", text)
-        self.assertIn("   └ PMO-p1-01（", text)                                    # the levels below, opened by the level above
-        self.assertIn("     └ PMO-p0-01（", text)
-        self.assertNotIn("PMO-p1-01（未认领）\n   name：", text)
-        self.assertIn("再照输出里的表开出 PMO-p1-01，", text)
+        self.assertIn("   └ PMO-p0-router（", text)                                    # the levels below, opened by the level above
+        self.assertIn("     └ PMO-p0-ledger（", text)
+        self.assertNotIn("PMO-p0-router（未认领）\n   name：", text)
+        self.assertIn("再照输出里的表开出 PMO-p0-router，", text)
         self.assertIn("] Initialization”", text)
         self.assertIn("当前：0/15 条认领", text)
         self.assertNotIn("--watch", text)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(pool_cmd.main(["open", "--target", self.tmp, "--manual"]), 0)
-        self.assertIn("认领 pmo-p2（会话名 PMO-p2-01），然后照认领输出开出 PMO-p1-01。本会话由研究员手工开出。", out.getvalue())
+        self.assertIn("认领 pmo-p1（会话名 PMO-p1），然后照认领输出开出 PMO-p0-router。本会话由研究员手工开出。", out.getvalue())
         self.assertIn("书记员由路由开出", out.getvalue())
         self.assertIn("--wait 240", text)                                         # how the initialising session waits for the levels below
         plan = json.loads(self.read(".claude/solo-lab/pool-plan.json"))
-        self.assertNotIn(setup_core.BY_HAND, "".join(e["brief"] for e in setup_core.plan_entries(plan)))   # only a +2 opened by hand files itself
+        self.assertNotIn(setup_core.BY_HAND, "".join(e["brief"] for e in setup_core.plan_entries(plan)))   # only a +1 opened by hand files itself
 
 
 class AnnounceTest(PoolProjectCase):
@@ -2003,7 +2004,7 @@ class AnnounceTest(PoolProjectCase):
         self.assertTrue(text.startswith("把下面的清单原样发给研究员，一个字不改；发出去以后再运行下一条命令。\n\n将要新建（"), text[:80])
         self.assertIn("- 飞书项目空间 1 个：新项目，用模板创建\n- 飞书知识空间 1 个：新项目\n", text)
         self.assertIn("- 知识库节点 %d 个\n" % len(self.spec.node_keys()), text)
-        self.assertIn("- 桌面会话 12 个（外联、产品、算法只开 +2），侧栏分区 1 个：新项目\n", text)
+        self.assertIn("- 桌面会话 12 个（外联、产品、算法只开 +1），侧栏分区 1 个：新项目\n", text)
         self.assertNotIn("轮开", text)                                              # the default pool opens in one round (1.0.12)
         self.assertIn("新建以外的动作", text)
         self.assertIn("权限模式：本会话用 auto 模式时，开池不用你点。用 bypass 模式时，应用每开一个会话都要你点一次确认，这个池共 12 次。", text)
@@ -2017,7 +2018,7 @@ class AnnounceTest(PoolProjectCase):
         code, text = self.announce("--target", fresh, "--name", "demo", "--sequences", "pmo,quality,alg")
         self.assertEqual(code, 0, text)
         self.assertIn("- 知识库节点 %d 个\n" % len(self.spec.node_keys(["pmo", "quality", "alg"])), text)
-        self.assertIn("- 桌面会话 6 个（算法只开 +2），侧栏分区 1 个：demo\n", text)
+        self.assertIn("- 桌面会话 6 个（算法只开 +1），侧栏分区 1 个：demo\n", text)
         self.assertNotIn("轮开", text)                                              # one round: nothing to answer in between
         code, text = self.announce("--target", fresh, "--task", self.task_path)   # every sequence with its +0
         plan = json.loads(self.read(".claude/solo-lab/pool-plan.json"))
@@ -2099,7 +2100,7 @@ class PoolModeTest(PoolProjectCase):
         self.assertIn("还没开的 15 个会话要点 15 次", text)
         self.assertIn("1. 换 auto 模式：", text)
         self.assertIn("2. 留在本会话：", text)
-        self.assertLess(text.index("注意：本会话是 bypass 模式。"), text.index("只开下面这 7 个 +2"))
+        self.assertLess(text.index("注意：本会话是 bypass 模式。"), text.index("只开下面这 7 个 +1"))
 
     def test_auto_mode_and_an_unknown_mode_are_not_warned(self):
         self.assertNotIn("bypass 模式", self.checklist("auto"))
@@ -2122,7 +2123,7 @@ class PoolModeTest(PoolProjectCase):
 class CheckLayersTest(PoolProjectCase):
     """check.py check: the project's own files, the Feishu side, the sessions, the first research task."""
 
-    POOL = {"p0": 2, "later": [], "max_sessions": 30}       # 21 sessions: two +0s under each +2; four batches in two rounds
+    POOL = {"p0": 2, "later": [], "max_sessions": 30}       # 21 sessions: two +0s under each +1; four batches in two rounds
 
     def setUp(self):
         super().setUp()
@@ -2176,8 +2177,8 @@ class CheckLayersTest(PoolProjectCase):
         code, text = self.wait()
         self.assertEqual(code, 1)
         self.assertIn("21 个会话里还有 21 个没认领", text)
-        self.assertIn("- PMO-p2-01：+2，由做初始化的会话开出", text)
-        self.assertIn("- PMO-p0-01：由 PMO-p1-01 开出，PMO-p1-01 还没认领", text)
+        self.assertIn("- PMO-p1：+1，由做初始化的会话开出", text)
+        self.assertIn("- PMO-p0-ledger：由 PMO-p0-router 开出，PMO-p0-router 还没认领", text)
         self.assertNotIn("请研究员点开上一级的会话", text)
         self.claim_all()
         with pool_lib.locked(self.tmp) as table:
@@ -2185,7 +2186,7 @@ class CheckLayersTest(PoolProjectCase):
         code, text = self.wait()
         self.assertEqual(code, 1)
         self.assertIn("还有 1 个没认领", text)
-        self.assertIn("- Alg-p0-02：由 Alg-p2-01 开出，Alg-p2-01 已认领", text)
+        self.assertIn("- Alg-p0-02：由 Alg-p1 开出，Alg-p1 已认领", text)
         self.assertIn("请研究员点开上一级的会话，说一句“照认领输出开出下一级”", text)
 
     def wait_batch(self, n):
@@ -2198,14 +2199,14 @@ class CheckLayersTest(PoolProjectCase):
         code, text = self.wait_batch(1)
         self.assertEqual(code, 1)
         self.assertIn("第 1 批的 6 个会话还没开齐", text)
-        self.assertIn("- Product-p0-02：由 Product-p2-01 开出，Product-p2-01 还没认领", text)
-        self.assertNotIn("Alg-p2-01：", text)                                    # another batch
-        self.assertIn("不用再等这一批。接着开第 2 批：Alg-p2-01、RnD-p2-01。", text)
+        self.assertIn("- Product-p0-02：由 Product-p1 开出，Product-p1 还没认领", text)
+        self.assertNotIn("Alg-p1：", text)                                    # another batch
+        self.assertIn("不用再等这一批。接着开第 2 批：Alg-p1、RnD-p1。", text)
         self.claim_all()
         code, text = self.wait_batch(1)                                         # claimed, the hooks have not seen a turn end yet
         self.assertEqual(code, 1)
-        self.assertIn("首轮还没结束的：PMO-p2-01、PMO-p1-01、Product-p2-01、Product-p0-01、Product-p0-02。", text)
-        for name in ("PMO-p2-01", "PMO-p1-01", "Product-p2-01", "Product-p0-01"):
+        self.assertIn("首轮还没结束的：PMO-p1、PMO-p0-router、Product-p1、Product-p0-01、Product-p0-02。", text)
+        for name in ("PMO-p1", "PMO-p0-router", "Product-p1", "Product-p0-01"):
             self.hook("instances.py", {"hook_event_name": "Stop", "session_id": "s-" + name})
         self.assertIn("首轮还没结束的：Product-p0-02。", self.wait_batch(1)[1])
         self.hook("instances.py", {"hook_event_name": "PermissionRequest", "session_id": "s-Product-p0-02", "tool_name": "Bash"})
@@ -2213,19 +2214,19 @@ class CheckLayersTest(PoolProjectCase):
         self.hook("instances.py", {"hook_event_name": "Stop", "session_id": "s-Product-p0-02"})
         code, text = self.wait_batch(1)                                         # the scribe may still be writing
         self.assertEqual(code, 0, text)
-        self.assertIn("第 1 批开齐：6 个会话都已认领，首轮都结束了。接着开第 2 批：Alg-p2-01、RnD-p2-01。", text)
-        for name in ("Alg-p2-01", "Alg-p0-01", "Alg-p0-02", "RnD-p2-01", "RnD-p0-01", "RnD-p0-02"):
+        self.assertIn("第 1 批开齐：6 个会话都已认领，首轮都结束了。接着开第 2 批：Alg-p1、RnD-p1。", text)
+        for name in ("Alg-p1", "Alg-p0-01", "Alg-p0-02", "RnD-p1", "RnD-p0-01", "RnD-p0-02"):
             self.hook("instances.py", {"hook_event_name": "Stop", "session_id": "s-" + name})
         code, text = self.wait_batch(2)                                         # the round ends here: the researcher has to speak
         self.assertEqual(code, 0, text)
         self.assertIn("第 2 批开齐：6 个会话都已认领，首轮都结束了。这一轮到此为止：研究员每发一条消息，应用最多让会话自己开出 10 个会话，"
-                      "这一轮用了 8 个。现在结束本轮，请研究员回一句“继续开池”；他回话以后再开第 3 批：Infra-p2-01、Quality-p2-01。", text)
-        self.assertIn("接着开第 4 批：Liaison-p2-01。", self.wait_batch(3)[1])   # inside the second round
-        for name in ("Liaison-p2-01", "Liaison-p0-01", "Liaison-p0-02"):
+                      "这一轮用了 8 个。现在结束本轮，请研究员回一句“继续开池”；他回话以后再开第 3 批：Infra-p1、Quality-p1。", text)
+        self.assertIn("接着开第 4 批：Liaison-p1。", self.wait_batch(3)[1])   # inside the second round
+        for name in ("Liaison-p1", "Liaison-p0-01", "Liaison-p0-02"):
             self.hook("instances.py", {"hook_event_name": "Stop", "session_id": "s-" + name})
         code, text = self.wait_batch(4)
         self.assertEqual(code, 0, text)
-        self.assertIn("这是最后一批。接着把 +2 和本会话归入分区", text)
+        self.assertIn("这是最后一批。接着把 +1 和本会话归入分区", text)
         self.assertEqual(self.wait_batch(5)[0], 2)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
@@ -2233,18 +2234,18 @@ class CheckLayersTest(PoolProjectCase):
         self.assertIn("--batch 要和 --wait 一起用", out.getvalue())
 
     def test_wait_ends_when_the_scribe_has_done_its_first_writes(self):
-        scribe = "s-PMO-p0-01"
+        scribe = "s-PMO-p0-ledger"
         self.claim_all()
         code, text = self.wait()
         self.assertEqual(code, 1)
         self.assertIn("会话池已开齐：21/21 条认领。书记员的首轮还没结束（状态：unknown）", text)
-        self.prompt(scribe, "认领 pmo-scribe（会话名 PMO-p0-01）。")
+        self.prompt(scribe, "认领 pmo-scribe（会话名 PMO-p0-ledger）。")
         self.assertIn("书记员的首轮还没结束（状态：busy）", self.wait()[1])
         self.hook("instances.py", {"hook_event_name": "Stop", "session_id": scribe})
         code, text = self.wait()                                  # its turn is over, nothing registered from this directory
         self.assertEqual(code, 0, text)
         self.assertIn("没有首条研究任务的登记回执", text)
-        self.assertIn("桌面会话 local_PMO-p0-01", text)
+        self.assertIn("桌面会话 local_PMO-p0-ledger", text)
         lg = fake_space.SimLedger(self.tmp, "apply", self.fake, ())
         with contextlib.redirect_stdout(io.StringIO()):
             task = fake_space.register(lg, os.path.join(self.tmp, setup_core.FIRST_TASK))
@@ -2274,18 +2275,52 @@ class CheckLayersTest(PoolProjectCase):
         self.assertIn("检查：还有 3 个问题（飞书 1、会话 1、首条研究任务 1）", text)
 
     def test_what_a_project_from_before_1_1_0_still_holds_is_named(self):
-        """1.1.0: a sequence has no +1. init takes no file away and no claim: the role definition and the claim of a
-        +1 from before the upgrade are named with what to do about them."""
+        """1.1.0 renamed the roles and the sessions: a sequence's lead is <seq>-p1 and named Alg-p1, the entry
+        PMO-p1, the router and the scribe PMO-p0-router and PMO-p0-ledger, and the rank between +2 and +0 that
+        sequences had is gone. init takes no file away: the definition of a role that is no more is named. The
+        claims come over by themselves: pool.json as an earlier version wrote it is read with its sessions as
+        they are called now, and a session of the rank that is gone is told its claim was released."""
         self.ready()
-        with open(os.path.join(self.tmp, ".claude", "agents", "alg-p1.md"), "w", encoding="utf-8") as f:
-            f.write("---\nname: alg-p1\n---\n")
-        with pool_lib.locked(self.tmp) as table:
-            table["claims"]["Alg-p1-01"] = {"name": "Alg-p1-01", "short": "alg-p1-01", "role": "alg-p1", "session_id": "s-old", "desk": "local_old"}
+        with open(os.path.join(self.tmp, ".claude", "agents", "alg-p2.md"), "w", encoding="utf-8") as f:
+            f.write("---\nname: alg-p2\n---\n")
+        former = {"PMO-p1": ("PMO-p2-01", "pmo-p2"), "PMO-p0-router": ("PMO-p1-01", "pmo-router"),
+                  "PMO-p0-ledger": ("PMO-p0-01", "pmo-scribe"), "Alg-p1": ("Alg-p2-01", "alg-p2")}
+        with open(pool_lib.pool_path(self.tmp), encoding="utf-8") as f:
+            table = json.load(f)
+        self.assertEqual(table["version"], pool_lib.POOL_VERSION)
+        for now, (name, role) in former.items():
+            table["claims"][name] = dict(table["claims"].pop(now), name=name, short=name.lower(), role=role)
+        table["claims"]["Alg-p1-01"] = {"name": "Alg-p1-01", "short": "alg-p1-01", "role": "alg-p1", "session_id": "s-mid", "desk": "local_mid", "by": "Alg-p2-01"}
+        table["claims"]["Alg-p0-01"]["by"] = "Alg-p1-01"
+        table["owners"] = {"2101": "Alg-p1-01", "2102": "Alg-p2-01", "2103": "Alg-p0-01"}
+        table["refills"] = [{"role": "alg-p1", "count": 1, "by": "Alg-p2-01"}, {"role": "alg-p0", "count": 1, "by": "Alg-p1-01"}]
+        table["version"] = 1
+        with open(pool_lib.pool_path(self.tmp), "w", encoding="utf-8") as f:
+            json.dump(table, f, ensure_ascii=False)
         code, text = self.check()
         self.assertEqual(code, 1, text)
-        self.assertIn("这些角色定义是旧版留下的，现在的规则里没有这些角色（1.1.0 起各序列只有 +2 和 +0）：.claude/agents/alg-p1.md；请研究员删掉这些文件", text)
-        self.assertIn("认领表里有现在的规则没有的角色：Alg-p1-01（1.1.0 起各序列只有 +2 和 +0）。先让它们把手上的活交给本序列 +2，"
-                      "再请研究员归档这些会话，逐个运行 pool.py release <会话名>", text)
+        self.assertIn("这些角色定义是旧版留下的，现在的规则里没有这些角色（1.1.0 起各序列只有 +1 和 +0 两级，带队的角色叫 <序列>-p1）："
+                      ".claude/agents/alg-p2.md；请研究员删掉这些文件", text)
+        self.assertNotIn("认领表里有现在的规则没有的角色", text)
+        self.assertNotIn("会话池还没开齐", text)
+        now, ok = pool_lib.load(self.tmp)
+        self.assertTrue(ok)
+        for name, (_, role) in former.items():
+            self.assertEqual(now["claims"][name]["role"], role.replace("-p2", "-p1"), name)
+            self.assertEqual(now["claims"][name]["short"], name.lower())
+        self.assertNotIn("Alg-p1-01", now["claims"])
+        self.assertEqual([(t["name"], t["released_by"]) for t in now["tombstones"]], [("Alg-p1-01", "1.1.0")])
+        self.assertEqual((now["claims"]["Alg-p0-01"]["by"], now["owners"]), ("Alg-p1", {"2101": "Alg-p1", "2102": "Alg-p1", "2103": "Alg-p0-01"}))
+        self.assertEqual(now["refills"], [{"role": "alg-p0", "count": 1, "by": "Alg-p1"}])
+        with pool_lib.locked(self.tmp) as table:                              # whoever writes next saves it so
+            table["claims"]["Alg-p9-01"] = {"name": "Alg-p9-01", "short": "alg-p9-01", "role": "alg-p9", "session_id": "s-odd", "desk": None}
+        with open(pool_lib.pool_path(self.tmp), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["version"], pool_lib.POOL_VERSION)
+        self.assertIn("认领表里有现在的规则没有的角色：Alg-p9-01。先让它们把手上的活交给本序列 +1，"
+                      "再请研究员归档这些会话，逐个运行 pool.py release <会话名>", self.check()[1])
+        for old, new in (("Alg-p2-01", "Alg-p1"), ("alg-p1-02", "alg-p1"), ("PMO-p2-01", "PMO-p1"), ("PMO-p1-01", "PMO-p0-router"),
+                         ("PMO-p0-01", "PMO-p0-ledger"), ("Alg-p0-01", "Alg-p0-01"), ("Alg-p0-2101-3", "Alg-p0-2101-3"), ("研究员", "研究员")):
+            self.assertEqual(pool_lib.current_name(old), new)
 
     def test_every_layer_ready(self):
         self.ready()
@@ -2296,14 +2331,14 @@ class CheckLayersTest(PoolProjectCase):
         code, text = self.check("--sessions", self.listing())
         self.assertEqual(code, 0, text)
 
-        def nested(rows):                                    # as the client lists them: only a +2 is filed, the rest sit under it
+        def nested(rows):                                    # as the client lists them: only a +1 is filed, the rest sit under it
             for e in setup_core.plan_entries(self.plan):
                 for c in e["children"]:
                     rows[c["name"]].update(startedBy="local_" + e["name"], group=None)
         code, text = self.check("--sessions", self.listing(nested))
         self.assertEqual(code, 0, text)
 
-        def with_opener(rows):                               # a list taken elsewhere also has the session that opened the +2s
+        def with_opener(rows):                               # a list taken elsewhere also has the session that opened the +1s
             nested(rows)
             rows["init"] = {"sessionId": "local_init", "title": "x", "cwd": self.tmp, "isArchived": False, "group": None}
             for top in self.plan["top"]:
@@ -2311,13 +2346,13 @@ class CheckLayersTest(PoolProjectCase):
         code, text = self.check("--sessions", self.listing(with_opener))
         self.assertEqual(code, 0, text)
 
-        def unfiled(rows):                                   # one +2 left outside the section takes its whole sequence with it
+        def unfiled(rows):                                   # one +1 left outside the section takes its whole sequence with it
             nested(rows)
-            rows["Alg-p2-01"]["group"] = None
+            rows["Alg-p1"]["group"] = None
         code, text = self.check("--sessions", self.listing(unfiled))
         self.assertEqual(code, 1)
         self.assertIn("不在侧栏分区", text)
-        for name in ("Alg-p2-01", "Alg-p0-01", "Alg-p0-02"):
+        for name in ("Alg-p1", "Alg-p0-01", "Alg-p0-02"):
             self.assertIn(name, text)
         self.assertNotIn("RnD-p0-01", text.split("不在侧栏分区")[1].split("\n")[0])
 
@@ -2372,18 +2407,18 @@ class CheckLayersTest(PoolProjectCase):
         self.ready()
 
         def edit(rows):
-            rows["Alg-p2-01"]["isArchived"] = True
+            rows["Alg-p1"]["isArchived"] = True
             rows["Alg-p0-01"]["group"] = None
             rows["Alg-p0-02"]["cwd"] = "/tmp"
-            rows["RnD-p2-01"]["pinned"] = True
+            rows["RnD-p1"]["pinned"] = True
             rows["RnD-p0-01"]["title"] = "随手起的名字"
-            del rows["Infra-p2-01"]
+            del rows["Infra-p1"]
             del rows["Infra-p0-01"]["group"]
         code, text = self.check("--sessions", self.listing(edit))
         self.assertEqual(code, 1)
-        for line in ("客户端的会话列表里没有这些认领的会话：Infra-p2-01", "已经归档的会话还占着认领：Alg-p2-01",
+        for line in ("客户端的会话列表里没有这些认领的会话：Infra-p1", "已经归档的会话还占着认领：Alg-p1",
                      "工作目录不是项目目录的会话：Alg-p0-02", "”里的会话：Alg-p0-01", "还没报告这些会话的分区，没核对：Infra-p0-01",
-                     "置顶了的会话：RnD-p2-01", "<会话名>”的会话：RnD-p0-01", "会话：4 个问题"):
+                     "置顶了的会话：RnD-p1", "<会话名>”的会话：RnD-p0-01", "会话：4 个问题"):
             self.assertIn(line, text)
         with open(os.path.join(self.tmp, "bad.json"), "w", encoding="utf-8") as f:
             f.write("{}")
@@ -2406,24 +2441,24 @@ class CheckLayersTest(PoolProjectCase):
         code, text = self.check("--readback", self.readback())
         self.assertEqual(code, 0, text)
         self.assertIn("| 本会话 | — | claude-fable-5-2 | xhigh | 1000000 |", text)
-        self.assertIn("| PMO-p2-01 | fable | claude-fable-5-2 | xhigh | 1000000 |", text)
-        self.assertIn("| PMO-p0-01 | opus | claude-opus-5-5 | xhigh | 1000000 |", text)
+        self.assertIn("| PMO-p1 | fable | claude-fable-5-2 | xhigh | 1000000 |", text)
+        self.assertIn("| PMO-p0-ledger | opus | claude-opus-5-5 | xhigh | 1000000 |", text)
         table = text.split("回读表：")[1]
         self.assertEqual(table.count("\n| ") - 2, 1 + len(list(setup_core.plan_entries(self.plan))))   # header, rule, this session, the pool
-        self.assertLess(table.index("PMO-p2-01"), table.index("PMO-p1-01"))                  # in the order the pool opens
+        self.assertLess(table.index("PMO-p1"), table.index("PMO-p0-router"))                  # in the order the pool opens
         self.assertNotIn("回读表", self.check()[1])
 
     def test_a_wrong_model_or_a_narrow_window_is_a_problem(self):
         self.ready()
 
         def edit(rows):
-            rows["PMO-p2-01"]["model"] = "claude-opus-5-5"             # start_session fell back to the opener's model
+            rows["PMO-p1"]["model"] = "claude-opus-5-5"             # start_session fell back to the opener's model
             rows["Alg-p0-01"]["model"] = "claude-sonnet-5-5"
             rows["Alg-p0-02"]["contextWindow"] = 200000
         code, text = self.check("--readback", self.readback(edit))
         self.assertEqual(code, 1)
         self.assertIn("会话：2 个问题", text)
-        self.assertIn("模型和开池清单不在一档的会话：PMO-p2-01、Alg-p0-01", text)
+        self.assertIn("模型和开池清单不在一档的会话：PMO-p1、Alg-p0-01", text)
         self.assertIn("窗口小于本会话（1000000）的会话：Alg-p0-02", text)
         self.assertIn("autoCompactWindow", text)
         code, text = self.check("--readback", self.readback(own={"model": "claude-opus-5-5", "contextWindow": 200000}))
@@ -2433,12 +2468,12 @@ class CheckLayersTest(PoolProjectCase):
         self.ready()
 
         def edit(rows):
-            rows["RnD-p2-01"]["effort"] = "high"
+            rows["RnD-p1"]["effort"] = "high"
             rows["RnD-p0-01"]["contextWindow"] = None                 # get_usage said unavailable
             del rows["RnD-p0-02"]
         code, text = self.check("--readback", self.readback(edit))
         self.assertEqual(code, 0, text)
-        self.assertIn("提醒：推理强度和本会话（xhigh）不同的会话：RnD-p2-01", text)
+        self.assertIn("提醒：推理强度和本会话（xhigh）不同的会话：RnD-p1", text)
         self.assertIn("提醒：没读到模型或窗口的会话：RnD-p0-01、RnD-p0-02", text)
         self.assertIn("| RnD-p0-02 | opus | 读不到 | 读不到 | 读不到 |", text)
         code, text = self.check("--readback", self.readback(own={"contextWindow": None}))
@@ -2452,11 +2487,11 @@ class CheckLayersTest(PoolProjectCase):
 
     def test_a_session_working_elsewhere_and_a_leftover_pre_registration(self):
         self.ready()
-        self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-Alg-p2-01", "source": "startup", "cwd": "/tmp"})
+        self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-Alg-p1", "source": "startup", "cwd": "/tmp"})
         self.route("expect", "Alg-p0-03", "--role", "alg-p0", "--desk", "local_extra", sid="s-researcher")
         code, text = self.check()
         self.assertEqual(code, 1)
-        self.assertIn("工作目录不是项目目录的会话：Alg-p2-01", text)
+        self.assertIn("工作目录不是项目目录的会话：Alg-p1", text)
         self.assertIn("有 1 条预登记还没转正：Alg-p0-03", text)
 
     def test_live_reads_the_space_the_nodes_and_the_first_task_back(self):
@@ -2507,33 +2542,33 @@ class PoolClaimTest(PoolProjectCase):
         self.assertFalse(os.path.isfile(os.path.join(self.tmp, ".claude", "state", "pool.json")) and self.pool()["claims"])
 
     def test_opening_line_claims_a_p2_only(self):
-        _, out = self.opening("alg-p2", "Alg-p2-01", "s1")
-        self.assertIn("本会话是 Alg-p2-01", out.get("additionalContext", ""))
-        self.assertIn("算法 +2", out.get("additionalContext", ""))
-        self.assertEqual(self.pool()["claims"]["Alg-p2-01"]["session_id"], "s1")
+        _, out = self.opening("alg-p1", "Alg-p1", "s1")
+        self.assertIn("本会话是 Alg-p1", out.get("additionalContext", ""))
+        self.assertIn("算法 +1", out.get("additionalContext", ""))
+        self.assertEqual(self.pool()["claims"]["Alg-p1"]["session_id"], "s1")
         self.prompt("s2", "你好")
-        self.opening("product-p2", "Product-p2-01", "s2")                  # not the first prompt
-        self.prompt("s3", "认领 alg-p0（会话名 Alg-p0-01）。先运行 pool.py claim")   # not a +2
-        self.assertEqual(sorted(self.pool()["claims"]), ["Alg-p2-01"])
-        _, out = self.opening("alg-p2", "Alg-p2-01", "s4")                 # a second alg-p2
+        self.opening("product-p1", "Product-p1", "s2")                  # not the first prompt
+        self.prompt("s3", "认领 alg-p0（会话名 Alg-p0-01）。先运行 pool.py claim")   # not a +1
+        self.assertEqual(sorted(self.pool()["claims"]), ["Alg-p1"])
+        _, out = self.opening("alg-p1", "Alg-p1", "s4")                 # a second alg-p1
         self.assertIn("上限", out.get("additionalContext", ""))
-        self.assertEqual(sorted(self.pool()["claims"]), ["Alg-p2-01"])
+        self.assertEqual(sorted(self.pool()["claims"]), ["Alg-p1"])
 
     def test_who_may_pre_register(self):
-        self.opening("alg-p2", "Alg-p2-01", "s1")
-        self.opening("pmo-p2", "PMO-p2-01", "s-entry")
+        self.opening("alg-p1", "Alg-p1", "s1")
+        self.opening("pmo-p1", "PMO-p1", "s-entry")
         self.assertEqual(self.route("expect", "Alg-p0-01", "--role", "alg-p0", "--desk", "d1", sid="s1")[0], 0)
         self.assertEqual(self.route("expect", "Quality-p0-01", "--role", "quality-p0", "--desk", "d2", sid="s1")[0], 1)
-        self.assertEqual(self.route("expect", "PMO-p0-01", "--role", "pmo-scribe", "--desk", "d3", sid="s1")[0], 1)
+        self.assertEqual(self.route("expect", "PMO-p0-ledger", "--role", "pmo-scribe", "--desk", "d3", sid="s1")[0], 1)
         cmd = "python3.12 -I %s expect Quality-p0-01 --role quality-p0 --desk d2" % self.P
         self.assertEqual(self.bash("s1", cmd)[1].get("permissionDecision"), "deny")
-        self.assertEqual(self.route("expect", "PMO-p0-01", "--role", "pmo-scribe", "--desk", "d3", sid="s-entry")[0], 0)
+        self.assertEqual(self.route("expect", "PMO-p0-ledger", "--role", "pmo-scribe", "--desk", "d3", sid="s-entry")[0], 0)
         self.assertEqual(self.route("expect", "Rnd-p0-01", "--role", "rnd-p0", "--desk", "d4", sid="s-researcher")[0], 0)
         self.assertEqual(self.route("expect", "Rnd-p0-01", "--role", "alg-p0", "--desk", "d5", sid="s-researcher")[0], 1)
-        self.assertEqual(sorted(p["name"] for p in self.pool()["permits"]), ["Alg-p0-01", "PMO-p0-01", "RnD-p0-01"])   # canonical case
+        self.assertEqual(sorted(p["name"] for p in self.pool()["permits"]), ["Alg-p0-01", "PMO-p0-ledger", "RnD-p0-01"])   # canonical case
 
     def test_desktop_id_in_the_hook_promotes_at_once(self):
-        self.opening("alg-p2", "Alg-p2-01", "s1")
+        self.opening("alg-p1", "Alg-p1", "s1")
         self.route("expect", "Alg-p0-01", "--role", "alg-p0", "--desk", "d1", sid="s1")
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s5", "source": "startup"}, desk="d1")
         self.assertIn("本会话是 Alg-p0-01", out.get("additionalContext", ""))
@@ -2545,7 +2580,7 @@ class PoolClaimTest(PoolProjectCase):
         self.assertIn("已认领", text)
 
     def test_two_step_claim_without_a_desktop_id_in_the_hook(self):
-        self.opening("alg-p2", "Alg-p2-01", "s1")
+        self.opening("alg-p1", "Alg-p1", "s1")
         self.route("expect", "Alg-p0-01", "--role", "alg-p0", "--desk", "d1", sid="s1")
         cmd = "python3.12 -I %s claim alg-p0 --as Alg-p0-01" % self.P
         _, out = self.bash("s6", cmd)
@@ -2565,12 +2600,12 @@ class PoolClaimTest(PoolProjectCase):
 
     def test_one_entry_and_one_scribe(self):
         self.started_pool()
-        code, text = self.route("expect", "PMO-p0-01", "--role", "pmo-scribe", "--desk", "d-x", sid="s-researcher")
+        code, text = self.route("expect", "PMO-p0-ledger", "--role", "pmo-scribe", "--desk", "d-x", sid="s-researcher")
         self.assertEqual(code, 1)
-        _, out = self.opening("pmo-p2", "PMO-p2-01", "s-second")
+        _, out = self.opening("pmo-p1", "PMO-p1", "s-second")
         self.assertIn("上限", out.get("additionalContext", ""))
         pl = self.pool()
-        self.assertEqual([c["name"] for c in pl["claims"].values() if c["role"] == "pmo-scribe"], ["PMO-p0-01"])
+        self.assertEqual([c["name"] for c in pl["claims"].values() if c["role"] == "pmo-scribe"], ["PMO-p0-ledger"])
 
     def test_release_leaves_a_tombstone(self):
         self.started_pool()
@@ -2600,23 +2635,23 @@ class PoolClaimTest(PoolProjectCase):
         # without a desktop ID: one SessionEnd(clear) in the last minute pairs with the next SessionStart(clear)
         self.hook("instances.py", {"hook_event_name": "SessionEnd", "session_id": "s-entry", "reason": "clear"})
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-entry2", "source": "clear"})
-        self.assertEqual(self.pool()["claims"]["PMO-p2-01"]["session_id"], "s-entry2")
+        self.assertEqual(self.pool()["claims"]["PMO-p1"]["session_id"], "s-entry2")
         self.assertIn("上下文清空后接回认领", out.get("additionalContext", ""))
         # two at once: neither is guessed
         for sid in ("s-q2", "s-q1"):
             self.hook("instances.py", {"hook_event_name": "SessionEnd", "session_id": sid, "reason": "clear"})
         self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-new", "source": "clear"})
         pl = self.pool()
-        self.assertEqual((pl["claims"]["Quality-p2-01"]["session_id"], pl["claims"]["Quality-p0-01"]["session_id"]),
+        self.assertEqual((pl["claims"]["Quality-p1"]["session_id"], pl["claims"]["Quality-p0-01"]["session_id"]),
                          ("s-q2", "s-q1"))
 
 
 class PoolOpenedByTheResearcherTest(PoolProjectCase):
     """Sessions pre-registered by the session that opens them: the researcher's own session the
-    +2s, a +2 its +1s, a +1 its +0s."""
+    +1s, a +1 its +0s."""
 
-    OPENED = (("PMO-p0-01", "pmo-scribe", "s-scribe"), ("PMO-p2-01", "pmo-p2", "s-entry"),
-              ("Alg-p2-01", "alg-p2", "s-alg2"), ("Alg-p0-01", "alg-p0", "s-alg0"))
+    OPENED = (("PMO-p0-ledger", "pmo-scribe", "s-scribe"), ("PMO-p1", "pmo-p1", "s-entry"),
+              ("Alg-p1", "alg-p1", "s-alg2"), ("Alg-p0-01", "alg-p0", "s-alg0"))
 
     def open_all(self):
         outs = {}
@@ -2634,32 +2669,32 @@ class PoolOpenedByTheResearcherTest(PoolProjectCase):
 
     def test_pre_registering_twice_is_fine(self):
         self.open_all()
-        code, out = self.route("expect", "Alg-p2-01", "--role", "alg-p2", "--desk", "d-s-alg2", sid="s-researcher")
+        code, out = self.route("expect", "Alg-p1", "--role", "alg-p1", "--desk", "d-s-alg2", sid="s-researcher")
         self.assertEqual(code, 0, out)                       # the opening run again after an interruption
         self.assertIn("不用再预登记", out)
-        code, out = self.route("expect", "Alg-p2-01", "--role", "alg-p2", "--desk", "d-other", sid="s-researcher")
+        code, out = self.route("expect", "Alg-p1", "--role", "alg-p1", "--desk", "d-other", sid="s-researcher")
         self.assertEqual(code, 1, out)
         self.assertIn("已经被认领", out)
 
     def test_a_p2_may_claim_through_its_opening_line_before_or_after(self):
         plan = json.loads(self.read(".claude/solo-lab/pool-plan.json"))
         briefs = {t["name"]: t["brief"] for t in plan["top"]}
-        self.prompt("s-alg2", briefs["Alg-p2-01"], desk="d-s-alg2")           # the hook reads the opening line
-        self.assertIn("Alg-p2-01", self.pool()["claims"])
-        code, out = self.route("expect", "Alg-p2-01", "--role", "alg-p2", "--desk", "d-s-alg2", sid="s-researcher")
+        self.prompt("s-alg2", briefs["Alg-p1"], desk="d-s-alg2")           # the hook reads the opening line
+        self.assertIn("Alg-p1", self.pool()["claims"])
+        code, out = self.route("expect", "Alg-p1", "--role", "alg-p1", "--desk", "d-s-alg2", sid="s-researcher")
         self.assertEqual(code, 0, out)
         self.assertIn("不用再预登记", out)
-        code, out = self.route("expect", "RnD-p2-01", "--role", "rnd-p2", "--desk", "d-s-rnd2", sid="s-researcher")
+        code, out = self.route("expect", "RnD-p1", "--role", "rnd-p1", "--desk", "d-s-rnd2", sid="s-researcher")
         self.assertEqual(code, 0, out)                                         # the other order: pre-registered first
-        self.prompt("s-rnd2", briefs["RnD-p2-01"], desk="d-s-rnd2")
-        self.assertIn("RnD-p2-01", self.pool()["claims"])
+        self.prompt("s-rnd2", briefs["RnD-p1"], desk="d-s-rnd2")
+        self.assertIn("RnD-p1", self.pool()["claims"])
         self.assertEqual(self.pool()["permits"], [])                           # nothing is left waiting
 
     def test_each_level_opens_the_next(self):
-        """A +2 pre-registers and opens its +0s: a session nests under the one that opened it. A +0 opens nothing."""
-        self.route("expect", "Alg-p2-01", "--role", "alg-p2", "--desk", "d-alg2", sid="s-researcher")
-        self.claim("alg-p2", "Alg-p2-01", "s-alg2", desk="d-alg2")
-        _, out = self.route("claim", "alg-p2", "--as", "Alg-p2-01", "--wait", "0", sid="s-alg2", desk="d-alg2")
+        """A +1 pre-registers and opens its +0s: a session nests under the one that opened it. A +0 opens nothing."""
+        self.route("expect", "Alg-p1", "--role", "alg-p1", "--desk", "d-alg2", sid="s-researcher")
+        self.claim("alg-p1", "Alg-p1", "s-alg2", desk="d-alg2")
+        _, out = self.route("claim", "alg-p1", "--as", "Alg-p1", "--wait", "0", sid="s-alg2", desk="d-alg2")
         self.assertIn("- Alg-p0-01：name=alg-p0-01", out)
         _, verdict = self.bash("s-alg2", "python3.12 -I %s expect Alg-p0-01 --role alg-p0 --desk d-alg0" % self.P, desk="d-alg2")
         self.assertNotEqual(verdict.get("permissionDecision"), "deny")
@@ -2667,34 +2702,34 @@ class PoolOpenedByTheResearcherTest(PoolProjectCase):
         self.assertEqual(code, 0, out)
         code, out = self.claim("alg-p0", "Alg-p0-01", "s-alg0", desk="d-alg0")
         self.assertEqual(code, 0, out)
-        self.assertNotIn("补位用", out)                                        # a +0 opens nothing: its +2 does
+        self.assertNotIn("补位用", out)                                        # a +0 opens nothing: its +1 does
         for role, name in (("rnd-p0", "RnD-p0-01"), ("alg-p0", "Alg-p0-02")):   # another sequence; its own rank
             _, verdict = self.bash("s-alg0", "python3.12 -I %s expect %s --role %s --desk d-x" % (self.P, name, role), desk="d-alg0")
             self.assertEqual(verdict.get("permissionDecision"), "deny", name)
             self.assertEqual(self.route("expect", name, "--role", role, "--desk", "d-x", sid="s-alg0")[0], 1, name)
-        self.assertEqual(sorted(self.pool()["claims"]), ["Alg-p0-01", "Alg-p2-01"])
+        self.assertEqual(sorted(self.pool()["claims"]), ["Alg-p0-01", "Alg-p1"])
 
     def test_the_router_opens_the_scribe_with_its_first_writes(self):
         plan = json.loads(self.read(".claude/solo-lab/pool-plan.json"))
         self.prompt("s-entry", plan["top"][0]["brief"], desk="d-entry")        # the entry claims through its opening line
-        _, out = self.route("claim", "pmo-p2", "--as", "PMO-p2-01", "--wait", "0", sid="s-entry", desk="d-entry")
-        self.assertIn("- PMO-p1-01：", out)
-        self.assertNotIn("- PMO-p0-01：", out)
-        self.route("expect", "PMO-p1-01", "--role", "pmo-router", "--desk", "d-router", sid="s-entry")
-        _, out = self.claim("pmo-router", "PMO-p1-01", "s-router", desk="d-router")
-        row = out[out.index("- PMO-p0-01："):]
+        _, out = self.route("claim", "pmo-p1", "--as", "PMO-p1", "--wait", "0", sid="s-entry", desk="d-entry")
+        self.assertIn("- PMO-p0-router：", out)
+        self.assertNotIn("- PMO-p0-ledger：", out)
+        self.route("expect", "PMO-p0-router", "--role", "pmo-router", "--desk", "d-router", sid="s-entry")
+        _, out = self.claim("pmo-router", "PMO-p0-router", "s-router", desk="d-router")
+        row = out[out.index("- PMO-p0-ledger："):]
         self.assertIn("docs.py ensure-node all --apply", row)                # nothing is registered yet
         self.assertNotIn("就结束本轮，等委托消息", row.split("background：")[0])
-        self.assertEqual(self.route("expect", "PMO-p0-01", "--role", "pmo-scribe", "--desk", "d-scribe", sid="s-router")[0], 0)
+        self.assertEqual(self.route("expect", "PMO-p0-ledger", "--role", "pmo-scribe", "--desk", "d-scribe", sid="s-router")[0], 0)
         with open(os.path.join(self.tmp, "packages", "sent", "7160000001.json"), "w", encoding="utf-8") as f:
             json.dump({"status": "registered", "draft": "packages/drafts/pmo/x.md"}, f)
-        _, out = self.route("claim", "pmo-router", "--as", "PMO-p1-01", "--wait", "0", sid="s-router", desk="d-router")
+        _, out = self.route("claim", "pmo-router", "--as", "PMO-p0-router", "--wait", "0", sid="s-router", desk="d-router")
         self.assertNotIn("ensure-node all --apply", out)                       # a later scribe gets the plain opening
 
     def test_a_p2_is_told_its_title_and_section(self):
         self.open_all()
         label = json.loads(self.read(".claude/solo-lab/pool-plan.json"))["label"]
-        code, out = self.route("claim", "alg-p2", "--as", "Alg-p2-01", "--wait", "0", sid="s-alg2", desk="d-s-alg2")
+        code, out = self.route("claim", "alg-p1", "--as", "Alg-p1", "--wait", "0", sid="s-alg2", desk="d-s-alg2")
         self.assertEqual(code, 0, out)
         self.assertIn("title=“[%s] Alg-p0-01”" % label, out)
         self.assertIn("归入侧栏分区“%s”" % label, out)
@@ -2755,37 +2790,36 @@ class PoolOpenedByTheResearcherTest(PoolProjectCase):
 
 
 class PoolTreeAfterOpeningTest(PoolProjectCase):
-    """Sessions opened after the pool nest the same way: a +2 opens its +0s, and a +0 opens nothing."""
+    """Sessions opened after the pool nest the same way: a +1 opens its +0s, and a +0 opens nothing."""
 
     POOL = {"p0": 1, "later": ["liaison"], "max_sessions": 30}
 
     def test_a_sequence_opened_later_nests_too(self):
-        self.route("expect", "Liaison-p2-01", "--role", "liaison-p2", "--desk", "d-l2", sid="s-researcher")
-        _, out = self.claim("liaison-p2", "Liaison-p2-01", "s-l2", desk="d-l2")
-        self.assertIn("本序列开池时只开 +2", out)
+        self.route("expect", "Liaison-p1", "--role", "liaison-p1", "--desk", "d-l2", sid="s-researcher")
+        _, out = self.claim("liaison-p1", "Liaison-p1", "s-l2", desk="d-l2")
+        self.assertIn("本序列开池时只开 +1", out)
         row = out[out.index("- Liaison-p0-01："):]                              # not in the plan, and still told what to open
         self.assertIn("（补位用）", row.split("\n")[0])
         self.assertEqual(self.route("expect", "Liaison-p0-01", "--role", "liaison-p0", "--desk", "d-l0", sid="s-l2")[0], 0)
         self.assertEqual(self.claim("liaison-p0", "Liaison-p0-01", "s-l0", desk="d-l0")[0], 0)
-        _, out = self.route("claim", "liaison-p2", "--as", "Liaison-p2-01", "--wait", "0", sid="s-l2", desk="d-l2")
+        _, out = self.route("claim", "liaison-p1", "--as", "Liaison-p1", "--wait", "0", sid="s-l2", desk="d-l2")
         row = out[out.index("- Liaison-p0-02："):]                              # the next free slot
         self.assertIn("（补位用）", row.split("\n")[0])
         self.assertNotIn("- Liaison-p0-01：", out)
 
     def test_a_p0_opens_nothing_and_asks_its_p2(self):
-        self.route("expect", "Alg-p2-01", "--role", "alg-p2", "--desk", "d-a2", sid="s-researcher")
-        self.claim("alg-p2", "Alg-p2-01", "s-a2", desk="d-a2")
+        self.route("expect", "Alg-p1", "--role", "alg-p1", "--desk", "d-a2", sid="s-researcher")
+        self.claim("alg-p1", "Alg-p1", "s-a2", desk="d-a2")
         self.assertEqual(self.route("expect", "Alg-p0-01", "--role", "alg-p0", "--desk", "d-s-a0", sid="s-a2")[0], 0)
         code, out = self.claim("alg-p0", "Alg-p0-01", "s-a0", desk="d-s-a0")
         self.assertEqual(code, 0, out)
-        self.assertNotIn("- Alg-p0-02：", out)                                  # 1.1.0: no +1; a +0 is opened by its +2, never by a +0
+        self.assertNotIn("- Alg-p0-02：", out)                                  # 1.1.0: no middle rank; a +0 is opened by its +1, never by a +0
         self.assertEqual(self.route("expect", "Alg-p0-02", "--role", "alg-p0", "--desk", "d-a0b", sid="s-a0")[0], 1)
-        _, out = self.route("claim", "alg-p2", "--as", "Alg-p2-01", "--wait", "0", sid="s-a2", desk="d-a2")
+        _, out = self.route("claim", "alg-p1", "--as", "Alg-p1", "--wait", "0", sid="s-a2", desk="d-a2")
         row = out[out.index("- Alg-p0-02："):]
         self.assertIn("（补位用）", row.split("\n")[0])
-        code, out = self.route("refill", "alg-p0", sid="s-a0")                  # the +0 that needs hands asks; its +2 proposes the card
-        self.assertIn("这个角色由本序列 +2开：给 Alg-p2-01 发一条【通知】，请它为这条补位请求提启动卡", out)
-        self.assertNotIn("+1", out)
+        code, out = self.route("refill", "alg-p0", sid="s-a0")                  # the +0 that needs hands asks; its +1 proposes the card
+        self.assertIn("这个角色由本序列 +1开：给 Alg-p1 发一条【通知】，请它为这条补位请求提启动卡", out)
 
 
 class DefaultModelTest(PoolProjectCase):
@@ -2803,7 +2837,7 @@ class DefaultModelTest(PoolProjectCase):
             plan = setup_core.build_plan(self.tmp, self.task_path, None)
             setup.apply_plan(self.tmp, plan, setup_core.actions_for(self.tmp, plan))
         models = {e["role"]: e["model"] for e in setup_core.plan_entries(json.loads(self.read(".claude/solo-lab/pool-plan.json")))}
-        self.assertEqual(models.pop("pmo-p2"), "fable")
+        self.assertEqual(models.pop("pmo-p1"), "fable")
         self.assertIn("pmo-scribe", models)
         self.assertEqual(set(models.values()), {"opus"})
         out = io.StringIO()
@@ -2819,7 +2853,7 @@ class PoolModelTest(PoolProjectCase):
         super().setUp()
         with open(self.task_path, encoding="utf-8") as f:
             task = json.load(f)
-        task["models"] = dict(task.get("models") or {}, **{"alg-p0": "opus", "alg-p2": "sonnet"})
+        task["models"] = dict(task.get("models") or {}, **{"alg-p0": "opus", "alg-p1": "sonnet"})
         with open(self.task_path, "w", encoding="utf-8") as f:
             json.dump(task, f, ensure_ascii=False)
         with contextlib.redirect_stdout(io.StringIO()):
@@ -2831,39 +2865,39 @@ class PoolModelTest(PoolProjectCase):
         with contextlib.redirect_stdout(out):
             self.assertEqual(pool_cmd.main(["open", "--target", self.tmp]), 0)
         text = out.getvalue()
-        self.assertIn("注意：Alg-p0-01 的模型 opus 高于开它的 Alg-p2-01（sonnet）", text)
+        self.assertIn("注意：Alg-p0-01 的模型 opus 高于开它的 Alg-p1（sonnet）", text)
         self.assertEqual(text.count("注意："), 1)                   # opus under opus, sonnet under opus: nothing to say
         self.assertEqual([setup_core.model_tier(m) for m in ("claude-haiku-5-5", "sonnet", "Opus", "inherit", None)], [0, 1, 2, -1, -1])
 
 
 class PoolBatchTest(PoolProjectCase):
-    """A sequence that opens more below its +2 than a batch has room for."""
+    """A sequence that opens more below its +1 than a batch has room for."""
 
     POOL = {"p0": 5, "later": ["liaison"], "max_sessions": 40}
 
     def test_the_checklist_says_which_sequences_overflow(self):
         plan = json.loads(self.read(".claude/solo-lab/pool-plan.json"))
-        self.assertEqual(plan["batches"], [["PMO-p2-01"], ["Product-p2-01"], ["Alg-p2-01"], ["RnD-p2-01"], ["Infra-p2-01"],
-                                           ["Quality-p2-01", "Liaison-p2-01"]])
+        self.assertEqual(plan["batches"], [["PMO-p1"], ["Product-p1"], ["Alg-p1"], ["RnD-p1"], ["Infra-p1"],
+                                           ["Quality-p1", "Liaison-p1"]])
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(pool_cmd.main(["open", "--target", self.tmp]), 0)
         text = out.getvalue()
         self.assertEqual(plan["rounds"], [[1, 2], [3], [4], [5], [6]])
         self.assertIn("分 6 批、5 轮开", text)
-        self.assertIn("注意：Product-p2-01 下面要开 5 个会话，一批最多容得下 4 个", text)
+        self.assertIn("注意：Product-p1 下面要开 5 个会话，一批最多容得下 4 个", text)
         self.assertEqual(text.count("注意："), 5)                               # not the entry: a router and a scribe
-        self.assertNotIn("注意：PMO-p2-01", text)
+        self.assertNotIn("注意：PMO-p1", text)
 
 
 class PoolP0UnderP2Test(PoolProjectCase):
-    """The +2 opens its +0s itself (1.0.12, where a sequence ran without +1s; 1.1.0: no sequence has one)."""
+    """The +1 opens its +0s itself (1.0.12, where a sequence ran without +1s; 1.1.0: no sequence has one)."""
 
     POOL = {"p0": 2, "later": [], "max_sessions": 30}
 
     def test_the_p2_opens_its_p0s(self):
-        self.route("expect", "Alg-p2-01", "--role", "alg-p2", "--desk", "d-a2", sid="s-researcher")
-        _, out = self.claim("alg-p2", "Alg-p2-01", "s-a2", desk="d-a2")
+        self.route("expect", "Alg-p1", "--role", "alg-p1", "--desk", "d-a2", sid="s-researcher")
+        _, out = self.claim("alg-p1", "Alg-p1", "s-a2", desk="d-a2")
         for name in ("Alg-p0-01", "Alg-p0-02"):
             self.assertIn("- %s：name=%s，" % (name, name.lower()), out)
             self.assertNotIn("（补位用）", out[out.index("- %s：" % name):].split("\n")[0])
@@ -2872,7 +2906,7 @@ class PoolP0UnderP2Test(PoolProjectCase):
         for n, name in enumerate(("Alg-p0-01", "Alg-p0-02")):
             self.assertEqual(self.route("expect", name, "--role", "alg-p0", "--desk", "d-a0%d" % n, sid="s-a2")[0], 0)
             self.assertEqual(self.claim("alg-p0", name, "s-a0%d" % n, desk="d-a0%d" % n)[0], 0)
-        _, out = self.route("claim", "alg-p2", "--as", "Alg-p2-01", "--wait", "0", sid="s-a2", desk="d-a2")
+        _, out = self.route("claim", "alg-p1", "--as", "Alg-p1", "--wait", "0", sid="s-a2", desk="d-a2")
         row = out[out.index("- Alg-p0-03："):]                                  # the planned ones are open: the next is a refill
         self.assertIn("（补位用）", row.split("\n")[0])
 
@@ -2898,12 +2932,12 @@ class PoolGuardTest(PoolProjectCase):
         self.assertIn("工作项、字段、节点和评论只由书记员写", out["permissionDecisionReason"])
         _, out = self.bash("s-scribe", "meegle comment add --work-item-id 1 --content hi")
         self.assertEqual(out.get("permissionDecision"), "allow")
-        self.assertIn("[PMO+0]", out.get("updatedInput", {}).get("command", ""))
+        self.assertIn("[PMO-ledger]", out.get("updatedInput", {}).get("command", ""))
 
     def test_the_scribe_uploads_a_local_file_for_a_link_field(self):
         L = "python3.12 -I .claude/solo-lab/bin/workitem.py"
         update = L + " update 2101 --set 需求文档=@packages/drafts/product/prd.md --apply"
-        confirm = L + " confirm 2101 --by Alg-p2-01 --set 调研文档=@packages/drafts/alg/context.md --apply"
+        confirm = L + " confirm 2101 --by Alg-p1 --set 调研文档=@packages/drafts/alg/context.md --apply"
         for command in (update, confirm):
             self.assertEqual(self.decision("s-scribe", command), "allow", command)
             self.assertEqual(self.decision("s-scribe", command, permission_mode="bypassPermissions"), "allow", command)
@@ -2913,7 +2947,7 @@ class PoolGuardTest(PoolProjectCase):
 
     def test_two_scribe_claims_stop_all_writes(self):
         pl = self.pool()
-        pl["claims"]["PMO-p0-02"] = dict(pl["claims"]["PMO-p0-01"], name="PMO-p0-02", session_id="s-x")
+        pl["claims"]["PMO-p0-02"] = dict(pl["claims"]["PMO-p0-ledger"], name="PMO-p0-02", session_id="s-x")
         self.write_pool(pl)
         self.assertEqual(self.decision("s-scribe", self.W), "deny")
 
@@ -2949,7 +2983,7 @@ class PoolGuardTest(PoolProjectCase):
         for rel in (".claude/state/pool.json", ".claude/hooks/guard.py", ".claude/settings.json", ".claude/agents/alg-p0.md"):
             _, out = self.guard("s-alg2", "Edit", {"file_path": os.path.join(self.tmp, rel)})
             self.assertEqual(out.get("permissionDecision"), "deny", rel)
-        _, out = self.guard("s-alg2", "Edit", {"file_path": os.path.join(self.tmp, ".claude", "agent-memory", "alg-p2", "m.md")})
+        _, out = self.guard("s-alg2", "Edit", {"file_path": os.path.join(self.tmp, ".claude", "agent-memory", "alg-p1", "m.md")})
         self.assertNotEqual(out.get("permissionDecision"), "deny")
 
     def test_no_branch_switching_in_the_shared_directory(self):
@@ -2985,14 +3019,14 @@ class PoolGuardTest(PoolProjectCase):
         self.assertNotEqual(out.get("permissionDecision"), "deny")
 
     def test_a_question_in_a_turn_a_message_started(self):
-        self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 packages/drafts/alg/x.md")
+        self.prompt("s-alg1", "【委托 #2101】Alg-p1 → Alg-p0-01：需求包 packages/drafts/alg/x.md")
         _, out = self.guard("s-alg1", "AskUserQuestion", {"questions": []})
         self.assertEqual(out.get("permissionDecision"), "deny")                       # nobody is there to answer
         self.assertIn("+0 写进交付包", out.get("permissionDecisionReason", ""))       # a +0 writes it into its delivery
-        self.prompt("s-alg2", "【委托 #2105】PMO-p2-01 → Alg-p2-01：需求包 x.md")
+        self.prompt("s-alg2", "【委托 #2105】PMO-p1 → Alg-p1：需求包 x.md")
         _, out = self.guard("s-alg2", "AskUserQuestion", {"questions": []})
         self.assertEqual(out.get("permissionDecision"), "deny")
-        self.assertIn("【需拍板】", out.get("permissionDecisionReason", ""))          # a +2 asks the entry
+        self.assertIn("【需拍板】", out.get("permissionDecisionReason", ""))          # a +1 asks the entry
         self.prompt("s-alg1", "研究员：先停一下")
         _, out = self.guard("s-alg1", "AskUserQuestion", {"questions": []})
         self.assertEqual(out, {})
@@ -3011,7 +3045,7 @@ class AskAndIdentityFlagTest(ProjectCase):
         self.assertIn("终端", out.get("permissionDecisionReason", ""))
 
     def test_reads_without_the_identity_flag_are_reminded(self):
-        _, out = self.guard("alg-p2", "Bash", {"command": "lark-cli docs +fetch --doc https://x.feishu.cn/wiki/A"})
+        _, out = self.guard("alg-p1", "Bash", {"command": "lark-cli docs +fetch --doc https://x.feishu.cn/wiki/A"})
         self.assertNotEqual(out.get("permissionDecision"), "deny")
         self.assertIn("--as user", out.get("additionalContext", ""))
         _, out = self.scribe("Bash", {"command": "lark-cli docs +create --title t --markdown x"})    # 1.1.0: no session writes a
@@ -3060,15 +3094,15 @@ class PoolHookTest(PoolProjectCase):
         self.assertIn("Alg-p0-01", self.pool()["claims"])                  # offline keeps the claim
 
     def test_messages_are_recorded_and_checked(self):
-        _, out = self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 packages/drafts/alg/x.md")
+        _, out = self.prompt("s-alg1", "【委托 #2101】Alg-p1 → Alg-p0-01：需求包 packages/drafts/alg/x.md")
         self.assertIn("没有登记回执", out.get("additionalContext", ""))
         self.assertEqual(self.pool()["owners"]["2101"], "Alg-p0-01")
         events = [json.loads(x) for x in self.read(".claude/logs/dispatch.jsonl").splitlines()]
         msg = [e for e in events if e.get("event") == "message"][-1]
-        self.assertEqual((msg["kind"], msg["id"], msg["from"], msg["to"], msg["seen_by"]), ("assign", "2101", "Alg-p2-01", "Alg-p0-01", "Alg-p0-01"))
+        self.assertEqual((msg["kind"], msg["id"], msg["from"], msg["to"], msg["seen_by"]), ("assign", "2101", "Alg-p1", "Alg-p0-01", "Alg-p0-01"))
         with open(os.path.join(self.tmp, "packages", "sent", "2102.json"), "w", encoding="utf-8") as f:
             json.dump({"work_item_id": "2102"}, f)
-        _, out = self.prompt("s-alg1", "【委托 #2102】Alg-p2-01 → Alg-p0-01：需求包 x.md")
+        _, out = self.prompt("s-alg1", "【委托 #2102】Alg-p1 → Alg-p0-01：需求包 x.md")
         self.assertNotIn("没有登记回执", out.get("additionalContext", ""))
         _, out = self.prompt("s-alg0", "【委托 #2102】Alg-p0-01 → Alg-p0-02：需求包 x.md")
         self.assertIn("会话名：", out.get("additionalContext", ""))
@@ -3076,15 +3110,15 @@ class PoolHookTest(PoolProjectCase):
         self.assertNotIn("会话名：", out.get("additionalContext", "").split("你是 ")[0])
 
     def test_the_dispatch_graph_is_a_reminder(self):
-        _, out = self.prompt("s-q2", "【委托 #2103】Alg-p0-01 → Quality-p2-01：送审包 x.md")
+        _, out = self.prompt("s-q2", "【委托 #2103】Alg-p0-01 → Quality-p1：送审包 x.md")
         self.assertIn("派发图", out.get("additionalContext", ""))
         for sid, text in (("s-alg1", "【交付 #2102】Alg-p0-02 → Alg-p0-01：交付包 y.md"),
-                          ("s-scribe", "【登记请求】Alg-p0-02 → PMO-p0-01：草稿 x.md"),
-                          ("s-entry", "【送审 #2102】Alg-p0-02 → PMO-p2-01：送审包 z.md")):
+                          ("s-scribe", "【登记请求】Alg-p0-02 → PMO-p0-ledger：草稿 x.md"),
+                          ("s-entry", "【送审 #2102】Alg-p0-02 → PMO-p1：送审包 z.md")):
             _, out = self.prompt(sid, text)
             self.assertNotIn("派发图", out.get("additionalContext", ""), text)
-        self.prompt("s-alg1", "【委托 #2104】Alg-p2-01 → Alg-p0-01：需求包 x.md")
-        _, out = self.prompt("s-alg2", "【交付 #2104】Alg-p0-02 → Alg-p2-01：交付包 y.md")
+        self.prompt("s-alg1", "【委托 #2104】Alg-p1 → Alg-p0-01：需求包 x.md")
+        _, out = self.prompt("s-alg2", "【交付 #2104】Alg-p0-02 → Alg-p1：交付包 y.md")
         self.assertIn("负责会话是 Alg-p0-01", out.get("additionalContext", ""))
 
     def test_compaction_summary_is_kept(self):
@@ -3093,25 +3127,25 @@ class PoolHookTest(PoolProjectCase):
         p = subprocess.run([sys.executable, "-I", "-B", os.path.join(self.hooks, "instances.py")], input=json.dumps(data),
                            capture_output=True, text=True, env=self.env())       # what it prints is plain text (1.0.6)
         self.assertEqual((p.returncode, p.stderr), (0, ""))
-        rec = json.loads(self.read(".claude/logs/compact/Alg-p2-01.jsonl").splitlines()[-1])
+        rec = json.loads(self.read(".claude/logs/compact/Alg-p1.jsonl").splitlines()[-1])
         self.assertEqual(rec["summary"], "在等 #2101 的交付")
 
     def test_open_items_are_injected_after_compaction(self):
-        self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md")
+        self.prompt("s-alg1", "【委托 #2101】Alg-p1 → Alg-p0-01：需求包 x.md")
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-alg2", "source": "compact"})
         self.assertIn("#2101→Alg-p0-01", out.get("additionalContext", ""))
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-alg1", "source": "compact"})
-        self.assertIn("#2101（交付给 Alg-p2-01）", out.get("additionalContext", ""))
-        self.prompt("s-alg1", "【委托 #2102】Alg-p2-01 → Alg-p0-01：需求包 z.md")       # the items of one session are written together
+        self.assertIn("#2101（交付给 Alg-p1）", out.get("additionalContext", ""))
+        self.prompt("s-alg1", "【委托 #2102】Alg-p1 → Alg-p0-01：需求包 z.md")       # the items of one session are written together
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-alg2", "source": "compact"})
         self.assertIn("未了事项：委托出去还没交付：#2101、#2102→Alg-p0-01。", out.get("additionalContext", ""))
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-alg1", "source": "compact"})
-        self.assertIn("未了事项：还欠交付：#2101、#2102（交付给 Alg-p2-01）。", out.get("additionalContext", ""))
+        self.assertIn("未了事项：还欠交付：#2101、#2102（交付给 Alg-p1）。", out.get("additionalContext", ""))
         self.assertEqual(pool_lib.items_text([("1", "A"), ("2", "B"), ("3", "A")], "%s→%s", "另有 %d 条"), "#1、#3→A；#2→B")
         many = [(str(i), "A") for i in range(pool_lib.ITEMS_SHOWN + 2)]
         self.assertTrue(pool_lib.items_text(many, "%s→%s", "另有 %d 条").endswith("#%d→A；另有 2 条" % (pool_lib.ITEMS_SHOWN - 1)))
         for item in ("2101", "2102"):
-            self.prompt("s-alg2", "【交付 #%s】Alg-p0-01 → Alg-p2-01：交付包 y.md" % item)
+            self.prompt("s-alg2", "【交付 #%s】Alg-p0-01 → Alg-p1：交付包 y.md" % item)
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-alg2", "source": "compact"})
         self.assertIn("未了事项：无", out.get("additionalContext", ""))
 
@@ -3129,7 +3163,7 @@ class PoolInboxTest(PoolProjectCase):
         self.assertNotIn("规格 v3", out.get("additionalContext", ""))
         _, out = self.prompt("s-alg1", "继续")
         self.assertIn("规格 v3 已签字", out.get("additionalContext", ""))
-        self.assertIn("来自 PMO-p2-01", out.get("additionalContext", ""))
+        self.assertIn("来自 PMO-p1", out.get("additionalContext", ""))
         _, out = self.prompt("s-alg1", "继续")
         self.assertNotIn("规格 v3 已签字", out.get("additionalContext", ""))
         pool_lib.append_inbox(self.tmp, "feishu", {"id": "m1", "ts": "2026-11-03T08:00:00+08:00", "from": "研究员（飞书私聊）",
@@ -3173,12 +3207,12 @@ class PoolRouteTest(PoolProjectCase):
         self.assertIn("已到上限 1", text)
 
     def test_a_task_without_a_work_item_goes_by_its_number(self):
-        """1.1.0: what a +1 hands to a +0 has no work item. It goes by <the item it belongs to>-<n> wherever a work
+        """1.1.0: a closed task handed to a +0 has no work item. It goes by <the item it belongs to>-<n> wherever a work
         item's ID goes: the header of a message, the +0's work name, the receipt, the table of who holds what."""
         policy = json.loads(self.read(".claude/hooks/policy.json"))
         msg = pool_lib.parse_message(policy, "【委托 #2101-3】Alg-p0-01 → Alg-p0-02：需求包 x.md\n会话名：Alg-p0-2101-3")
         self.assertEqual((msg["kind"], msg["id"], msg["p0_name"]), ("assign", "2101-3", "Alg-p0-2101-3"))
-        self.assertEqual(pool_lib.parse_message(policy, "【交付 #2101-2103】Alg-p0-01 → Alg-p2-01")["id"], "2101")   # a range of items, not a number
+        self.assertEqual(pool_lib.parse_message(policy, "【交付 #2101-2103】Alg-p0-01 → Alg-p1")["id"], "2101")   # a range of items, not a number
         self.assertEqual(pool_lib.parse_message(policy, "【登记回执 #2140 / #2101-3】")["ids"], ["2140", "2101-3"])
         self.assertEqual([pool_lib.work_item_of(n) for n in ("Alg-p0-2101-3", "Alg-p0-2101", "Alg-p0-02", "Alg-p0-01")],
                          ["2101-3", "2101", None, None])
@@ -3211,7 +3245,7 @@ class PoolRouteTest(PoolProjectCase):
         self.assertEqual(pool_lib.load(self.tmp)[0]["owners"].get("2101-3"), "Alg-p0-02")
         _, out = self.prompt("s-alg0", "【委托 #2101-9】Alg-p0-01 → Alg-p0-02：需求包 y.md\n会话名：Alg-p0-2101-9")
         self.assertIn("#2101-9 在 packages/sent/ 里没有回执；这是没建工作项的任务，派活的会话要先运行 docs.py upload 取得编号", out.get("additionalContext", ""))
-        # what the +1 has still to hand out: from the receipts and the dispatch log alone, offline too
+        # what the session has still to hand out: from the receipts and the dispatch log alone, offline too
         code, text = self.route("--offline", "pool", "--queue", "Alg-p0-01", sid="s-alg1")
         self.assertEqual(code, 0, text)
         self.assertIn("- 还没派出去 #2101-4 补一组对照（没建工作项的任务：直接给 +0 发【委托 #2101-4】）", text)
@@ -3219,7 +3253,7 @@ class PoolRouteTest(PoolProjectCase):
         self.assertNotIn("#2101-5 ", text)                                              # accepted: over
 
     def test_owner_first_and_focus_skipped(self):
-        self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md")
+        self.prompt("s-alg1", "【委托 #2101】Alg-p1 → Alg-p0-01：需求包 x.md")
         self.set_status("s-alg1", "idle")
         _, text = self.route("pool", "--role", "alg-p0", "--item", "2101", sid="s-alg2")
         self.assertIn("它是 #2101 的负责会话", text)
@@ -3236,24 +3270,24 @@ class PoolRouteTest(PoolProjectCase):
         self.prompt("s-alg0", "继续", permission_mode="auto")
         self.prompt("s-alg2", "继续", permission_mode="bypassPermissions")
         _, text = self.route("pool", sid="s-entry")
-        self.assertIn("Alg-p2-01 的权限模式和池里多数会话不是一类", text)
+        self.assertIn("Alg-p1 的权限模式和池里多数会话不是一类", text)
 
     def test_queue_recover_watch_refill_audit(self):
         self.set_status("s-alg1", "idle")
-        code, text = self.route("--offline", "pool", "--queue", "Alg-p2-01", sid="s-alg2")
+        code, text = self.route("--offline", "pool", "--queue", "Alg-p1", sid="s-alg2")
         self.assertEqual(code, 0)
         self.assertIn("Alg-p0-01", text)
-        self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md")
+        self.prompt("s-alg1", "【委托 #2101】Alg-p1 → Alg-p0-01：需求包 x.md")
         self.set_status("s-alg0", "busy")
         code, text = self.route("pool", "--recover", sid="s-entry")
-        self.assertIn("给 Alg-p2-01 发消息【通知 #2101】", text)
+        self.assertIn("给 Alg-p1 发消息【通知 #2101】", text)
         self.assertIn("Alg-p0-02：在忙", text)
         code, text = self.route("pool", "--watch", "--once", sid="s-entry")
         self.assertEqual(code, 0)
         self.assertIn("Alg-p0-01", text)
         self.assertEqual(self.route("refill", "alg-p0", "--count", "2", sid="s-alg2")[0], 0)
         self.assertEqual(self.pool()["refills"][-1]["role"], "alg-p0")
-        self.assertIn("补位请求", self.read("inbox/PMO-p2-01.jsonl"))
+        self.assertIn("补位请求", self.read("inbox/PMO-p1.jsonl"))
         self.guard("s-alg1", "Write", {"file_path": os.path.join(self.tmp, "packages", "drafts", "quality", "x.md")})
         code, text = self.route("audit", sid="s-entry")
         self.assertIn("- Alg-p0-01：", text.split("软规则命中", 1)[1].split("其他 agent 会话叫醒的轮次", 1)[0])
@@ -3266,7 +3300,7 @@ class PoolRouteTest(PoolProjectCase):
         read; nothing else in the file touched."""
         with pool_lib.locked(self.tmp) as pl:
             pl["owners"].update({"2101": "Alg-p0-02", "2102": "Alg-p0-02", "2103": "Alg-p0-01"})
-            pl["refills"].append({"role": "alg-p0", "count": 1, "by": "Alg-p2-01", "at": "2026-11-19T10:00:00-05:00"})
+            pl["refills"].append({"role": "alg-p0", "count": 1, "by": "Alg-p1", "at": "2026-11-19T10:00:00-05:00"})
         before = self.pool()
         states = {"2101": "归档", "2103": "已终止"}                       # the rest are still worked on
 
@@ -3317,10 +3351,10 @@ class PoolRouteTest(PoolProjectCase):
 
     def test_a_refill_gets_a_start_card_and_the_session_it_opens_claims_under_its_name(self):
         """1.0.10: a refill request was written down and nothing more; the researcher had to find the session that
-        opens the role and say 补位 there. Now that session, the +2, proposes a start card in the turn it records
+        opens the role and say 补位 there. Now that session, the +1, proposes a start card in the turn it records
         the request. A card has no session until it is clicked, so the permit waits under the session's name
         (expect --card) and the session's own claim binds it."""
-        code, text = self.route("refill", "alg-p0", sid="s-alg2")                  # the +2 opens its own +0s
+        code, text = self.route("refill", "alg-p0", sid="s-alg2")                  # the +1 opens its own +0s
         self.assertEqual(code, 0)
         self.assertIn("本轮接着提一张启动卡", text)
         self.assertIn("不会自动开", text)
@@ -3330,12 +3364,12 @@ class PoolRouteTest(PoolProjectCase):
         self.assertIn("等研究员点启动卡", text)
         permit = next(p for p in self.pool()["permits"] if p["name"] == "Alg-p0-03")
         self.assertEqual((permit["via"], permit["desk"], permit["session_id"]), ("card", None, None))
-        self.assertEqual(self.pool()["refills"][0]["card_in"], "Alg-p2-01")
-        self.assertIn("启动卡在 Alg-p2-01 的会话里（桌面会话 ", self.route("pool", sid="s-entry")[1])
+        self.assertEqual(self.pool()["refills"][0]["card_in"], "Alg-p1")
+        self.assertIn("启动卡在 Alg-p1 的会话里（桌面会话 ", self.route("pool", sid="s-entry")[1])
         code, out = self.claim("alg-p0", "Alg-p0-03", "s-new", desk="d-new")       # the card was clicked: a session nobody knew
         self.assertEqual(code, 0, out)
         claim = self.pool()["claims"]["Alg-p0-03"]
-        self.assertEqual((claim["session_id"], claim["desk"], claim["by"]), ("s-new", "d-new", "Alg-p2-01"))
+        self.assertEqual((claim["session_id"], claim["desk"], claim["by"]), ("s-new", "d-new", "Alg-p1"))
         self.assertEqual(self.pool()["refills"], [])                               # the request is met
         self.assertFalse([p for p in self.pool()["permits"] if p["name"] == "Alg-p0-03"])
     def test_work_items_to_terminate_are_one_thing_on_the_list(self):
@@ -3374,17 +3408,17 @@ class PoolRouteTest(PoolProjectCase):
         self.assertIn("不用为它写决策包，也不要去推它的节点", text)
         run(todo.todo_cmd, spec, self.tmp, "add", None, "刚建出来就发现重复", "2102", None, None, "delete", sid="s-alg1")
         code, text = run(todo.todo_cmd, spec, self.tmp, "add", None, "再报一次", "2101", None, None, "terminate", sid="s-alg1")
-        self.assertIn("#2101 已经在研究员任务清单里了（第 1 条，Alg-p2-01 提），没有再记", text)
+        self.assertIn("#2101 已经在研究员任务清单里了（第 1 条，Alg-p1 提），没有再记", text)
         self.assertEqual(run(todo.todo_cmd, spec, self.tmp, "add", None, "x", None, None, None, "terminate")[0], 1)   # no work item named
         todos = self.pool()["todos"]
         self.assertEqual([(t["n"], t["item"], t["kind"], t["title"]) for t in todos],
                          [(1, "2101", "terminate", "需求包 2101"), (2, "2102", "delete", "需求包 2102")])
-        self.assertIn("飞书项目里的 #2101 等研究员终止（建错了，关系写反）。这类工作项不管有几条，合成一件事跟研究员说", self.read("inbox/PMO-p2-01.jsonl"))
+        self.assertIn("飞书项目里的 #2101 等研究员终止（建错了，关系写反）。这类工作项不管有几条，合成一件事跟研究员说", self.read("inbox/PMO-p1.jsonl"))
         with pool_lib.locked(self.tmp) as pl:
             pl["owners"].update({"2102": "Alg-p0-02", "2103": "Alg-p0-01"})
         listed = self.route("pool", sid="s-entry")[1]
         self.assertIn("- 研究员任务·飞书项目：2 条工作项等研究员在网页上处理，合成一件事跟他说", listed)
-        self.assertIn("  - #2101 终止：需求包 2101；原因：建错了，关系写反（Alg-p2-01 提）；https://project.example/x/same_seq/detail/2101", listed)
+        self.assertIn("  - #2101 终止：需求包 2101；原因：建错了，关系写反（Alg-p1 提）；https://project.example/x/same_seq/detail/2101", listed)
         self.assertIn("  - #2102 删除：需求包 2102；原因：刚建出来就发现重复（Alg-p0-01 提）", listed)
         self.assertEqual(listed.count("研究员任务·飞书项目"), 1)                    # one line for all of them
         code, text = run(pool_cmd.prune_cmd, self.tmp, True)                          # said too early: nothing is done yet
@@ -3418,10 +3452,10 @@ class PoolRouteTest(PoolProjectCase):
         self.route("todo", "add", "--text", "连 VPN", sid="s-alg1")
         todos = self.pool()["todos"]
         self.assertEqual([(t["n"], t["text"], t["item"], t["by"]) for t in todos],
-                         [(1, "恢复集群连接", "2101", "Alg-p2-01"), (2, "连 VPN", None, "Alg-p0-01")])
-        self.assertIn("研究员任务清单 1：恢复集群连接（为 #2101）。研究员来谈时跟在决策清单后面列出，不算决策", self.read("inbox/PMO-p2-01.jsonl"))
+                         [(1, "恢复集群连接", "2101", "Alg-p1"), (2, "连 VPN", None, "Alg-p0-01")])
+        self.assertIn("研究员任务清单 1：恢复集群连接（为 #2101）。研究员来谈时跟在决策清单后面列出，不算决策", self.read("inbox/PMO-p1.jsonl"))
         listed = self.route("pool", sid="s-entry")[1]
-        self.assertIn("- 研究员任务 1：恢复集群连接（Alg-p2-01 提，", listed)
+        self.assertIn("- 研究员任务 1：恢复集群连接（Alg-p1 提，", listed)
         self.assertIn("，为 #2101；做完算数：ssh 能登录）", listed)
         code, text = self.route("todo", "done", "1", "--note", "研究员说连上了", sid="s-entry")
         self.assertEqual(code, 0, text)
@@ -3436,8 +3470,8 @@ class PoolRouteTest(PoolProjectCase):
         self.assertEqual(events, ["todo", "todo", "todo_done", "todo"])
 
     def test_who_proposes_the_card_and_how_long_it_waits(self):
-        code, text = self.route("refill", "alg-p0", sid="s-alg1")                  # a +0 asks: its +2 opens the +0s
-        self.assertIn("给 Alg-p2-01 发一条【通知】，请它为这条补位请求提启动卡", text)
+        code, text = self.route("refill", "alg-p0", sid="s-alg1")                  # a +0 asks: its +1 opens the +0s
+        self.assertIn("给 Alg-p1 发一条【通知】，请它为这条补位请求提启动卡", text)
         self.assertIn("还没有提启动卡", self.route("pool", sid="s-entry")[1])
         code, text = self.route("expect", "Alg-p0-03", "--role", "alg-p0", "--card", "--desk", "d9", sid="s-alg2")
         self.assertEqual(code, 1)
@@ -3503,7 +3537,7 @@ class DispatchGraphTest(unittest.TestCase):
         return spec
 
     def test_validate_catches_graph_mistakes(self):
-        spec = self.spec_with(lambda r, t: r["dispatch"]["assign"].append({"from": "p2", "to": "alg-p9"}))
+        spec = self.spec_with(lambda r, t: r["dispatch"]["assign"].append({"from": "p1", "to": "alg-p9"}))
         self.assertTrue(any("alg-p9" in p for p in spec.validate()))
         spec = self.spec_with(lambda r, t: t["msg"].pop("notice"))
         self.assertTrue(any("notice" in p for p in spec.validate()))
@@ -3512,34 +3546,34 @@ class DispatchGraphTest(unittest.TestCase):
 
     def test_a_rank_stands_for_the_sequences_own_roles(self):
         """1.1.0: a sequence has two ranks and the PMO keeps its router. The router and the scribe are named in the
-        graph; a rank (p2, p0) stands for the sequences' own roles, so the edge +2 → +0 gives the entry no scribe."""
+        graph; a rank (p1, p0) stands for the sequences' own roles, so the edge +1 → +0 gives the entry no scribe."""
         spec = orgspec.OrgSpec()
         seqs = [s for s, _, _ in spec.sequences()]
-        policy = {"agents": {spec.role_name(s, r): {"sequence": s, "rank": r} for s in seqs for r in spec.ranks_of(s)},
+        policy = {"agents": {role: {"sequence": s, "rank": rank} for s in seqs for role, rank in spec.roles_of(s)},
                   "dispatch": spec.rules["dispatch"]}
-        self.assertNotIn("alg-p1", policy["agents"])
-        for kind, a, b, ok in (("assign", "alg-p2", "alg-p0", True), ("report", "alg-p0", "alg-p2", True),
+        self.assertNotIn("alg-p2", policy["agents"])
+        for kind, a, b, ok in (("assign", "alg-p1", "alg-p0", True), ("report", "alg-p0", "alg-p1", True),
                                ("assign", "alg-p0", "alg-p0", True),          # a +0 that holds a 下发 request, to another +0
-                               ("assign", "alg-p0", "rnd-p0", False), ("assign", "alg-p2", "rnd-p0", False),
-                               ("assign", "alg-p2", "rnd-p2", True),          # 跨序列需求
-                               ("assign", "pmo-p2", "pmo-router", True), ("assign", "pmo-router", "pmo-scribe", True),
-                               ("assign", "pmo-p2", "pmo-scribe", False), ("assign", "pmo-scribe", "pmo-scribe", False),
-                               ("assign", "pmo-router", "alg-p2", True), ("assign", "pmo-router", "alg-p0", False),
-                               ("decide", "alg-p2", "pmo-router", True), ("decide", "pmo-router", "pmo-p2", True),
-                               ("decide", "alg-p0", "alg-p2", True)):         # back along the edge it was handed work on
+                               ("assign", "alg-p0", "rnd-p0", False), ("assign", "alg-p1", "rnd-p0", False),
+                               ("assign", "alg-p1", "rnd-p1", True),          # 跨序列需求
+                               ("assign", "pmo-p1", "pmo-router", True), ("assign", "pmo-router", "pmo-scribe", True),
+                               ("assign", "pmo-p1", "pmo-scribe", False), ("assign", "pmo-scribe", "pmo-scribe", False),
+                               ("assign", "pmo-router", "alg-p1", True), ("assign", "pmo-router", "alg-p0", False),
+                               ("decide", "alg-p1", "pmo-router", True), ("decide", "pmo-router", "pmo-p1", True),
+                               ("decide", "alg-p0", "alg-p1", True)):         # back along the edge it was handed work on
             self.assertEqual(pool_lib.kind_allowed(policy, kind, a, b), ok, (kind, a, b))
         for role in ("alg-p0", "pmo-scribe"):
             self.assertEqual(spec.dispatch_targets(role, policy["agents"][role]["sequence"], 0, seqs), [], role)
 
     def test_header_regex(self):
         rx = orgspec.OrgSpec().message_header_re()
-        self.assertEqual(rx.search("【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包").groups(), ("委托", "2101", "Alg-p2-01", "Alg-p0-01"))
-        self.assertEqual(rx.search("【交付 #2101（重发，上一条作废）】Alg-p0-01 -> Alg-p2-01").group(1, 2), ("交付", "2101"))
+        self.assertEqual(rx.search("【委托 #2101】Alg-p1 → Alg-p0-01：需求包").groups(), ("委托", "2101", "Alg-p1", "Alg-p0-01"))
+        self.assertEqual(rx.search("【交付 #2101（重发，上一条作废）】Alg-p0-01 -> Alg-p1").group(1, 2), ("交付", "2101"))
         self.assertIsNone(rx.search("【备注】随便写写"))
 
 
 class CrossSequenceTest(PoolProjectCase):
-    """1.0.12: a request to another sequence starts at the router and then goes between the two +2. Until then
+    """1.0.12: a request to another sequence starts at the router and then goes between the two +1. Until then
     each of its messages passed through the entry: 283 of the 1217 messages a real pool sent in a day, and
     not one reached the router."""
 
@@ -3563,56 +3597,56 @@ class CrossSequenceTest(PoolProjectCase):
     def test_two_p2_talk_to_each_other(self):
         self.receipt("2201")
         resume = self.spec.term("msg", "resume")
-        self.assertNotIn("派发图", self.told("s-q2", "【委托 #2201】Alg-p2-01 → Quality-p2-01：需求包 packages/drafts/alg/x.md"))
-        self.assertEqual(self.pool()["owners"]["2201"], "Quality-p2-01")
-        back = self.told("s-alg2", "【交付 #2201】Quality-p2-01 → Alg-p2-01：交付包 y.md")
+        self.assertNotIn("派发图", self.told("s-q2", "【委托 #2201】Alg-p1 → Quality-p1：需求包 packages/drafts/alg/x.md"))
+        self.assertEqual(self.pool()["owners"]["2201"], "Quality-p1")
+        back = self.told("s-alg2", "【交付 #2201】Quality-p1 → Alg-p1：交付包 y.md")
         self.assertNotIn("派发图", back)
         self.assertNotIn("负责会话是", back)
-        self.assertNotIn("派发图", self.told("s-q2", "【%s #2201】Alg-p2-01 → Quality-p2-01：验收没过，改第 2 条" % resume))
+        self.assertNotIn("派发图", self.told("s-q2", "【%s #2201】Alg-p1 → Quality-p1：验收没过，改第 2 条" % resume))
         self.assertEqual([m["in_graph"] for m in self.messages()[-3:]], [True, True, True])
-        self.assertIn("派发图", self.told("s-q2", "【委托 #2201】Alg-p0-01 → Quality-p2-01：需求包 x.md"))   # a +1 does not reach across
+        self.assertIn("派发图", self.told("s-q2", "【委托 #2201】Alg-p0-01 → Quality-p1：需求包 x.md"))   # a +0 does not reach across
         self.assertIs(self.messages()[-1]["in_graph"], False)
 
     def test_a_p2_hands_work_to_its_own_p0(self):
         self.receipt("2204", kind="same_seq")
-        text = self.told("s-alg0", "【委托 #2204】Alg-p2-01 → Alg-p0-02：需求包 x.md\n会话名：Alg-p0-2204")
+        text = self.told("s-alg0", "【委托 #2204】Alg-p1 → Alg-p0-02：需求包 x.md\n会话名：Alg-p0-2204")
         self.assertNotIn("派发图", text)
         policy = json.loads(self.read(".claude/hooks/policy.json"))
-        self.assertEqual(policy["agents"]["alg-p2"]["spawn"], ["alg-p0"])       # whom it opens is still the hierarchy's
+        self.assertEqual(policy["agents"]["alg-p1"]["spawn"], ["alg-p0"])       # whom it opens is still the hierarchy's
         self.assertEqual(policy["dispatch"]["kinds"]["report"]["along"], ["assign", "direct"])
 
     def test_a_request_is_settled_when_it_is_delivered_to_whoever_asked(self):
-        # the entry passed this one on before 1.0.12; its delivery now goes to the +2 that asked for it
+        # the entry passed this one on before 1.0.12; its delivery now goes to the +1 that asked for it
         self.receipt("2202")
-        self.prompt("s-q2", "【委托 #2202】PMO-p2-01 → Quality-p2-01：需求包 x.md")
-        self.assertEqual(pool_lib.open_items(self.tmp, "PMO-p2-01"), ([("2202", "Quality-p2-01")], []))
-        self.prompt("s-alg2", "【交付 #2202】Quality-p2-01 → Alg-p2-01：交付包 y.md")
-        self.assertEqual(pool_lib.open_items(self.tmp, "PMO-p2-01"), ([], []))
-        self.assertEqual(pool_lib.open_items(self.tmp, "Quality-p2-01"), ([], []))
+        self.prompt("s-q2", "【委托 #2202】PMO-p1 → Quality-p1：需求包 x.md")
+        self.assertEqual(pool_lib.open_items(self.tmp, "PMO-p1"), ([("2202", "Quality-p1")], []))
+        self.prompt("s-alg2", "【交付 #2202】Quality-p1 → Alg-p1：交付包 y.md")
+        self.assertEqual(pool_lib.open_items(self.tmp, "PMO-p1"), ([], []))
+        self.assertEqual(pool_lib.open_items(self.tmp, "Quality-p1"), ([], []))
         # a delivery the graph does not let through settles nothing
-        self.prompt("s-alg1", "【委托 #2203】Alg-p2-01 → Alg-p0-01：需求包 x.md")
-        self.prompt("s-q2", "【交付 #2203】Alg-p0-01 → Quality-p2-01：交付包 y.md")
-        self.assertEqual(pool_lib.open_items(self.tmp, "Alg-p0-01"), ([], [("2203", "Alg-p2-01")]))
+        self.prompt("s-alg1", "【委托 #2203】Alg-p1 → Alg-p0-01：需求包 x.md")
+        self.prompt("s-q2", "【交付 #2203】Alg-p0-01 → Quality-p1：交付包 y.md")
+        self.assertEqual(pool_lib.open_items(self.tmp, "Alg-p0-01"), ([], [("2203", "Alg-p1")]))
 
     def test_route_cross_lists_what_was_said(self):
         self.receipt("2201")
         self.receipt("2205", kind="same_seq", draft="packages/drafts/alg/20261120-需求包-消融.md")
-        self.prompt("s-q2", "【委托 #2201】Alg-p2-01 → Quality-p2-01：需求包 packages/drafts/alg/x.md")
-        self.prompt("s-alg2", "【通知 #2201】Quality-p2-01 → Alg-p2-01：已接单，11-28 交付")
-        self.prompt("s-scribe", "【登记请求 #2201】Quality-p2-01 → PMO-p0-01：确认节点")
-        self.prompt("s-alg1", "【委托 #2205】Alg-p2-01 → Alg-p0-01：需求包 x.md")
+        self.prompt("s-q2", "【委托 #2201】Alg-p1 → Quality-p1：需求包 packages/drafts/alg/x.md")
+        self.prompt("s-alg2", "【通知 #2201】Quality-p1 → Alg-p1：已接单，11-28 交付")
+        self.prompt("s-scribe", "【登记请求 #2201】Quality-p1 → PMO-p0-ledger：确认节点")
+        self.prompt("s-alg1", "【委托 #2205】Alg-p1 → Alg-p0-01：需求包 x.md")
         code, out = self.route("cross", sid="s-entry")
         self.assertEqual(code, 0, out)
         self.assertIn("最近 7 天有往来的跨序列需求 1 条", out)
-        self.assertIn("- #2201 需求包-评测集：Alg-p2-01 → Quality-p2-01，往来 2 条；最近一条：", out)   # the scribe's traffic is left out
-        self.assertIn("【通知 #2201】Quality-p2-01 → Alg-p2-01：已接单，11-28 交付", out)
+        self.assertIn("- #2201 需求包-评测集：Alg-p1 → Quality-p1，往来 2 条；最近一条：", out)   # the scribe's traffic is left out
+        self.assertIn("【通知 #2201】Quality-p1 → Alg-p1：已接单，11-28 交付", out)
         self.assertNotIn("#2205", out)
         self.assertNotIn("小时没有往来", out)
         self.assertIn("packages/drafts/pmo/跨序列协调记录.md（还没有）", out)
         _, out = self.route("cross", "#2201", sid="s-entry")
         self.assertIn("#2201 需求包-评测集：往来 2 条", out)
         self.assertEqual(out.count("\n- "), 2)
-        self.assertIn("【委托 #2201】Alg-p2-01 → Quality-p2-01", out)
+        self.assertIn("【委托 #2201】Alg-p1 → Quality-p1", out)
         _, out = self.route("cross", "2205", sid="s-entry")
         self.assertIn("登记回执里它不是跨序列需求", out)
         log = os.path.join(self.tmp, ".claude", "logs", "dispatch.jsonl")       # the same talk, ten days ago
@@ -3695,15 +3729,15 @@ class PoolReviewIdentityTest(PoolProjectCase):
                            desk="d-scribe")
         self.assertIn("共用一个桌面会话 ID", out.get("additionalContext", ""))
         self.assertEqual(self.decision("s-nested", self.W, desk="d-scribe"), "deny")
-        self.assertEqual(self.pool()["claims"]["PMO-p0-01"]["session_id"], "s-scribe")
-        self.route("notify", "PMO-p0-01", "--text", "登记请求：x", sid="s-entry")
+        self.assertEqual(self.pool()["claims"]["PMO-p0-ledger"]["session_id"], "s-scribe")
+        self.route("notify", "PMO-p0-ledger", "--text", "登记请求：x", sid="s-entry")
         _, out = self.prompt("s-nested", "继续", desk="d-scribe")
         self.assertNotIn("登记请求：x", out.get("additionalContext", ""))
         self.assertEqual(self.decision("s-scribe", self.W), "allow")
         # once the scribe's own session has ended, a /clear moves the claim to the new session
         self.hook("instances.py", {"hook_event_name": "SessionEnd", "session_id": "s-scribe", "reason": "clear"})
         self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-scribe-2", "source": "clear"}, desk="d-scribe")
-        self.assertEqual(self.pool()["claims"]["PMO-p0-01"]["session_id"], "s-scribe-2")
+        self.assertEqual(self.pool()["claims"]["PMO-p0-ledger"]["session_id"], "s-scribe-2")
 
     def test_monitor_commands_are_checked_like_bash(self):
         _, out = self.guard("s-alg1", "Monitor", {"command": self.W, "description": "x", "timeout_ms": 60000})
@@ -3713,18 +3747,18 @@ class PoolReviewIdentityTest(PoolProjectCase):
 
     def test_claim_commands_are_found_by_parsing(self):
         R = self.P
-        for cmd in ("python3.12 -I %s --offline release PMO-p0-01" % R, "bash -c 'python3.12 -I %s release PMO-p0-01'" % R):
+        for cmd in ("python3.12 -I %s --offline release PMO-p0-ledger" % R, "bash -c 'python3.12 -I %s release PMO-p0-ledger'" % R):
             self.assertEqual(self.decision("s-researcher", cmd), "deny", cmd)
-        self.assertEqual(self.decision("s-researcher", "python3.12 -I %s 'release' PMO-p0-01" % R), "ask")   # same as the plain form
-        self.assertEqual(self.decision("s-alg1", "python3.12 -I %s 'release' PMO-p0-01" % R), "deny")
+        self.assertEqual(self.decision("s-researcher", "python3.12 -I %s 'release' PMO-p0-ledger" % R), "ask")   # same as the plain form
+        self.assertEqual(self.decision("s-alg1", "python3.12 -I %s 'release' PMO-p0-ledger" % R), "deny")
         self.assertEqual(self.decision("s-alg2", "python3.12 -I %s --offline expect PMO-p0-02 --role pmo-scribe --session s-alg1" % R), "deny")
         for cmd in ('grep -n "pool.py claim" CLAUDE.md', "echo '研究员请运行 pool.py release Alg-p0-02'",
                     "cat > packages/drafts/alg/n.md <<'EOF'\npython3.12 -I %s expect Alg-p0-04 --role alg-p0 --desk d\nEOF" % R):
             self.assertIsNone(self.decision("s-alg2", cmd), cmd)
 
     def test_a_cd_to_this_project_in_front_of_a_claim_is_the_same_command(self):
-        self.route("expect", "RnD-p2-01", "--role", "rnd-p2", "--desk", "d-rnd", sid="s-researcher")
-        plain = "python3.12 -I %s claim rnd-p2 --as RnD-p2-01" % self.P
+        self.route("expect", "RnD-p1", "--role", "rnd-p1", "--desk", "d-rnd", sid="s-researcher")
+        plain = "python3.12 -I %s claim rnd-p1 --as RnD-p1" % self.P
         for front in ('cd "%s" && ' % self.tmp, "cd '%s' && " % self.tmp, "cd %s && " % self.tmp, 'cd "%s/" &&  ' % self.tmp):
             self.assertIsNone(self.decision("s-term", front + plain), front)
         for cmd in ('cd "%s" ; %s' % (self.tmp, plain), "cd /tmp && " + plain, 'cd "%s" && %s | tail -3' % (self.tmp, plain),
@@ -3737,24 +3771,24 @@ class PoolReviewIdentityTest(PoolProjectCase):
         self.assertIsNone(self.decision("s-alg2", 'cd "%s" && %s' % (self.tmp, plain)))       # expect is read the same way
 
     def test_claim_with_an_asserted_desk_or_an_old_session_asks(self):
-        self.route("expect", "RnD-p2-01", "--role", "rnd-p2", "--desk", "d-rnd", sid="s-researcher")
-        cmd = "python3.12 -I %s claim rnd-p2 --as RnD-p2-01 --desk d-rnd" % self.P
+        self.route("expect", "RnD-p1", "--role", "rnd-p1", "--desk", "d-rnd", sid="s-researcher")
+        cmd = "python3.12 -I %s claim rnd-p1 --as RnD-p1 --desk d-rnd" % self.P
         self.assertEqual(self.decision("s-term", cmd), "ask")              # no desktop ID in the hook to compare with
-        cmd = "python3.12 -I %s claim rnd-p2 --as RnD-p2-01" % self.P
+        cmd = "python3.12 -I %s claim rnd-p1 --as RnD-p1" % self.P
         self.assertIsNone(self.decision("s-term", cmd))                    # without --desk route.py uses the session's own IDs
-        code, text = self.route("claim", "rnd-p2", "--as", "RnD-p2-01", "--wait", "0", sid="s-term")
+        code, text = self.route("claim", "rnd-p1", "--as", "RnD-p1", "--wait", "0", sid="s-term")
         self.assertEqual(code, 1)                                          # and finds no permit for them
-        self.assertNotIn("RnD-p2-01", self.pool()["claims"])
-        code, text = self.route("claim", "rnd-p2", "--as", "RnD-p2-01", "--de", "d-rnd", "--wait", "0", sid="s-term")
+        self.assertNotIn("RnD-p1", self.pool()["claims"])
+        code, text = self.route("claim", "rnd-p1", "--as", "RnD-p1", "--de", "d-rnd", "--wait", "0", sid="s-term")
         self.assertNotEqual(code, 0)                                       # no abbreviated options
 
     def test_a_stale_permit_can_be_replaced_or_released(self):
-        self.route("release", "PMO-p0-01", sid="s-researcher")
-        self.assertEqual(self.route("expect", "PMO-p0-01", "--role", "pmo-scribe", "--desk", "d-dead", sid="s-entry")[0], 0)
-        code, text = self.route("expect", "PMO-p0-01", "--role", "pmo-scribe", "--desk", "d-new", sid="s-entry")
+        self.route("release", "PMO-p0-ledger", sid="s-researcher")
+        self.assertEqual(self.route("expect", "PMO-p0-ledger", "--role", "pmo-scribe", "--desk", "d-dead", sid="s-entry")[0], 0)
+        code, text = self.route("expect", "PMO-p0-ledger", "--role", "pmo-scribe", "--desk", "d-new", sid="s-entry")
         self.assertEqual(code, 0, text)
         self.assertEqual([p["desk"] for p in self.pool()["permits"] if p["role"] == "pmo-scribe"], ["d-new"])
-        code, text = self.route("release", "PMO-p0-01", sid="s-researcher")
+        code, text = self.route("release", "PMO-p0-ledger", sid="s-researcher")
         self.assertEqual(code, 0, text)
         self.assertIn("许可", text)
         self.assertEqual([p for p in self.pool()["permits"] if p["role"] == "pmo-scribe"], [])
@@ -3773,18 +3807,18 @@ class PoolReviewIdentityTest(PoolProjectCase):
 
     def test_two_scribes_stop_every_ledger_write(self):
         pl = self.pool()
-        pl["claims"]["PMO-p0-02"] = dict(pl["claims"]["PMO-p0-01"], name="PMO-p0-02", session_id="s-x", desk="d-x")
+        pl["claims"]["PMO-p0-02"] = dict(pl["claims"]["PMO-p0-ledger"], name="PMO-p0-02", session_id="s-x", desk="d-x")
         self.write_pool(pl)
         self.assertEqual(self.decision("s-researcher", self.W), "deny")
 
     def test_fixed_names_and_the_feishu_inbox(self):
-        _, out = self.opening("pmo-p2", "PMO-p2-07", "s-other")
-        self.assertIn("固定是 PMO-p2-01", out.get("additionalContext", ""))
+        _, out = self.opening("pmo-p1", "Alg-p1", "s-other")                 # a lead has one name: another is another role's
+        self.assertIn("开局句里的角色 pmo-p1 和会话名 Alg-p1 对不上", out.get("additionalContext", ""))
         self.assertEqual(self.route("expect", "PMO-p0-09", "--role", "pmo-scribe", "--desk", "d9", sid="s-researcher")[0], 1)
         code, text = self.route("notify", "feishu", "--from", "研究员（飞书私聊）", "--text", "补位", sid="s-alg1")
         self.assertNotEqual(code, 0)
-        self.route("notify", "PMO-p2-01", "--from", "研究员", "--text", "冒名", sid="s-alg1")
-        msg = json.loads(self.read("inbox/PMO-p2-01.jsonl").splitlines()[-1])
+        self.route("notify", "PMO-p1", "--from", "研究员", "--text", "冒名", sid="s-alg1")
+        msg = json.loads(self.read("inbox/PMO-p1.jsonl").splitlines()[-1])
         self.assertEqual(msg["from"], "Alg-p0-01")
 
     def test_odd_state_files_never_crash_the_guard(self):
@@ -3800,8 +3834,8 @@ class PoolReviewIdentityTest(PoolProjectCase):
 
     def test_session_start_texts_for_odd_origins(self):
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-term2", "source": "startup",
-                                            "agent_type": "alg-p2"})
-        self.assertIn("claude --agent alg-p2", out.get("additionalContext", ""))
+                                            "agent_type": "alg-p1"})
+        self.assertIn("claude --agent alg-p1", out.get("additionalContext", ""))
         with open(os.path.join(self.tmp, ".claude", "state", "pool.json"), "w", encoding="utf-8") as f:
             f.write("{broken")
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-alg1", "source": "compact"})
@@ -3809,13 +3843,13 @@ class PoolReviewIdentityTest(PoolProjectCase):
         self.assertNotIn("研究员自己的会话", out.get("additionalContext", ""))
 
     def test_a_refused_permit_is_dropped(self):
-        self.route("expect", "RnD-p2-01", "--role", "rnd-p2", "--desk", "d-a", sid="s-researcher")
-        self.opening("rnd-p2", "RnD-p2-01", "s-b")                        # the researcher's own opening line wins
+        self.route("expect", "RnD-p1", "--role", "rnd-p1", "--desk", "d-a", sid="s-researcher")
+        self.opening("rnd-p1", "RnD-p1", "s-b")                        # the researcher's own opening line wins
         self.bash("s-a", "ls", desk="d-a")
         self.bash("s-a", "ls", desk="d-a")
         refused = [e for e in map(json.loads, self.read(".claude/logs/dispatch.jsonl").splitlines()) if e.get("event") == "claim_refused"]
         self.assertEqual(len(refused), 1)
-        self.assertEqual([p for p in self.pool()["permits"] if p["role"] == "rnd-p2"], [])
+        self.assertEqual([p for p in self.pool()["permits"] if p["role"] == "rnd-p1"], [])
 
     @unittest.skipUnless(sys.platform == "darwin", "case folding only on macOS")
     def test_a_path_spelled_in_another_case_is_the_same_file(self):
@@ -3857,9 +3891,9 @@ class PoolReviewStateTest(PoolProjectCase):
         return (datetime.datetime.now().astimezone() - datetime.timedelta(minutes=minutes)).isoformat(timespec="seconds")
 
     def test_a_quoted_header_is_not_a_message(self):
-        self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md")
-        self.prompt("s-alg2", "【交付 #2101】Alg-p0-01 → Alg-p2-01：交付包 y.md")
-        self.prompt("s-alg2", "你上周收到的【委托 #2101】Alg-p2-01 → Alg-p0-01 那件事，结论再讲一遍。")
+        self.prompt("s-alg1", "【委托 #2101】Alg-p1 → Alg-p0-01：需求包 x.md")
+        self.prompt("s-alg2", "【交付 #2101】Alg-p0-01 → Alg-p1：交付包 y.md")
+        self.prompt("s-alg2", "你上周收到的【委托 #2101】Alg-p1 → Alg-p0-01 那件事，结论再讲一遍。")
         self.prompt("s-entry", "这条“【委托 #2101】Alg-p0-01 → Alg-p0-02：需求包”对方收到了吗？")
         self.assertEqual(self.pool()["owners"]["2101"], "Alg-p0-01")
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-alg2", "source": "compact"})
@@ -3869,43 +3903,43 @@ class PoolReviewStateTest(PoolProjectCase):
     def test_a_message_past_the_router_is_pointed_at_it(self):
         """1.1.0: the entry talks to the researcher and the router only; a message between the entry and a
         sequence's session tells the one that received it where it should have gone."""
-        self.route("expect", "PMO-p1-01", "--role", "pmo-router", "--desk", "d-router", sid="s-entry")
-        self.claim("pmo-router", "PMO-p1-01", "s-router", desk="d-router")
-        _, out = self.prompt("s-entry", "【通知 #2101】Alg-p2-01 → PMO-p2-01：复现跑完了")
-        self.assertIn("入口只和研究员、路由往来，这条越过了路由 PMO-p1-01：进展、交付和要研究员拍板的事该发给路由",
+        self.route("expect", "PMO-p0-router", "--role", "pmo-router", "--desk", "d-router", sid="s-entry")
+        self.claim("pmo-router", "PMO-p0-router", "s-router", desk="d-router")
+        _, out = self.prompt("s-entry", "【通知 #2101】Alg-p1 → PMO-p1：复现跑完了")
+        self.assertIn("入口只和研究员、路由往来，这条越过了路由 PMO-p0-router：进展、交付和要研究员拍板的事该发给路由",
                       out.get("additionalContext", ""))
-        _, out = self.prompt("s-alg2", "【通知】PMO-p2-01 → Alg-p2-01：研究员说先停一下")
+        _, out = self.prompt("s-alg2", "【通知】PMO-p1 → Alg-p1：研究员说先停一下")
         self.assertIn("研究员的话该由入口照录交给路由，路由转给你；这条照常处理，回话发给路由，不发入口", out.get("additionalContext", ""))
-        _, out = self.prompt("s-router", "【通知】PMO-p2-01 → PMO-p1-01：研究员的话在 packages/drafts/pmo/研究员-20261121-0900.md")
+        _, out = self.prompt("s-router", "【通知】PMO-p1 → PMO-p0-router：研究员的话在 packages/drafts/pmo/研究员-20261121-0900.md")
         self.assertNotIn("越过了路由", out.get("additionalContext", ""))
-        _, out = self.prompt("s-entry", "【需拍板 #2105】PMO-p1-01 → PMO-p2-01：评测集要不要换")
+        _, out = self.prompt("s-entry", "【需拍板 #2105】PMO-p0-router → PMO-p1：评测集要不要换")
         self.assertNotIn("越过了路由", out.get("additionalContext", ""))
         self.assertNotIn("派发图里", out.get("additionalContext", ""))            # the router carries what is to be decided to the entry
-        _, out = self.prompt("s-router", "【需拍板 #2105】Alg-p2-01 → PMO-p1-01：评测集要不要换")
+        _, out = self.prompt("s-router", "【需拍板 #2105】Alg-p1 → PMO-p0-router：评测集要不要换")
         self.assertNotIn("派发图里", out.get("additionalContext", ""))
 
     def test_a_message_addressed_to_another_session_takes_no_lease(self):
-        _, out = self.prompt("s-alg2", "【委托 #2103】PMO-p2-01 → Infra-p2-01：需求包 x.md")
+        _, out = self.prompt("s-alg2", "【委托 #2103】PMO-p1 → Infra-p1：需求包 x.md")
         self.assertIn("不是本会话", out.get("additionalContext", ""))
         self.assertNotIn("2103", self.pool()["owners"])
 
     def test_a_late_report_from_a_replaced_session_keeps_the_open_item(self):
         self.route("expect", "Alg-p0-03", "--role", "alg-p0", "--desk", "d-a12", sid="s-alg2")
         self.claim("alg-p0", "Alg-p0-03", "s-alg12", desk="d-a12")
-        self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md")
-        self.prompt("s-alg12", "【委托 #2101】Alg-p2-01 → Alg-p0-03：需求包 x.md（重新委托）")
-        self.prompt("s-alg2", "【交付 #2101】Alg-p0-01 → Alg-p2-01：交付包 y.md")
+        self.prompt("s-alg1", "【委托 #2101】Alg-p1 → Alg-p0-01：需求包 x.md")
+        self.prompt("s-alg12", "【委托 #2101】Alg-p1 → Alg-p0-03：需求包 x.md（重新委托）")
+        self.prompt("s-alg2", "【交付 #2101】Alg-p0-01 → Alg-p1：交付包 y.md")
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-alg2", "source": "compact"})
         self.assertIn("#2101→Alg-p0-03", out.get("additionalContext", ""))
 
     def test_a_report_passed_up_is_not_taken_for_a_late_one(self):
-        self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md")       # Alg-p0-01 owns #2101
-        _, out = self.prompt("s-entry", "【交付 #2101】Alg-p2-01 → PMO-p2-01：交付包 y.md")   # its +2 passes the result up
+        self.prompt("s-alg1", "【委托 #2101】Alg-p1 → Alg-p0-01：需求包 x.md")       # Alg-p0-01 owns #2101
+        _, out = self.prompt("s-entry", "【交付 #2101】Alg-p1 → PMO-p1：交付包 y.md")   # its +1 passes the result up
         self.assertNotIn("负责会话是", out.get("additionalContext", ""))
         self.route("expect", "Alg-p0-03", "--role", "alg-p0", "--desk", "d-a12", sid="s-alg2")
         self.claim("alg-p0", "Alg-p0-03", "s-alg12", desk="d-a12")
-        self.prompt("s-alg12", "【委托 #2101】Alg-p2-01 → Alg-p0-03：需求包 x.md（重新委托）")
-        _, out = self.prompt("s-alg2", "【交付 #2101】Alg-p0-01 → Alg-p2-01：交付包 y.md")    # the session it was taken from
+        self.prompt("s-alg12", "【委托 #2101】Alg-p1 → Alg-p0-03：需求包 x.md（重新委托）")
+        _, out = self.prompt("s-alg2", "【交付 #2101】Alg-p0-01 → Alg-p1：交付包 y.md")    # the session it was taken from
         self.assertIn("#2101 的负责会话是 Alg-p0-03，这条交付是 Alg-p0-01 发的", out.get("additionalContext", ""))
 
     def test_p0_work_names_stand_for_their_claim(self):
@@ -3951,7 +3985,7 @@ class PoolReviewStateTest(PoolProjectCase):
 
     def test_a_turn_that_just_started_is_not_uncertain(self):
         self.set_status("s-alg1", status="idle", last_tool_at=self.ago(60), status_at=self.ago(60))
-        self.prompt("s-alg1", "【通知】PMO-p2-01 → Alg-p0-01：看一下")
+        self.prompt("s-alg1", "【通知】PMO-p1 → Alg-p0-01：看一下")
         _, text = self.route("pool", "--role", "alg-p0", sid="s-alg2")
         self.assertIn("在忙", text)
         self.assertNotIn("不确定", text)
@@ -3966,7 +4000,7 @@ class PoolReviewStateTest(PoolProjectCase):
 
     def test_injection_and_opening_context_stay_within_budget(self):
         for i in range(400):
-            self.prompt("s-alg2", "【委托 #%d】PMO-p2-01 → Alg-p2-01：需求包 x.md" % (3000 + i))
+            self.prompt("s-alg2", "【委托 #%d】PMO-p1 → Alg-p1：需求包 x.md" % (3000 + i))
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-entry", "source": "compact"})
         text = out.get("additionalContext", "")
         self.assertLessEqual(len(text), 9500)
@@ -3975,8 +4009,8 @@ class PoolReviewStateTest(PoolProjectCase):
         for i in range(20):
             pool_lib.append_inbox(self.tmp, "feishu", {"id": "m%d" % i, "ts": "2026-11-03T08:00:00+08:00", "from": "研究员（飞书私聊）",
                                                     "text": "长消息" * 100, "read": False})
-        self.route("release", "PMO-p2-01", sid="s-researcher")
-        _, out = self.opening("pmo-p2", "PMO-p2-01", "s-entry-new")
+        self.route("release", "PMO-p1", sid="s-researcher")
+        _, out = self.opening("pmo-p1", "PMO-p1", "s-entry-new")
         self.assertLessEqual(len(out.get("additionalContext", "")), 9600)
         self.assertIn("还有 20 条消息没看", out.get("additionalContext", ""))
         _, out = self.prompt("s-entry-new", "早")
@@ -3985,24 +4019,24 @@ class PoolReviewStateTest(PoolProjectCase):
     def test_the_opening_context_stays_within_budget_with_waiting_decisions(self):
         """What the entry is told about decisions past their expiry and what every pool session is told is frozen
         come out of the same budget as the role text in the turn that opens the session; at most five expiry lines a turn."""
-        self.route("expect", "PMO-p1-01", "--role", "pmo-router", "--desk", "d-router", sid="s-entry")
-        self.claim("pmo-router", "PMO-p1-01", "s-router", desk="d-router")
+        self.route("expect", "PMO-p0-router", "--role", "pmo-router", "--desk", "d-router", sid="s-entry")
+        self.claim("pmo-router", "PMO-p0-router", "s-router", desk="d-router")
         for i in range(400):
-            self.prompt("s-alg2", "【委托 #%d】PMO-p2-01 → Alg-p2-01：需求包 x.md" % (3000 + i))
+            self.prompt("s-alg2", "【委托 #%d】PMO-p1 → Alg-p1：需求包 x.md" % (3000 + i))
         for i in range(20):
             pool_lib.append_inbox(self.tmp, "feishu", {"id": "m%d" % i, "ts": "2026-11-03T08:00:00+08:00", "from": "研究员（飞书私聊）",
                                                     "text": "长消息" * 100, "read": False})
         since = pool_lib.now() - datetime.timedelta(hours=30)
         pending = {str(2800 + k): {"id": str(2800 + k), "title": "很长的一件待定决策 %d" % k, "registered_at": pool_lib.stamp(since),
                                    "default_applies": k % 2 == 0,
-                                   "default_option": "按轮次分目录", "executor": "RnD-p2-01",
+                                   "default_option": "按轮次分目录", "executor": "RnD-p1",
                                    "frozen": [{"kind": "category", "category": "privileged_app", "name": "特权应用", "qualifier": "Docker",
                                                "text": "特权应用：Docker（第 %d 条决策，写得很长很长很长很长很长）" % k},
                                               {"kind": "text", "text": "`docker build`（第 %d 条决策）" % k}]} for k in range(16)}
         with open(os.path.join(self.tmp, ".claude", "state", "gates.json"), "w", encoding="utf-8") as f:
             json.dump({"version": 2, "pending": pending}, f, ensure_ascii=False)
-        self.route("release", "PMO-p2-01", sid="s-researcher")
-        _, out = self.opening("pmo-p2", "PMO-p2-01", "s-entry-new")
+        self.route("release", "PMO-p1", sid="s-researcher")
+        _, out = self.opening("pmo-p1", "PMO-p1", "s-entry-new")
         text = out.get("additionalContext", "")
         self.assertLessEqual(len(text), pool_lib.INJECT_LIMIT)
         self.assertIn("## 怎么干活", text)                                          # the role text, cut to what is left
@@ -4016,10 +4050,10 @@ class PoolReviewStateTest(PoolProjectCase):
         self.assertIn("再告诉入口一声", text)
 
     def test_a_malformed_inbox_line_loses_nothing(self):
-        path = os.path.join(self.tmp, "inbox", "pmo-p2.jsonl")
+        path = os.path.join(self.tmp, "inbox", "pmo-p1.jsonl")
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps("补位请求：随手写的一行") + "\n")
-        self.route("notify", "PMO-p2-01", "--text", "真正的留言", sid="s-alg2")
+        self.route("notify", "PMO-p1", "--text", "真正的留言", sid="s-alg2")
         _, out = self.prompt("s-entry", "早")
         self.assertIn("真正的留言", out.get("additionalContext", ""))
 
@@ -4028,7 +4062,7 @@ class PoolReviewStateTest(PoolProjectCase):
         self.set_status("s-alg1", status="idle", status_at=self.ago(60), last_tool_at=self.ago(60))
         _, text = self.route("pool", "--role", "alg-p0", sid="s-alg2")
         self.assertIn("建议：发给 Alg-p0-01", text)
-        self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md")
+        self.prompt("s-alg1", "【委托 #2101】Alg-p1 → Alg-p0-01：需求包 x.md")
         self.hook("instances.py", {"hook_event_name": "Stop", "session_id": "s-alg1"})
         _, text = self.route("pool", "--role", "alg-p0", sid="s-alg2")
         self.assertNotIn("研究员在用", text)
@@ -4042,7 +4076,7 @@ class PoolReviewStateTest(PoolProjectCase):
         self.assertNotIn("待补位", text)
 
     def test_the_cap_and_the_refill_rows(self):
-        code, text = self.route("claim", "alg-p2", "--as", "Alg-p2-01", sid="s-alg2")
+        code, text = self.route("claim", "alg-p1", "--as", "Alg-p1", sid="s-alg2")
         self.assertIn("补位用", text)
         self.assertIn("Alg-p0-03", text)
         with open(self.task_path, encoding="utf-8") as f:
@@ -4069,16 +4103,16 @@ class PoolReviewStateTest(PoolProjectCase):
 
     def test_queue_lists_only_what_the_caller_dispatches(self):
         rows = {"open": [{"work_item_id": "2201", "work_item_status": "待开工", "name": "需求包（Alg-p0-01）：跑消融 A"},
-                         {"work_item_id": "2202", "work_item_status": "待开工", "name": "需求包（Alg-p2-01）：阶段二"}],
-                "cross": [{"work_item_id": "2301", "work_item_status": "待接单", "name": "需求包（Alg-p2-01）：要数据"}]}
+                         {"work_item_id": "2202", "work_item_status": "待开工", "name": "需求包（Alg-p1）：阶段二"}],
+                "cross": [{"work_item_id": "2301", "work_item_status": "待接单", "name": "需求包（Alg-p1）：要数据"}]}
         names = {"waiting": "待接单", "queued": "待开工"}
         with mock.patch.object(ledger_core, "Ledger") as bound, \
                 mock.patch.object(ledger, "query", side_effect=lambda lg, name, seq=None, as_json=False: rows[name]):
             bound.return_value.state.side_effect = lambda wid, slot: names[slot]
             mine = pool_cmd.queue_rows(self.tmp, json.loads(self.read(".claude/hooks/policy.json")),
-                                    self.pool()["claims"]["Alg-p2-01"], "alg")
+                                    self.pool()["claims"]["Alg-p1"], "alg")
             entry = pool_cmd.queue_rows(self.tmp, json.loads(self.read(".claude/hooks/policy.json")),
-                                     self.pool()["claims"]["PMO-p2-01"], "pmo")
+                                     self.pool()["claims"]["PMO-p1"], "pmo")
         self.assertEqual([r["work_item_id"] for r in mine], ["2202"])
         self.assertEqual([r["work_item_id"] for r in entry], ["2301"])
 
@@ -4087,16 +4121,16 @@ class ReviewTextTest(PoolProjectCase):
     """Fixes from the adversarial review of 0.5.0: generated text."""
 
     def test_pool_role_texts(self):
-        p2, p0, q0 = (self.read(".claude/agents/%s.md" % r) for r in ("alg-p2", "alg-p0", "quality-p0"))
+        p2, p0, q0 = (self.read(".claude/agents/%s.md" % r) for r in ("alg-p1", "alg-p0", "quality-p0"))
         self.assertNotIn("跨序列的需求包、送审包、决策包写成草稿发给入口", p0)
-        self.assertIn("需要别的序列配合的、要拍板的事，写进交付包，由本序列 +2 去办", p0)
+        self.assertIn("需要别的序列配合的、要拍板的事，写进交付包，由本序列 +1 去办", p0)
         self.assertIn("没有空闲的，工作项留在“待开工”排队，等有会话空出来再委托。", p2)
         for text in (p2, p0):                                                  # 1.1.0: a closed task has no work item, whoever hands it out
             self.assertIn("这类活不建工作项，也不找书记员", text)
             self.assertNotIn("开工：", text)                                    # 1.1.0: the first step of a 下发 request is its plan
         self.assertIn("消息抬头都用它", p0)
         self.assertNotIn("执行结果可以直接送审", q0)
-        self.assertNotIn("研究员在本会话里研究员", self.read(".claude/agents/pmo-p2.md"))
+        self.assertNotIn("研究员在本会话里研究员", self.read(".claude/agents/pmo-p1.md"))
         self.assertIn("会话池（研究员 2026-11-03 起采用）", self.read("org/decisions.md"))
         self.assertIn("用 Agent 工具派书记员", self.read("CLAUDE.md"))
 
@@ -4106,7 +4140,7 @@ class ReviewTextTest(PoolProjectCase):
         with contextlib.redirect_stdout(out):
             check.check(self.tmp)
         self.assertIn("会话池还没开齐", out.getvalue())
-        self.route("release", "Alg-p2-01", sid="s-researcher")
+        self.route("release", "Alg-p1", sid="s-researcher")
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             pool_cmd.main(["open", "--target", self.tmp, "--manual"])
@@ -4118,7 +4152,7 @@ class FirstReviewTest(ProjectCase):
 
     def test_notify_refuses_a_name_that_is_no_role_or_session(self):
         with self.assertRaises(SystemExit):
-            notify.notify(self.spec, self.tmp, "Nope-p2-01", "x")
+            notify.notify(self.spec, self.tmp, "Nope-p1", "x")
 
     def test_an_ask_keeps_the_identity_rewrite(self):
         _, out = self.guard("", "Bash", {"command": "lark-cli docs +create --title t --markdown x"}, agent_id=None)
@@ -4150,11 +4184,11 @@ class PoolSecondReviewTest(PoolProjectCase):
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-n1", "source": "resume"}, desk="d-scribe")
         self.assertIn("共用一个桌面会话 ID", out.get("additionalContext", ""))
         self.assertEqual(self.decision("s-n1", self.W, desk="d-scribe"), "deny")
-        self.assertEqual(self.pool()["claims"]["PMO-p0-01"]["session_id"], "s-scribe")
+        self.assertEqual(self.pool()["claims"]["PMO-p0-ledger"]["session_id"], "s-scribe")
         # a same-ID run that ends marks the session offline, but that frees nothing
         self.hook("instances.py", {"hook_event_name": "SessionEnd", "session_id": "s-scribe", "reason": "other"})
         self.assertEqual(self.decision("s-other", self.W, desk="d-scribe"), "deny")
-        self.assertEqual(self.pool()["claims"]["PMO-p0-01"]["session_id"], "s-scribe")
+        self.assertEqual(self.pool()["claims"]["PMO-p0-ledger"]["session_id"], "s-scribe")
 
     def test_commands_hidden_in_substitutions_pipes_and_heredocs(self):
         for cmd in ('out="$(git stash 2>&1)"', "echo `git stash`", "bash <<'EOF'\ngit checkout main\nEOF",
@@ -4162,8 +4196,8 @@ class PoolSecondReviewTest(PoolProjectCase):
                     "env -S 'git stash'", "tcsh -c 'git stash'", "xcrun git stash", "gh pr checkout 123"):
             self.assertEqual(self.decision("s-alg1", cmd), "deny", cmd)
         R = self.P
-        for cmd in ('out="$(python3.12 -I %s release PMO-p0-01)"' % R, "python3 -X utf8 %s release PMO-p0-01" % R,
-                    "python3 -W ignore -I %s release PMO-p0-01" % R):
+        for cmd in ('out="$(python3.12 -I %s release PMO-p0-ledger)"' % R, "python3 -X utf8 %s release PMO-p0-ledger" % R,
+                    "python3 -W ignore -I %s release PMO-p0-ledger" % R):
             self.assertEqual(self.decision("s-researcher", cmd), "deny", cmd)
 
     def test_read_only_and_elsewhere_git_is_fine(self):
@@ -4172,7 +4206,7 @@ class PoolSecondReviewTest(PoolProjectCase):
             self.assertIsNone(self.decision("s-alg1", cmd), cmd)
 
     def test_identity_variables_stay_put(self):
-        cmd = "env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_HOST_SESSION_ID python3.12 -I %s send PMO-p0-01 --text x" % self.N
+        cmd = "env -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_HOST_SESSION_ID python3.12 -I %s send PMO-p0-ledger --text x" % self.N
         self.assertEqual(self.decision("s-alg1", cmd), "deny")
         self.assertEqual(self.decision("s-alg1", "CLAUDE_CODE_SESSION_ID=s-scribe %s" % self.W), "deny")
         self.assertIsNone(self.decision("s-alg1", "echo $CLAUDE_CODE_SESSION_ID"))
@@ -4183,7 +4217,7 @@ class PoolSecondReviewTest(PoolProjectCase):
 
     def test_claim_fields_of_the_wrong_type(self):
         pl = self.pool()
-        pl["claims"]["PMO-p0-01"]["session_id"] = 7
+        pl["claims"]["PMO-p0-ledger"]["session_id"] = 7
         self.write_pool(pl)
         code, out = self.bash("s-alg1", "ls")
         self.assertEqual(code, 0)
@@ -4199,17 +4233,17 @@ class PoolSecondReviewTest(PoolProjectCase):
         self.assertIn("短消息：新数据到了", out.get("additionalContext", ""))
 
     def test_the_desk_is_filled_in_by_route_claim(self):
-        self.opening("rnd-p2", "RnD-p2-01", "s-rnd2")                      # the hook saw no desktop ID
-        self.assertIsNone(self.pool()["claims"]["RnD-p2-01"]["desk"])
-        self.claim("rnd-p2", "RnD-p2-01", "s-rnd2", desk="d-rnd2")
-        self.assertEqual(self.pool()["claims"]["RnD-p2-01"]["desk"], "d-rnd2")
+        self.opening("rnd-p1", "RnD-p1", "s-rnd2")                      # the hook saw no desktop ID
+        self.assertIsNone(self.pool()["claims"]["RnD-p1"]["desk"])
+        self.claim("rnd-p1", "RnD-p1", "s-rnd2", desk="d-rnd2")
+        self.assertEqual(self.pool()["claims"]["RnD-p1"]["desk"], "d-rnd2")
         self.assertEqual(self.pool()["pending"], [])
 
     def test_a_redispatched_item_is_not_owed_by_the_old_session(self):
         self.route("expect", "Alg-p0-03", "--role", "alg-p0", "--desk", "d-a12", sid="s-alg2")
         self.claim("alg-p0", "Alg-p0-03", "s-alg12", desk="d-a12")
-        self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md")
-        self.prompt("s-alg12", "【委托 #2101】Alg-p2-01 → Alg-p0-03：需求包 x.md")
+        self.prompt("s-alg1", "【委托 #2101】Alg-p1 → Alg-p0-01：需求包 x.md")
+        self.prompt("s-alg12", "【委托 #2101】Alg-p1 → Alg-p0-03：需求包 x.md")
         _, out = self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-alg1", "source": "compact"})
         self.assertIn("未了事项：无", out.get("additionalContext", ""))
 
@@ -4228,10 +4262,10 @@ class PoolSecondReviewTest(PoolProjectCase):
         self.hook("instances.py", {"hook_event_name": "SessionEnd", "session_id": "s-q2", "reason": "other"})
         self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-q2", "source": "resume"})
         _, text = self.route("pool", "--recover", sid="s-entry")
-        self.assertIn("Quality-p2-01：应用退出前有后台任务在跑", text)
+        self.assertIn("Quality-p1：应用退出前有后台任务在跑", text)
         self.prompt("s-q2", "继续")
         _, text = self.route("pool", "--recover", sid="s-entry")
-        self.assertNotIn("Quality-p2-01：应用退出前", text)
+        self.assertNotIn("Quality-p1：应用退出前", text)
 
     def test_notify_targets_that_nobody_reads_are_refused(self):
         code, text = self.route("notify", "Alg-p0-2999", "--text", "x", sid="s-entry")
@@ -4247,18 +4281,18 @@ class PoolSecondReviewTest(PoolProjectCase):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(st, f)
         self.prompt("s-alg2", "我们接着说规格 v3")                        # the researcher, not a message
-        self.assertIn("Alg-p2-01", self.pool()["focus"])
+        self.assertIn("Alg-p1", self.pool()["focus"])
 
     def test_the_entry_queue_skips_requests_already_sent(self):
-        self.prompt("s-alg2", "【委托 #2301】PMO-p2-01 → Alg-p2-01：跨序列需求 x.md")
-        rows = {"open": [], "cross": [{"work_item_id": "2301", "work_item_status": "待接单", "name": "需求包（Product-p2-01）：要数据"},
-                                      {"work_item_id": "2302", "work_item_status": "待接单", "name": "需求包（Product-p2-01）：要标注"}]}
+        self.prompt("s-alg2", "【委托 #2301】PMO-p1 → Alg-p1：跨序列需求 x.md")
+        rows = {"open": [], "cross": [{"work_item_id": "2301", "work_item_status": "待接单", "name": "需求包（Product-p1）：要数据"},
+                                      {"work_item_id": "2302", "work_item_status": "待接单", "name": "需求包（Product-p1）：要标注"}]}
         names = {"waiting": "待接单", "queued": "待开工"}
         with mock.patch.object(ledger_core, "Ledger") as bound, \
                 mock.patch.object(ledger, "query", side_effect=lambda lg, name, seq=None, as_json=False: rows[name]):
             bound.return_value.state.side_effect = lambda wid, slot: names[slot]
             entry = pool_cmd.queue_rows(self.tmp, json.loads(self.read(".claude/hooks/policy.json")),
-                                     self.pool()["claims"]["PMO-p2-01"], "pmo")
+                                     self.pool()["claims"]["PMO-p1"], "pmo")
         self.assertEqual([r["work_item_id"] for r in entry], ["2302"])
 
     def test_no_refill_rows_at_the_cap(self):
@@ -4268,7 +4302,7 @@ class PoolSecondReviewTest(PoolProjectCase):
         policy["pool"]["max_sessions"] = len(self.pool()["claims"])
         with open(policy_path, "w", encoding="utf-8") as f:
             json.dump(policy, f)
-        _, text = self.route("claim", "alg-p2", "--as", "Alg-p2-01", sid="s-alg2")
+        _, text = self.route("claim", "alg-p1", "--as", "Alg-p1", sid="s-alg2")
         self.assertNotIn("（补位用）", text)
         self.assertIn("总上限", text)
 
@@ -4327,7 +4361,7 @@ class SecondReviewSetupTest(ProjectCase):
         with self.assertRaises(SystemExit):
             notify.notify(self.spec, self.tmp, "alg-p0", "x")
         with contextlib.redirect_stdout(io.StringIO()):
-            notify.notify(self.spec, self.tmp, "alg-p2", "y")
+            notify.notify(self.spec, self.tmp, "alg-p1", "y")
 
 
 class PoolThirdReviewTest(PoolProjectCase):
@@ -4376,8 +4410,8 @@ class PoolThirdReviewTest(PoolProjectCase):
                     "C='git stash'; bash -c \"$C\"",
                     "git --git-dir=/tmp/other/.git checkout -f main"):
             self.assertEqual(self.decision("s-alg1", cmd), "deny", cmd)
-        for cmd in ("find . -maxdepth 0 -exec sh -c 'python3.12 -I %s release PMO-p0-01' \\;" % self.P,
-                    "python3 -m cProfile -o /dev/null %s release PMO-p0-01" % self.P,
+        for cmd in ("find . -maxdepth 0 -exec sh -c 'python3.12 -I %s release PMO-p0-ledger' \\;" % self.P,
+                    "python3 -m cProfile -o /dev/null %s release PMO-p0-ledger" % self.P,
                     "X=%s; python3.12 -I $X show; python3.12 -I $X release Alg-p0-02" % self.P):
             self.assertEqual(self.decision("s-researcher", cmd), "deny", cmd)
 
@@ -4401,7 +4435,7 @@ class PoolThirdReviewTest(PoolProjectCase):
         self.assertEqual(self.decision("s-alg2", cmd), "deny")
 
     def test_identity_variables_in_other_forms(self):
-        tail = "python3.12 -I %s send PMO-p2-01 --text x" % self.N
+        tail = "python3.12 -I %s send PMO-p1 --text x" % self.N
         for prefix in ("unset -v CLAUDE_CODE_SESSION_ID CLAUDE_CODE_HOST_SESSION_ID; ", 'env -i PATH="$PATH" ',
                        'env -u "CLAUDE_CODE_SESSION_ID" -u "CLAUDE_CODE_HOST_SESSION_ID" ',
                        "unset CLAUDE_CODE_{,HOST_}SESSION_ID; ", "export -n CLAUDE_CODE_SESSION_ID CLAUDE_CODE_HOST_SESSION_ID; "):
@@ -4413,7 +4447,7 @@ class PoolThirdReviewTest(PoolProjectCase):
     def test_who_a_request_is_from(self):
         self.route("refill", "alg-p0")                                    # a plain terminal
         self.route("refill", "alg-p0", sid="s-nested", desk="d-s-alg1")   # a process started inside Alg-p0-01
-        rows = [json.loads(line) for line in self.read("inbox/PMO-p2-01.jsonl").splitlines() if line.strip()]
+        rows = [json.loads(line) for line in self.read("inbox/PMO-p1.jsonl").splitlines() if line.strip()]
         self.assertEqual([r["from"] for r in rows if "补位请求" in r.get("text", "")],
                          ["终端里的进程（没有会话 ID）", "和已认领会话共用桌面会话 ID 的进程"])
 
@@ -4436,7 +4470,7 @@ class PoolThirdReviewTest(PoolProjectCase):
         self.assertEqual(out.get("permissionDecision"), "deny")
         _, out = self.guard("s-alg1", "Edit", {"file_path": os.path.join(self.tmp, "org", "notes.md")})
         self.assertIsNone(out.get("permissionDecision"))
-        _, out = self.guard("s-alg2", "Edit", {"file_path": os.path.join(self.tmp, ".claude", "agent-memory", "alg-p2", "MEMORY.md")})
+        _, out = self.guard("s-alg2", "Edit", {"file_path": os.path.join(self.tmp, ".claude", "agent-memory", "alg-p1", "MEMORY.md")})
         self.assertIsNone(out.get("permissionDecision"))
 
     def test_a_subagent_call_leaves_the_parent_prompt_open(self):
@@ -4465,24 +4499,24 @@ class PoolThirdReviewTest(PoolProjectCase):
         self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-t2", "source": "clear"}, desk="d-t")
         self.assertEqual(self.pool()["claims"]["Quality-p0-02"]["session_id"], "s-t2")
         # never seen with its desktop ID: paired by time
-        self.route("expect", "PMO-p1-01", "--role", "pmo-router", "--session", "s-r", sid="s-entry")
-        self.claim("pmo-router", "PMO-p1-01", "s-r")
+        self.route("expect", "PMO-p0-router", "--role", "pmo-router", "--session", "s-r", sid="s-entry")
+        self.claim("pmo-router", "PMO-p0-router", "s-r")
         self.hook("instances.py", {"hook_event_name": "SessionEnd", "session_id": "s-r", "reason": "clear"})
         self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-r2", "source": "clear"}, desk="d-r")
-        claim = self.pool()["claims"]["PMO-p1-01"]
+        claim = self.pool()["claims"]["PMO-p0-router"]
         self.assertEqual((claim["session_id"], claim["desk"]), ("s-r2", "d-r"))
 
     def test_focus_notes_after_a_message_and_a_report(self):
         self.route("focus", "open", "--topic", "谈规格 v3", sid="s-alg2")
         self.set_session("s-alg2", status="idle", status_at=self.ago(45), last_tool_at=self.ago(45))
-        self.prompt("s-alg2", "【委托 #2301】PMO-p2-01 → Alg-p2-01：需求包 packages/drafts/alg/x.md")
-        self.assertNotIn("Alg-p2-01", self.pool()["focus"])
+        self.prompt("s-alg2", "【委托 #2301】PMO-p1 → Alg-p1：需求包 packages/drafts/alg/x.md")
+        self.assertNotIn("Alg-p1", self.pool()["focus"])
         _, out = self.prompt("s-alg2", "我回来了，接着说规格 v3")
         self.assertIn("已因空闲 30 分钟失效", out.get("additionalContext", ""))
         self.route("focus", "open", "--topic", "谈规格 v4", sid="s-alg2")
         self.set_session("s-alg2", status="idle_bg", status_at=self.ago(50), last_tool_at=self.ago(50))
         _, out = self.prompt("s-alg2", "<task-notification>\n<status>completed</status>\n</task-notification>")
-        self.assertNotIn("Alg-p2-01", self.pool()["focus"])            # a background report is not the researcher
+        self.assertNotIn("Alg-p1", self.pool()["focus"])            # a background report is not the researcher
         self.assertNotIn("失效", out.get("additionalContext", ""))
         _, out = self.prompt("s-alg2", "接着说")
         self.assertIn("已因空闲 30 分钟失效", out.get("additionalContext", ""))
@@ -4494,15 +4528,15 @@ class PoolThirdReviewTest(PoolProjectCase):
         path = os.path.join(self.tmp, "packages", "drafts", "quality", "v.md")
         with open(path, "w", encoding="utf-8") as f:
             f.write(re.findall(r"```markdown\n(.*?)\n```", open(EXAMPLES, encoding="utf-8").read(), re.S)[1].replace("关系：下发", "关系：跨序列")
-                    .replace("产品 +0（Product-p0-2001）", "算法 +2（Alg-p2-01）"))
+                    .replace("产品 +0（Product-p0-2001）", "算法 +1（Alg-p1）"))
         out = route.classify_draft(self.spec, self.tmp, path)
         self.assertEqual(out.get("row"), None if out.get("errors") else "R7", out)
         p0 = self.read(".claude/agents/alg-p0.md")
         self.assertEqual(p0.count("你自己跑出的分数是开发分"), 1)
         self.assertNotIn("。；", p0)
-        self.assertNotIn("送审", p0 + claude + self.read(".claude/agents/pmo-p2.md") + self.read(".claude/agents/quality-p2.md"))
+        self.assertNotIn("送审", p0 + claude + self.read(".claude/agents/pmo-p1.md") + self.read(".claude/agents/quality-p1.md"))
         self.assertIn("质量序列的会话和研究员自己的会话例外", claude)
-        self.assertIn("其余序列中任一个", self.read(".claude/agents/pmo-p2.md"))
+        self.assertIn("其余序列中任一个", self.read(".claude/agents/pmo-p1.md"))
 
 
 class ThirdReviewSetupTest(ProjectCase):
@@ -4547,8 +4581,8 @@ class BracketPathTest(PoolProjectCase):
         self.started_pool()
 
     def test_a_cd_to_a_path_with_brackets_is_still_this_project(self):
-        self.route("expect", "RnD-p2-01", "--role", "rnd-p2", "--desk", "d-rnd", sid="s-researcher")
-        cmd = 'cd "%s" && python3.12 -I %s claim rnd-p2 --as RnD-p2-01' % (self.tmp, self.P)
+        self.route("expect", "RnD-p1", "--role", "rnd-p1", "--desk", "d-rnd", sid="s-researcher")
+        cmd = 'cd "%s" && python3.12 -I %s claim rnd-p1 --as RnD-p1' % (self.tmp, self.P)
         self.assertIsNone(self.bash("s-term", cmd)[1].get("permissionDecision"), cmd)
 
     def test_pool_views_read_sessions_and_receipts(self):
@@ -4565,7 +4599,7 @@ class BracketPathTest(PoolProjectCase):
         import pool
         self.assertTrue(pool.receipt_exists(self.tmp, "2101"))
         self.assertFalse(pool.receipt_exists(self.tmp, "2103"))
-        _, out = self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 packages/drafts/alg/a.md")
+        _, out = self.prompt("s-alg1", "【委托 #2101】Alg-p1 → Alg-p0-01：需求包 packages/drafts/alg/a.md")
         self.assertNotIn("登记回执", out.get("additionalContext", ""))
         _, out = self.route("pool", "--recover", sid="s-entry")
         self.assertIn("#2102", out)
@@ -4604,7 +4638,7 @@ class DeliveryTextTest(PoolProjectCase):
             for old in (daily + "决策队列", day + "交一次", day + "把待决定的决策", daily + "队列", "随时" + "交",
                         day + "的决策队列", "被消息叫起来的轮次不停下来问人"):
                 self.assertNotIn(old, text, name)
-        entry = texts["pmo-p2.md"]
+        entry = texts["pmo-p1.md"]
         for part in ("**决策队列。** 决策只在两个时刻推给研究员，到时 hook 会在上下文里提示你",
                      "在状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和主文档链接，不超过 3 行",
                      "紧急程度为“插队”的，这一轮可以在收尾里问研究员一次",
@@ -4626,7 +4660,7 @@ class DeliveryTextTest(PoolProjectCase):
                      "池会话被其他 agent 会话叫醒的轮次：拒绝 AskUserQuestion，去掉收尾工具里的提问"):
             self.assertIn(part, claude)
         self.assertNotIn("收尾时不留等研究员回答的问题", claude)                  # the exception above would contradict it
-        for name in ("alg-p2.md", "alg-p0.md", "alg-p0.md"):
+        for name in ("alg-p1.md", "alg-p0.md", "alg-p0.md"):
             self.assertIn("被其他 agent 会话叫醒的轮次", texts[name], name)
             self.assertIn("收尾里的提问 hook 会去掉", texts[name], name)
         self.assertNotIn("研究员每天", texts["org/org.md"])
@@ -4635,7 +4669,7 @@ class DeliveryTextTest(PoolProjectCase):
         self.assertIn("2026-11-15 定下推送时机", decisions)
         self.assertIn("被其他 agent 会话叫醒的轮次，池会话都不向研究员提问，只有路由把一条插队的决策转告入口的那一轮，入口可以在收尾里问一次", decisions)
         policy = json.loads(self.read(".claude/hooks/policy.json"))
-        text = pool_lib.injection(self.tmp, policy, {"name": "PMO-p2-01", "role": "pmo-p2"}, "规则已更新。")
+        text = pool_lib.injection(self.tmp, policy, {"name": "PMO-p1", "role": "pmo-p1"}, "规则已更新。")
         self.assertNotIn("下文略", text)                                         # the entry's role text is injected whole
         self.assertIn("**面向研究员的内容。**", text)
 
@@ -4702,11 +4736,11 @@ class DeliveryTextTest(PoolProjectCase):
                           ("CHANGELOG.md 1.0.3", "决策包包头新加两行：“执行方”写这条决策定下以后由谁执行"),
                           ("CHANGELOG.md 1.0.3", "补上“执行方”和“研究员要做的事”两行再登记")):
             self.assertIn(part, sources[rel], rel)
-        for name in ("CLAUDE.md", "pmo-p2.md", "org/org.md", "org/decisions.md", "templates/decision.md", "pmo-scribe.md",
-                     "pmo-router.md", "alg-p2.md"):
+        for name in ("CLAUDE.md", "pmo-p1.md", "org/org.md", "org/decisions.md", "templates/decision.md", "pmo-scribe.md",
+                     "pmo-router.md", "alg-p1.md"):
             self.assertIn("研究员要做的事", texts[name], name)
             self.assertIn("执行方", texts[name], name)
-        entry = texts["pmo-p2.md"]
+        entry = texts["pmo-p1.md"]
         for part in ("你主动给研究员的只有两类：决策（给主文档的飞书链接，执行方和要研究员亲手做的事一并写上）、里程碑（研究任务走完一步、出了结论）",
                      "再把待决定的决策和等研究员执行的决策全部附在末尾，之前提过的也附，每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接",
                      "**决策的三个阶段。** 每条决策走三步：待决定、待执行（用 2.1.0 及以前的模板建的空间里叫“已决定”）、归档（已执行）。"
@@ -4715,7 +4749,7 @@ class DeliveryTextTest(PoolProjectCase):
                      "研究员在本会话说做完了，把他的原话交给路由，写明他做了什么，路由请书记员记成评论再归档",
                      "执行方是会话的，书记员把决定内容发给它，它照决定执行完，马上请书记员归档，不在待执行里停留",
                      "执行方是你自己的（比如第 9 步的决策），你照决定办完，请路由安排归档",
-                     "被决策卡住的工作项照旧记阻塞，阻塞原因写“等研究员：决策 #<ID>”，决策归档以后由卡住的那个 +2 请书记员清掉",
+                     "被决策卡住的工作项照旧记阻塞，阻塞原因写“等研究员：决策 #<ID>”，决策归档以后由卡住的那个 +1 请书记员清掉",
                      "研究员任务清单和补位请求跟在决策清单后面列出，它们不算决策",
                      # the table the router is asked for: the same columns as the entry skill and the router's role
                      "汇总成表：每件写状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、选项、建议，"
@@ -4735,9 +4769,9 @@ class DeliveryTextTest(PoolProjectCase):
                      "每条决策走三步：待决定、待执行（用 2.1.0 及以前的模板建的空间里叫“已决定”）、归档（已执行）。研究员定了，书记员马上确认“决定”这一步，并通知执行方",
                      "执行方是会话的，照决定执行完，马上请书记员归档，不在待执行里停留；",
                      "执行方是研究员的，他在入口会话说做完了，入口把他的原话交给路由，路由请书记员归档，书记员在评论里记下他做了什么。",
-                     "决策归档以后，卡住的那个 +2 请书记员清掉阻塞"):
+                     "决策归档以后，卡住的那个 +1 请书记员清掉阻塞"):
             self.assertIn(part, claude)
-        alg = texts["alg-p2.md"]
+        alg = texts["alg-p1.md"]
         for part in ("写在决策包包头“研究员要做的事”。每份决策包都有这一行，没有要研究员亲手做的写“无”。",
                      "包头还有“执行方”一行，写这条决策定下以后由谁执行：“研究员”，或者执行它的会话名，多半是你自己。",
                      "执行方是研究员时“研究员要做的事”不能是“无”，执行方是会话时写“无”，对不上包检查会退回。",
@@ -4745,13 +4779,13 @@ class DeliveryTextTest(PoolProjectCase):
                      "被决策卡住的工作项，登记以后请书记员把阻塞原因写成“等研究员：决策 #<ID>”，这条决策归档以后再请它清掉",
                      "执行方是你的，书记员把决定内容发给你，你照决定执行完，马上请书记员归档，不在待执行里停留"):
             self.assertIn(part, alg)
-        self.assertNotIn("研究员要做的事", texts["alg-p0.md"])                    # only a +2 writes decision packages
+        self.assertNotIn("研究员要做的事", texts["alg-p0.md"])                    # only a +1 writes decision packages
         self.assertIn("决策包的执行方写的是你时，书记员确认“决定”以后会把决定内容发给你：照决定执行完，马上请书记员归档，不在待执行里停留",
                       texts["pmo-router.md"])
         self.assertIn("状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事", texts["pmo-router.md"])
         scribe = texts["pmo-scribe.md"]
         self.assertIn("“决定”照上一条在研究员定了以后就确认，确认完通知执行方：输出的最后一行写着执行方，也就是决策包包头的“执行方”", scribe)
-        self.assertIn("另给执行方发一条 `【通知 #<决策 ID>】PMO-p0-01 → <执行方的会话名>：研究员定了：<决定内容>。"
+        self.assertIn("另给执行方发一条 `【通知 #<决策 ID>】PMO-p0-ledger → <执行方的会话名>：研究员定了：<决定内容>。"
                       "照决定执行，执行完马上请书记员归档`", scribe)
         self.assertIn("执行方是研究员的（包头“研究员要做的事”写着要他亲手做什么），不另发，入口按清单列给研究员；他做完了才归档", scribe)
         self.assertIn("归档的登记请求要写“由 研究员 提出”，带研究员说做完了的原话", scribe)
@@ -4763,11 +4797,11 @@ class DeliveryTextTest(PoolProjectCase):
         self.assertIn("研究员任务清单和补位请求不算决策，入口跟在决策清单后面列给研究员。依据：研究员 2026-11-20 定。", decisions)
         self.assertIn("执行方、定下以后研究员要做的事", texts["org/org.md"])        # the package table
         for part in ("- 需要接收方做的事：拍板（决策队列）／确认记录无误（研究员主动发起）\n"
-                     "- 执行方：<研究员，或者执行这条决策的会话名：各序列的 +2、入口或路由，多半是发出方；只要有一个选项要研究员亲手做，就写“研究员”>\n"
+                     "- 执行方：<研究员，或者执行这条决策的会话名：各序列的 +1、入口或路由，多半是发出方；只要有一个选项要研究员亲手做，就写“研究员”>\n"
                      "- 研究员要做的事：<这条决策定下以后要研究员亲手做的事，比如整理数据、挂 API、维护沙箱、开 Docker、调设置；没有写“无”>\n",
                      "每条决策走三步：待决定、待执行、归档（已执行）",
                      "包检查要求决策包有这一行",
-                     "比如 `Alg-p2-01`，只写名字、不加说明。",
+                     "比如 `Alg-p1`，只写名字、不加说明。",
                      "执行方是研究员时，“研究员要做的事”不能是“无”；执行方是会话时，“研究员要做的事”写“无”。"
                      "缺了“执行方”这一行，或者两行对不上，包检查会退回。"):
             self.assertIn(part, template)
@@ -4784,24 +4818,24 @@ class DeliveryTextTest(PoolProjectCase):
         self.assertIn("路由转来的那一轮，入口在状态里提一次：事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）、主文档链接", steps)
         self.assertIn("“插队”的，这一轮可以在收尾里问研究员一次", steps)
         self.assertIn("研究员主动来谈时，入口连同其余待决定的决策和等研究员执行的决策列给他", steps)
-        self.assertIn("研究员定了，入口把原话交给路由，路由请书记员确认“决定”这一步，决策到“待执行”；书记员把决定内容发给执行方 Alg-p2-01，"
+        self.assertIn("研究员定了，入口把原话交给路由，路由请书记员确认“决定”这一步，决策到“待执行”；书记员把决定内容发给执行方 Alg-p1，"
                       "它照决定执行完，马上请书记员归档", steps)                    # the package's 执行方
         with open(path, "w", encoding="utf-8") as f:                              # one the researcher carries out
             f.write(example_blocks()[9])
         steps = "\n".join(route.classify_draft(self.spec, self.tmp, path)["steps"])
         self.assertIn("研究员定了，入口把原话交给路由，路由请书记员确认“决定”这一步，决策到“待执行”；执行方是研究员，他说做完了，路由请书记员归档", steps)
-        with open(path, "w", encoding="utf-8") as f:                              # decided in a talk with Product-p2-01
+        with open(path, "w", encoding="utf-8") as f:                              # decided in a talk with Product-p1
             f.write(example_blocks()[8])
         out = route.classify_draft(self.spec, self.tmp, path)
         self.assertEqual(out["row"], "R6")
-        self.assertIn("书记员把决定内容发给执行方 Product-p2-01，它照决定执行完，马上请书记员归档", out["steps"])
+        self.assertIn("书记员把决定内容发给执行方 Product-p1，它照决定执行完，马上请书记员归档", out["steps"])
 
     def test_a_refill_request_waits_for_the_researcher(self):
         self.started_pool()
         code, text = self.route("refill", "alg-p0", sid="s-alg2")
         self.assertEqual(code, 0)
         self.assertIn("要研究员在提卡片的那个会话里点一下才会开，不会自动开", text)
-        inbox = self.read("inbox/PMO-p2-01.jsonl")
+        inbox = self.read("inbox/PMO-p1.jsonl")
         self.assertIn("研究员来谈时跟在决策清单后面列出，补位请求不算决策", inbox)
         self.assertNotIn("每日", inbox + text)
 
@@ -4811,12 +4845,12 @@ class DeliveryTextTest(PoolProjectCase):
         self.assertEqual(code, 0)
         self.assertIn(self.GATES + "\n- 无", text)
         wrap, ask = "mcp__ccd_turn__wrap_up", "AskUserQuestion"
-        rows = [{"session_name": "PMO-p2-01", "role": "pmo-p2", "tool": wrap, "agent_turn_gate": "stripped"}] * 3 + [
-            {"session_name": "PMO-p2-01", "role": "pmo-p2", "tool": wrap, "agent_turn_gate": "allowed_urgent"},
+        rows = [{"session_name": "PMO-p1", "role": "pmo-p1", "tool": wrap, "agent_turn_gate": "stripped"}] * 3 + [
+            {"session_name": "PMO-p1", "role": "pmo-p1", "tool": wrap, "agent_turn_gate": "allowed_urgent"},
             {"session_name": "Alg-p0-01", "role": "alg-p0", "tool": ask, "agent_turn_gate": "denied"},
             {"session_name": "Alg-p0-01", "role": "alg-p0", "tool": wrap, "agent_turn_gate": "stripped"},
-            {"session_name": "Alg-p2-01", "role": "alg-p2", "tool": wrap},                        # nothing was asked
-            {"session_name": "Alg-p2-01", "role": "alg-p2", "tool": "Bash", "agent_turn_gate": "unknown"}]
+            {"session_name": "Alg-p1", "role": "alg-p1", "tool": wrap},                        # nothing was asked
+            {"session_name": "Alg-p1", "role": "alg-p1", "tool": "Bash", "agent_turn_gate": "unknown"}]
         path = os.path.join(self.tmp, ".claude", "logs", "guard.jsonl")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
@@ -4826,9 +4860,9 @@ class DeliveryTextTest(PoolProjectCase):
         code, text = self.route("audit", sid="s-entry")
         self.assertEqual(code, 0)
         section = text.split(self.GATES, 1)[1]
-        self.assertIn("\n- PMO-p2-01：收尾提问去掉 3 次，AskUserQuestion 拒绝 0 次，插队决策放行 1 次", section)
+        self.assertIn("\n- PMO-p1：收尾提问去掉 3 次，AskUserQuestion 拒绝 0 次，插队决策放行 1 次", section)
         self.assertIn("\n- Alg-p0-01：收尾提问去掉 1 次，AskUserQuestion 拒绝 1 次，插队决策放行 0 次", section)
-        self.assertNotIn("Alg-p2-01：收尾", section)
+        self.assertNotIn("Alg-p1：收尾", section)
         self.assertNotIn(self.GATES + "\n- 无", text)
 
 
@@ -4981,7 +5015,7 @@ class HookScopeTest(PoolProjectCase):
             self.assertEqual(self.bash("s-scribe", cmd)[1].get("permissionDecision"), "allow", cmd)      # the scribe's own writes
         out = self.bash("s-scribe", self.DOCS)[1]                                   # 1.1.0: a document is not among them
         self.assertEqual(out.get("permissionDecision"), "deny")
-        self.assertIn("（PMO-p0-01）不能直接执行写命令 docs +update。文档谁负责谁写，但只经文档脚本", out["permissionDecisionReason"])
+        self.assertIn("（PMO-p0-ledger）不能直接执行写命令 docs +update。文档谁负责谁写，但只经文档脚本", out["permissionDecisionReason"])
         for cmd in self.wrapped(self.DOCS + " --yes"):                              # --yes is the researcher's, the scribe included
             out = self.bash("s-scribe", cmd)[1]
             self.assertEqual(out.get("permissionDecision"), "deny", cmd)
@@ -5073,7 +5107,7 @@ class HookScopeTest(PoolProjectCase):
                          ("s-scribe", "pushd repo && %s; popd" % self.MEEGLE), ("s-alg1", docs_write), ("s-researcher", read)):
             self.assertEqual(self.bash(sid, cmd)[1].get("permissionDecision"), "allow", (sid, cmd))
         out = self.bash("s-scribe", comment)[1]                                     # the rewrite goes with the allow
-        self.assertIn("[PMO+0]", out["updatedInput"]["command"])
+        self.assertIn("[PMO-ledger]", out["updatedInput"]["command"])
         out = self.bash("s-entry", send.replace(" --as bot", ""))[1]                # and so does the identity flag a write lacks
         self.assertEqual(out.get("permissionDecision"), "allow")
         self.assertTrue(out["updatedInput"]["command"].endswith("--as bot"))
@@ -5214,12 +5248,12 @@ class HookScopeTest(PoolProjectCase):
             for sid in ("s-scribe", "s-alg2", "s-alg1", "s-alg0", "s-entry"):
                 self.assertEqual(self.bash(sid, cmd)[1].get("permissionDecision"), "allow", (sid, cmd))
             self.assertEqual(self.bash("s-researcher", cmd)[1].get("permissionDecision"), "ask", cmd)
-        W = "python3.12 -I .claude/solo-lab/bin/workitem.py confirm 2140 --by Alg-p2-01 --apply"
+        W = "python3.12 -I .claude/solo-lab/bin/workitem.py confirm 2140 --by Alg-p1 --apply"
         self.assertEqual(self.bash("s-scribe", W)[1].get("permissionDecision"), "allow")
         for cmd in (W, "%s upload packages/drafts/alg/x.md --apply && %s" % (D, W), "%s; %s relink 2140 --apply" % (W, D)):
             out = self.bash("s-alg2", cmd)[1]                                        # next to a command of docs.py too
             self.assertEqual(out.get("permissionDecision"), "deny", cmd)
-            self.assertIn("（Alg-p2-01）不能运行 workitem.py confirm：工作项、字段和状态只由书记员 PMO-p0-01 写，给它发【登记请求】", out["permissionDecisionReason"], cmd)
+            self.assertIn("（Alg-p1）不能运行 workitem.py confirm：工作项、字段和状态只由书记员 PMO-p0-ledger 写，给它发【登记请求】", out["permissionDecisionReason"], cmd)
         for cmd in ("python3 tools/docs.py revise 2140 v2.md --note x --apply", "python3 tools/my_docs.py upload x.md --apply",
                     "python3.12 -I -m docs upload x.md --apply", "echo x.md | xargs %s upload --apply" % D,
                     "python3 - <<'EOF'\nimport docs\ndocs.main(['upload', 'x.md', '--apply'])\nEOF"):
@@ -5245,7 +5279,7 @@ class HookScopeTest(PoolProjectCase):
         L = "python3.12 -I .claude/solo-lab/bin/ledger.py"
         for sid in ("s-entry", "s-alg2", "s-alg1"):
             for preview in (L + " revise 2140 packages/drafts/alg/v2.md --note '只读预览'", L + " archive 2140",
-                            L + " register packages/drafts/alg/x.md", "cd %s && %s confirm 2140 --by Alg-p2-01" % (shlex.quote(self.tmp), L)):
+                            L + " register packages/drafts/alg/x.md", "cd %s && %s confirm 2140 --by Alg-p1" % (shlex.quote(self.tmp), L)):
                 self.assertNotEqual(self.bash(sid, preview)[1].get("permissionDecision"), "deny", (sid, preview))
             for write in (L + " revise 2140 packages/drafts/alg/v2.md --note x --apply", L + " archive 2140 --app",
                           "A=--apply; %s archive 2140 $A" % L, L + " archive 2140 $(echo --apply)"):
@@ -5295,7 +5329,7 @@ class FreezePromptTest(PoolProjectCase):
     def test_a_waiting_decision_is_told_each_turn_and_not_enforced_by_the_hook(self):
         first = self.register("实验平台用什么隔离候选代码", "p1.md")
         frozen = "#%s（实验平台用什么隔离候选代码）：“特权应用：Docker”“`docker build`”“照某个选项改实验平台的计量和内存闸”。" % first
-        for sid, text in (("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md"), ("s-entry", "早"), ("s-q1", "继续")):
+        for sid, text in (("s-alg1", "【委托 #2101】Alg-p1 → Alg-p0-01：需求包 x.md"), ("s-entry", "早"), ("s-q1", "继续")):
             said = self.context(sid, text)
             self.assertIn("待定决策冻结的动作，决策定下以前谁都不做", said, sid)
             self.assertIn(frozen, said, sid)
@@ -5349,11 +5383,11 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
                          "状态包里已定的实验条件和暂停范围，和手上任务包的写法冲突时，以状态包和台账为准，并报给",
                          "或者找不到所属研究任务，说一句“跳过”再继续；`ledger.py status` 读失败，报出失败原因后继续，不卡住。"):
                 self.assertIn(part, text, role)
-            upper = {"pmo-p2": "研究员", "pmo-router": "入口"}.get(role) or ("路由" if pol["rank"] == 2 or pol["sequence"] == "pmo" else "委托你的会话")
+            upper = {"pmo-p1": "研究员", "pmo-router": "入口"}.get(role) or ("路由" if pol["rank"] == 1 or pol["sequence"] == "pmo" else "委托你的会话")
             self.assertIn("以状态包和台账为准，并报给%s。" % upper, text, role)
             # the router keeps the 状态包 of every task and the entry answers from them (1.1.0): both read them all
-            self.assertIn("没有研究任务可读，或者" if role in ("pmo-p2", "pmo-router") else "手上没有工作项，或者", text, role)
-        entry = self.read(".claude/agents/pmo-p2.md")
+            self.assertIn("没有研究任务可读，或者" if role in ("pmo-p1", "pmo-router") else "手上没有工作项，或者", text, role)
+        entry = self.read(".claude/agents/pmo-p1.md")
         self.assertIn("找出没归档的研究任务（`ledger.py query tasks`），和手上工作项所属的研究任务", entry)
         router = self.read(".claude/agents/pmo-router.md")                # 1.1.0: the router keeps it, with docs.py, and the entry reads it
         for part in ("**状态包由你维护。** 研究任务主文档末尾的“状态包”记这条任务现在的状态：上游卡在哪条决策、哪些实验条件已经定死、哪些工作暂停了；",
@@ -5361,7 +5395,7 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
                      "运行 `python3.12 -I .claude/solo-lab/bin/docs.py status-block <研究任务 ID> --file <文件> --apply` 整段替换。"):
             self.assertIn(part, router)
         self.assertIn("研究任务的状态包（`ledger.py status <研究任务 ID>`，路由维护）", entry)
-        for other in ("alg-p2", "pmo-p2", "pmo-scribe"):
+        for other in ("alg-p1", "pmo-p1", "pmo-scribe"):
             self.assertNotIn("状态包由你维护", self.read(".claude/agents/%s.md" % other), other)
         claude = self.read("CLAUDE.md")
         compact = claude.split("## Compact Instructions", 1)[1]
@@ -5394,7 +5428,7 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
         self.receipt(2101, type="same_seq", task="2000", source=None)
         with open(os.path.join(self.tmp, "packages", "sent", "2102-x.md.json"), "w", encoding="utf-8") as f:
             json.dump({"work_item_id": "2102", "type": "same_seq", "source": "2101"}, f)      # no task: up 来源工作项
-        self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md")
+        self.prompt("s-alg1", "【委托 #2101】Alg-p1 → Alg-p0-01：需求包 x.md")
         line = "#2101 属于研究任务 #2000，运行 %s 2000。" % self.CMD
         for sid in ("s-alg1", "s-alg2"):                     # the one that owes it, and the one that assigned it
             text = self.compacted(sid)
@@ -5406,10 +5440,10 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
         for source in ("startup", "resume", "clear"):        # only a compaction adds the line
             self.assertNotIn("上下文刚压缩过", self.compacted("s-alg1", source), source)
         # an item the receipts say nothing about: how to find its task, and that it may be skipped; the rest still named
-        self.prompt("s-alg1", "【委托 #2103】Alg-p2-01 → Alg-p0-01：需求包 z.md")
+        self.prompt("s-alg1", "【委托 #2103】Alg-p1 → Alg-p0-01：需求包 z.md")
         with open(os.path.join(self.tmp, "packages", "sent", "2104.json"), "w", encoding="utf-8") as f:
             f.write("{broken")
-        self.prompt("s-alg1", "【委托 #2104】Alg-p2-01 → Alg-p0-01：需求包 w.md")
+        self.prompt("s-alg1", "【委托 #2104】Alg-p1 → Alg-p0-01：需求包 w.md")
         text = self.compacted("s-alg1")
         self.assertIn("#2101、#2102 属于研究任务 #2000，运行 %s 2000；" % self.CMD, text)
         self.assertIn("#2103、#2104 在本地回执里查不到所属研究任务：用 ledger.py get <工作项 ID> 看“所属研究任务”字段，"
@@ -5420,14 +5454,14 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
         self.assertTrue(text.endswith("上下文刚压缩过。派发记录里本会话没有未了的工作项：手上确实没有的，说一句“跳过”再继续；"
                                       "有的，照角色说明里“压缩上下文以后”那一条找到它所属的研究任务，先运行 %s <研究任务 ID> 读状态包。" % self.CMD), text[-300:])
         # the research task itself, and the item a 【继续】 named after it was handed back
-        self.prompt("s-q2", "【委托 #2000】PMO-p2-01 → Quality-p2-01：研究任务单 t.md")
+        self.prompt("s-q2", "【委托 #2000】PMO-p1 → Quality-p1：研究任务单 t.md")
         self.assertIn("手上的是研究任务 #2000，运行 %s 2000。" % self.CMD, self.compacted("s-q2"))
-        self.prompt("s-alg2", "【交付 #2101】Alg-p0-01 → Alg-p2-01：交付包 d.md")
+        self.prompt("s-alg2", "【交付 #2101】Alg-p0-01 → Alg-p1：交付包 d.md")
         for item in ("2103", "2104"):
-            self.prompt("s-alg2", "【交付 #%s】Alg-p0-01 → Alg-p2-01：交付包 d.md" % item)
+            self.prompt("s-alg2", "【交付 #%s】Alg-p0-01 → Alg-p1：交付包 d.md" % item)
         self.assertIn("派发记录里本会话没有未了的工作项", self.compacted("s-alg2"))
         self.assertIn("：#2102 属于研究任务 #2000", self.compacted("s-alg1"))          # it has handed #2101 in
-        self.prompt("s-alg1", "【继续 #2101】Alg-p2-01 → Alg-p0-01：第 2 条验收标准没有证据")
+        self.prompt("s-alg1", "【继续 #2101】Alg-p1 → Alg-p0-01：第 2 条验收标准没有证据")
         self.assertIn("：#2101、#2102 属于研究任务 #2000", self.compacted("s-alg1"))    # the item its status file names
         # a session nobody claimed gets no such line
         self.assertNotIn("上下文刚压缩过", self.compacted("s-mine"))
@@ -5436,7 +5470,7 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
         self.started_pool()
         self.receipt(2000, type="research_task")
         self.receipt(2101, type="same_seq", task="2000")
-        self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md")
+        self.prompt("s-alg1", "【委托 #2101】Alg-p1 → Alg-p0-01：需求包 x.md")
         code, out, err = self.post_compact("s-alg1")
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(out.strip(), "上下文刚压缩过，接着干活之前先读所属研究任务的状态包（规矩照角色说明里“压缩上下文以后”那一条）："
@@ -5503,12 +5537,12 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
         self.receipt(2000, type="research_task")
         for i in range(60):
             self.receipt(3000 + i, type="same_seq", task="2000")
-            self.prompt("s-alg2", "【委托 #%d】PMO-p2-01 → Alg-p2-01：需求包 x.md" % (3000 + i))
+            self.prompt("s-alg2", "【委托 #%d】PMO-p1 → Alg-p1：需求包 x.md" % (3000 + i))
         text = self.compacted("s-entry")
         self.assertLessEqual(len(text), pool_lib.INJECT_LIMIT)
         self.assertIn("## 怎么干活", text)
         self.assertNotIn("下文略", text)
-        self.assertIn("#%d→Alg-p2-01；另有 40 条，用 pool.py show --recover 看全。" % (3000 + pool_lib.ITEMS_SHOWN - 1), text)
+        self.assertIn("#%d→Alg-p1；另有 40 条，用 pool.py show --recover 看全。" % (3000 + pool_lib.ITEMS_SHOWN - 1), text)
         self.assertTrue(text.endswith("：未了事项属于研究任务 #2000；连同其余没归档的（ledger.py query tasks 列出），逐条运行 %s <研究任务 ID>。" % self.CMD), text[-200:])
         text = self.compacted("s-alg2")                                              # the session that owes them: the first few named
         self.assertTrue(text.endswith("等 60 条 属于研究任务 #2000，运行 %s 2000。" % self.CMD), text[-200:])
@@ -5521,9 +5555,9 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
         line about the research tasks named every item again and gave the command once for each task."""
         self.started_pool()
         policy = json.loads(self.read(".claude/hooks/policy.json"))
-        claim = {"name": "PMO-p2-01", "role": "pmo-p2"}
+        claim = {"name": "PMO-p1", "role": "pmo-p1"}
         base = 7160000000
-        names = ("Alg-p2-01", "Quality-p2-01", "Infra-p2-01", "Product-p2-01", "Rnd-p2-01", "Liaison-p2-01", "PMO-p1-01")
+        names = ("Alg-p1", "Quality-p1", "Infra-p1", "Product-p1", "Rnd-p1", "Liaison-p1", "PMO-p0-router")
 
         def injected(n, sessions, tasks, compacted=True):
             for k in range(tasks):
@@ -5545,12 +5579,12 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
         self.receipt(base + 900, type="research_task")
         for i in range(18):
             self.receipt(base + 100 + i, type="cross_request", task=str(base + 900))
-            self.prompt("s-alg2", "【委托 #%d】PMO-p2-01 → Alg-p2-01：需求包 x.md" % (base + 100 + i))
+            self.prompt("s-alg2", "【委托 #%d】PMO-p1 → Alg-p1：需求包 x.md" % (base + 100 + i))
         for source in ("compact", "resume"):
             text = self.compacted("s-entry", source)
             self.assertNotIn("下文略", text, source)
             self.assertIn("未了事项：委托出去还没交付：#7160000100、#7160000101、", text, source)
-            self.assertIn("、#7160000117→Alg-p2-01。台账和状态包是正本", text, source)
+            self.assertIn("、#7160000117→Alg-p1。台账和状态包是正本", text, source)
         self.assertTrue(self.compacted("s-entry").endswith(
             "：未了事项属于研究任务 #7160000900；连同其余没归档的（ledger.py query tasks 列出），逐条运行 %s <研究任务 ID>。" % self.CMD))
 
@@ -5568,17 +5602,17 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
         self.assertNotIn("派发记录里本会话没有未了的工作项", text)
         code, out, err = self.post_compact("s-entry")
         self.assertEqual((code, out.strip(), err), (0, nothing, ""))
-        self.prompt("s-entry", "【交付 #2101】Alg-p2-01 → PMO-p2-01：交付包 d.md")     # a report it received leaves it nothing open
+        self.prompt("s-entry", "【交付 #2101】Alg-p1 → PMO-p1：交付包 d.md")     # a report it received leaves it nothing open
         self.assertTrue(self.compacted("s-entry").endswith(nothing))
         self.receipt(2101, type="cross_request", task="2000")
         self.receipt(2201, type="cross_request", task="2200")
         self.receipt(2200, type="research_task")
-        self.prompt("s-alg2", "【委托 #2101】PMO-p2-01 → Alg-p2-01：需求包 x.md")
+        self.prompt("s-alg2", "【委托 #2101】PMO-p1 → Alg-p1：需求包 x.md")
         holds = head + "未了事项属于研究任务 #2000；连同其余没归档的（ledger.py query tasks 列出），逐条运行 %s <研究任务 ID>。" % self.CMD
         self.assertTrue(self.compacted("s-entry").endswith(holds))
         self.assertEqual(self.post_compact("s-entry")[1].strip(), holds)
-        self.prompt("s-q2", "【委托 #2201】PMO-p2-01 → Quality-p2-01：需求包 y.md")
-        self.prompt("s-q2", "【委托 #2999】PMO-p2-01 → Quality-p2-01：需求包 z.md")     # an item the receipts say nothing about
+        self.prompt("s-q2", "【委托 #2201】PMO-p1 → Quality-p1：需求包 y.md")
+        self.prompt("s-q2", "【委托 #2999】PMO-p1 → Quality-p1：需求包 z.md")     # an item the receipts say nothing about
         self.assertTrue(self.compacted("s-entry").endswith(holds.replace("#2000；", "#2000、#2200；")))
         self.assertEqual(pool_lib.status_hint(self.tmp, ["2999"], entry=True), nothing)
         self.assertEqual(pool_lib.status_hint(self.tmp, [], entry=True), nothing)
@@ -5595,7 +5629,7 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
         self.started_pool()
         self.receipt(2000, type="research_task")
         self.receipt(2101, type="same_seq", task="2000")
-        self.prompt("s-alg1", "【委托 #2101】Alg-p2-01 → Alg-p0-01：需求包 x.md")
+        self.prompt("s-alg1", "【委托 #2101】Alg-p1 → Alg-p0-01：需求包 x.md")
         with open(os.path.join(self.tmp, ".claude", "logs", "dispatch.jsonl"), "ab") as f:
             f.write(b'{"event": "message", "kind": "notice", "note": "\xff\xfe"}\n{"event": "mess')
         line = ("上下文刚压缩过，接着干活之前先读所属研究任务的状态包（规矩照角色说明里“压缩上下文以后”那一条）："
@@ -5606,7 +5640,7 @@ class StatusBlockAfterCompactionTest(PoolProjectCase):
         self.assertEqual((rec["summary"], rec["status_hint"]), ("摘要", line))
         text = self.compacted("s-alg1")
         self.assertIn("本会话是 Alg-p0-01", text)
-        self.assertIn("未了事项：还欠交付：#2101（交付给 Alg-p2-01）。", text)
+        self.assertIn("未了事项：还欠交付：#2101（交付给 Alg-p1）。", text)
         self.assertTrue(text.endswith(line))
         self.assertTrue(any(r.get("id") == "2101" for r in pool_lib.read_events(self.tmp)))
         # whatever else fails while the items are looked up becomes the line that says so, and the summary is kept
@@ -5683,7 +5717,7 @@ class TextsAfterTheGatesTest(PoolProjectCase):
                      "到期按决策包写的到期默认动作办。判据下面的清单是必须写不可逆的下限，清单以外的事由作者按判据判断。",
                      "每个选项要做的不可逆的动作"):
             self.assertIn(part, org)
-        self.assertIn("- 批准不可逆的事：", texts["pmo-p2.md"])                     # the entry carries what only people do
+        self.assertIn("- 批准不可逆的事：", texts["pmo-p1.md"])                     # the entry carries what only people do
         for part in ("hook 不拦清单里的命令，也不按待定决策冻结：命令的权限照会话自己的权限检查，这几条规矩靠各会话照规则办和包检查。",
                      "一件事可逆不可逆由决策包的作者按判据判断，清单是必须写不可逆的下限。",
                      "待定的决策记在本地决策状态 `.claude/state/gates.json`，由台账脚本维护。",
@@ -5691,11 +5725,11 @@ class TextsAfterTheGatesTest(PoolProjectCase):
                      "依据：研究员 2026-11-16 定，2026-11-18 改成 hook 不拦。"):
             self.assertIn(part, decisions)
         self.assertIn("用编辑工具改它们由 hook 管；用 shell 命令删改 hook 不拦，照规则同样不许。", claude)
-        for name in ("alg-p2.md", "product-p2.md", "pmo-p2.md"):
+        for name in ("alg-p1.md", "product-p1.md", "pmo-p1.md"):
             self.assertNotIn("hook 在池会话里拒绝", texts[name], name)
         self.assertIn("不可逆事项清单（`org/org.md`）里的事，要等研究员定了、所选选项里列了它才做。hook 不拦这些命令，也不按待定决策冻结，"
                       "权限照 Claude Code 自己的检查。上面两条规矩不变，靠你照规则办、每轮的冻结提示和包检查。一件事可逆不可逆，你按判据判断，清单是必须写不可逆的下限。",
-                      texts["alg-p2.md"])
+                      texts["alg-p1.md"])
         scribe = texts["pmo-scribe.md"]
         for part in ("脚本核对选项名，把它记进回执，再加一条评论，写明这个选项列的不可逆的动作。这只是记录：不加也能确认，hook 不看它，"
                      "不可逆事项清单里的命令 hook 都不拦。请求没写选项的照请求确认，不替研究员挑。",
@@ -5747,26 +5781,26 @@ class TextsAfterTheGatesTest(PoolProjectCase):
         self.assertIn("质量序列的会话和研究员自己的会话例外：改动弹窗要研究员确认，bypass 和 dontAsk 模式下也拒绝", claude)
 
     def test_who_carries_a_decision_out_is_written_everywhere(self):
-        """2026-11-16: 执行方 takes the researcher, a sequence's +2, the entry or the router; one option that needs
+        """2026-11-16: 执行方 takes the researcher, a sequence's +1, the entry or the router; one option that needs
         the researcher's hands makes it 研究员, and `confirm --executor` hands the decision to a session when the
         researcher picked another. The template, the packages skill, the scribe's and the entry's role texts and
         the ledger skill say so."""
         texts = self.texts()
         for name, part in (
-                ("templates/decision.md", "执行方写会话的，只收各序列的 +2、入口和路由。写 +0 或书记员的，包检查会退回"),
+                ("templates/decision.md", "执行方写会话的，只收各序列的 +1、入口和路由。写 +0 或书记员的，包检查会退回"),
                 ("templates/decision.md", "书记员确认“决定”时加 `--executor <会话名>`，把执行方改成那个会话"),
-                ("skills/packages/SKILL.md", "执行方写会话的，只收各序列的 +2、入口和路由，写 +0 或书记员的包检查会退回"),
+                ("skills/packages/SKILL.md", "执行方写会话的，只收各序列的 +1、入口和路由，写 +0 或书记员的包检查会退回"),
                 ("skills/packages/SKILL.md", "书记员确认“决定”时加 `--executor <会话名>` 把执行方改成那个会话"),
                 ("skills/packages/references/principles.md", "只要有一个选项要研究员亲手做，就写“研究员”，研究员选了不用他动手的选项，书记员确认“决定”时用 `--executor` 改成会话。"),
-                ("skills/packages/references/examples.md", "书记员确认“决定”时加 `--executor Infra-p2-01`，把执行方改成会话。"),
-                ("pmo-scribe.md", "确认“决定”时加 `--executor <会话名>`，只收各序列的 +2、入口和路由。"),
+                ("skills/packages/references/examples.md", "书记员确认“决定”时加 `--executor Infra-p1`，把执行方改成会话。"),
+                ("pmo-scribe.md", "确认“决定”时加 `--executor <会话名>`，只收各序列的 +1、入口和路由。"),
                 ("pmo-scribe.md", "要把执行方改成研究员的，脚本会拒绝：请发出方写下一版，用 `docs.py revise`。"),
                 ("pmo-scribe.md", "先 `workitem.py rollback <ID> --to 决定 --reason '<原因>' --by 研究员`，再带 `--executor` 确认。"),
-                ("pmo-router.md", "包头执行方是研究员、他选的选项却不用他动手的，写明改由哪个会话执行（各序列的 +2、入口或你），书记员确认时加 `--executor <会话名>`。"),
-                ("pmo-p2.md", "包头执行方是研究员、他选的选项却不用他动手的，写明改由哪个会话执行。"),
-                ("alg-p2.md", "执行方写会话的只收各序列的 +2、入口和路由，要下级干的活由你用需求包委托。"),
-                ("alg-p2.md", "路由请书记员确认“决定”时用 `--executor` 把执行方改成会话。"),
-                ("CLAUDE.md", "执行方写会话的只收各序列的 +2、入口和路由；只要有一个选项要研究员亲手做就写“研究员”，"
+                ("pmo-router.md", "包头执行方是研究员、他选的选项却不用他动手的，写明改由哪个会话执行（各序列的 +1、入口或你），书记员确认时加 `--executor <会话名>`。"),
+                ("pmo-p1.md", "包头执行方是研究员、他选的选项却不用他动手的，写明改由哪个会话执行。"),
+                ("alg-p1.md", "执行方写会话的只收各序列的 +1、入口和路由，要下级干的活由你用需求包委托。"),
+                ("alg-p1.md", "路由请书记员确认“决定”时用 `--executor` 把执行方改成会话。"),
+                ("CLAUDE.md", "执行方写会话的只收各序列的 +1、入口和路由；只要有一个选项要研究员亲手做就写“研究员”，"
                               "他选了不用他动手的选项，书记员确认“决定”时用 `--executor` 把执行方改成会话。"),
                 ("org/decisions.md", "书记员确认“决定”时用 `workitem.py confirm --executor <会话名>` 把执行方改成那个会话。"),
                 ("skills/ledger/SKILL.md", "可以加 `--executor <会话名>` 改执行方：包头“执行方”写的是研究员、研究员选的选项却不用他动手时用。"),
@@ -5797,7 +5831,7 @@ class TextsAfterTheGatesTest(PoolProjectCase):
         texts = self.texts()
         self.assertIn("实验方自己跑的是开发分，用来调试，不写进结论", texts["org/org.md"])
         self.assertIn("Eval Set 分开发集和正式集：实验方只碰开发集", texts["org/org.md"])
-        self.assertIn("实验方自己跑的开发分不进结论", texts["quality-p2.md"])
+        self.assertIn("实验方自己跑的开发分不进结论", texts["quality-p1.md"])
         for rel in ("skills/packages/SKILL.md", "skills/packages/references/interfaces.md", "skills/spec/SKILL.md",
                     "skills/packages/assets/delivery.md", "skills/setup/references/mechanisms.md", "docs/使用说明.md", "README.md"):
             self.assertIn("实验方", texts[rel], rel)
@@ -5812,7 +5846,7 @@ class TextsAfterTheGatesTest(PoolProjectCase):
                      "选项表的“要放行的不可逆动作”一列改名“不可逆的动作”", "包头“执行方”写了 +1、+0 或书记员的，改写负责这件事的 +2",
                      "升级前回滚过、还在待决定的也算", "先读所属研究任务的状态包（`ledger.py status <研究任务 ID>`）"):
             self.assertIn(part, note)
-        self.assertEqual(setup_core.POLICY_VERSION, 9)                    # 7 from 1.0.6 on; 8, then 9, with 1.1.0: by the file, and no +1
+        self.assertEqual(setup_core.POLICY_VERSION, 9)                    # 7 from 1.0.6 on; 8, then 9, with 1.1.0: by the file, and no middle rank
         guide = next(x for x in texts["docs/使用说明.md"].splitlines() if x.startswith("**升到 1.0.6。**"))
         for part in ("这一版去掉了 1.0.4 加的三层命令拦截", "请初始化会话重跑 `init --apply`", "请你退出并重开一次桌面应用",
                      "升级以后不用登记放行", "选项表的“要放行的不可逆动作”一列改名“不可逆的动作”",

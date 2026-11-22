@@ -33,22 +33,23 @@ import ledger_core  # noqa: E402
 import pool  # noqa: E402
 
 ID_RE = re.compile(r"#(\d{3,}(?:-\d{1,2}(?![\d-]))?)|(?<![\d-])(\d{9,12})(?!\d)")      # #2101; #2101-3, a task without a work item
-SESSION_RE = re.compile(r"(?<![\w-])([A-Za-z]+-[pP][0-2]-\d+(?:-\d{1,2})?)(?![\w-])")
+SESSION_RE = re.compile(r"(?<![\w-])(%s)(?![\w-])" % pool.NAME_IN_TEXT)
 # guard.jsonl's agent_turn_gate: what guard.py did to a question in a turn another session woke
 AGENT_TURN_GATES = ("stripped", "denied", "allowed_urgent")
 
 
 def role_of_session(spec, session):
-    m = re.match(r"([A-Za-z]+)-[pP]([0-2])-", session)
-    if not m:
+    """The role a session name belongs to, without a project's policy: by its abbreviation and its rank; a name
+    from before 1.1.0 is read as it is called now."""
+    named = pool.parse_name(session)
+    if not named:
         return None
-    seq = next((s for s, _, a in spec.sequences() if a.lower() == m.group(1).lower()), None)
+    seq = next((s for s, _, a in spec.sequences() if a.lower() == named[0].lower()), None)
     if not seq:
         return None
-    rank = int(m.group(2))
-    if seq == "pmo" and rank < 2:
-        return "pmo-router" if rank == 1 else "pmo-scribe"
-    return "%s-p%d" % (seq, rank)
+    if seq == "pmo" and named[1] == 0:
+        return {"router": orgspec.ROUTER, "ledger": orgspec.SCRIBE}.get(named[2])
+    return "%s-p%d" % (seq, named[1])
 
 
 # ------------------------------------------------------------- classify
@@ -65,7 +66,7 @@ def classify_text(spec, root, text, offline):
         for item_id in ids:
             if lg is None:
                 return result(spec, "R1", "带工作项 ID #%s（离线，没核对是否存在）" % item_id, work_item=item_id)
-            if ledger_core.is_local(item_id):          # a task a +1 handed to a +0: no work item, a local receipt
+            if ledger_core.is_local(item_id):          # a closed task (执行): no work item, a local receipt
                 try:
                     rec = ledger_core.local_task(lg, item_id)[1]
                 except ledger_core.LedgerError as e:
@@ -99,7 +100,7 @@ def classify_text(spec, root, text, offline):
 def classify_draft(spec, root, path):
     """Where a package goes. From 1.1.0 its author uploads it, the scribe only builds the work item, and what the
     researcher is to decide goes through the router to the entry; a request to another sequence is checked and
-    registered by the router and then goes between the two +2 (1.0.12)."""
+    registered by the router and then goes between the two +1 (1.0.12)."""
     with open(path, encoding="utf-8") as f:
         text = f.read()
     errors, _ = orgspec.lint_text(spec, text)
@@ -129,8 +130,8 @@ def classify_draft(spec, root, path):
                              "研究员定了，入口把原话交给路由，路由请书记员确认“决定”这一步，决策到“待执行”；" + carry])
     route = next((r for r in spec.rules["package_routes"] if r["pkg"] == d.pid and (r["rel"] or None) == d.rel), None)
     if d.pid == "request" and d.rel == "cross":
-        hop = "%s-p2" % to_seq if to_seq else None
-        steps = ["发起方 +2 自己上传需求包（%s），把草稿路径用【%s】发给路由" % (upload, notice),
+        hop = "%s-p1" % to_seq if to_seq else None
+        steps = ["发起方 +1 自己上传需求包（%s），把草稿路径用【%s】发给路由" % (upload, notice),
                  "路由对照台账查重复和冲突：ledger.py query cross、ledger.py query open --sequence <承接序列>；所属研究任务冻结的字段和待定决策“冻结的动作”",
                  "没有问题：请书记员 register（“提出”随登记确认，停在待接单），把工作项 ID 用【%s #ID】回给发起方，"
                  "由它写回文档（docs.py relink）、直接委托 %s" % (notice, hop),
@@ -140,7 +141,7 @@ def classify_draft(spec, root, path):
                       next_hop="pmo-router", steps=steps)
     if d.pid == "delivery" and d.rel == "cross":
         return result(spec, None, "跨序列的%s不经过入口和路由：承接方自己上传答复（%s），请书记员填“交付包”字段、确认“执行”，"
-                                  "再直接交付给发起方 +2" % (spec.pkg(d.pid), upload), next_hop=None)
+                                  "再直接交付给发起方 +1" % (spec.pkg(d.pid), upload), next_hop=None)
     return result(spec, None, "序列内的%s不经过入口和路由，在本序列的上下级之间直接往来" % spec.pkg(d.pid), next_hop=None)
 
 
@@ -278,7 +279,7 @@ CROSS_SKIP = ("register_request", "register_receipt")     # the scribe's traffic
 
 def cross_cmd(root, item=None, days=CROSS_DAYS):
     """What the sessions said to each other about the 跨序列需求, from the dispatch log: one line a request, or
-    every message of one. Read-only, and nothing is asked of Feishu. From 1.0.12 the two +2 of such a request
+    every message of one. Read-only, and nothing is asked of Feishu. From 1.0.12 the two +1 of such a request
     talk to each other without the entry or the router in between, so this is where the router (and the entry,
     when the researcher asks) sees what went on: the log keeps the first line of each message, the rest is in
     the package the line names. Which items are 跨序列需求 is read from the registration receipts

@@ -22,19 +22,24 @@ import os
 import re
 import sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import pool          # the names of sessions are read in one place (standard library only: the hooks load it too)
+
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ORGSPEC_DIR = os.path.join(PLUGIN_ROOT, "orgspec")
 TOKEN = re.compile(r"\{(pkg|rel|wi|seq|rank|node|field|role|channel|abbrev|state|sign):([a-z0-9_]+)\}")
-RANK_NUM = {"p0": 0, "p1": 1, "p2": 2}
+RANK_NUM = {"p0": 0, "p1": 1}
 # The dispatch graph's groups of edges (rules.json dispatch). assign is the hierarchy, and the roles a role
-# opens and hands work to are read from it alone (dispatch_targets); direct holds the edges beside it: a +2 to
-# the +2 of another sequence (跨序列需求, 1.0.12: until then every such message went through the entry), and a +0
+# opens and hands work to are read from it alone (dispatch_targets); direct holds the edges beside it: a +1 to
+# the +1 of another sequence (跨序列需求, 1.0.12: until then every such message went through the entry), and a +0
 # that holds a 下发 request to another +0 of its sequence (the closed parts of that request).
-# 1.1.0: a sequence has two ranks, +2 and +0. The PMO alone keeps a +1, its router, and the router and the
-# scribe are named in the graph: a rank there (p2, p0) stands for the sequences' own roles only.
+# 1.1.0: a sequence has two ranks: its lead, +1, and its members, +0. The PMO's lead is the entry; its members are
+# two fixed roles, the router and the scribe, and they are named in the graph: a rank there (p1, p0) stands for
+# the sequences' own roles only.
 DISPATCH_GROUPS = ("assign", "direct")
-PMO_RANKS = ("p0", "p1", "p2")
-SEQUENCE_RANKS = ("p0", "p2")
+RANKS = ("p0", "p1")
+LEAD, MEMBER = 1, 0
+ENTRY, ROUTER, SCRIBE = "pmo-p1", "pmo-router", "pmo-scribe"
 
 
 def edge_groups(rule):
@@ -103,15 +108,21 @@ class OrgSpec:
 
     @staticmethod
     def role_name(seq, rank):
-        """The agent name of a sequence and rank: pmo-router and pmo-scribe for the PMO's +1 and +0."""
-        if seq == "pmo" and rank == 1:
-            return "pmo-router"
-        if seq == "pmo" and rank == 0:
-            return "pmo-scribe"
+        """The agent name of a sequence and rank: <seq>-p1 for its lead, <seq>-p0 for its members. The PMO's +0
+        here is its scribe; its router, a +0 too, goes by its own name (roles_of)."""
+        if seq == "pmo" and rank == MEMBER:
+            return SCRIBE
         return "%s-p%d" % (seq, rank)
 
+    @staticmethod
+    def roles_of(seq):
+        """[(role, rank)] of a sequence, its lead first; the PMO's are the entry, the router and the scribe."""
+        if seq == "pmo":
+            return [(ENTRY, LEAD), (ROUTER, MEMBER), (SCRIBE, MEMBER)]
+        return [("%s-p%d" % (seq, LEAD), LEAD), ("%s-p%d" % (seq, MEMBER), MEMBER)]
+
     def ranks_of(self, seq):
-        """The ranks a sequence has, highest first: [2, 0], and [2, 1, 0] for the PMO."""
+        """The ranks a sequence has, highest first: [1, 0]."""
         s = next(x for x in self.rules["sequences"] if x["id"] == seq)
         return sorted((RANK_NUM[r] for r in s["ranks"]), reverse=True)
 
@@ -142,13 +153,13 @@ class OrgSpec:
     def dispatch_table(self):
         """The dispatch graph as text for org/org.md: who assigns work to whom, and the message kinds."""
         d = self.rules["dispatch"]
-        rank_cn = {"p0": "+0", "p2": "+2"}
+        rank_cn = {"p0": "+0", "p1": "+1"}
 
         def end(x):
             if x in rank_cn:
                 return "各序列 " + rank_cn[x]
             seq, _, rank = x.rpartition("-")
-            names = {"pmo-router": "项目管理 +1（路由）", "pmo-scribe": "项目管理 +0（书记员）"}
+            names = {"pmo-router": "项目管理 +0（路由）", "pmo-scribe": "项目管理 +0（书记员）"}
             return names.get(x) or "%s %s" % (self.term("seq", seq), rank_cn.get(rank, rank))
         scope = {"same_sequence": "同序列", "other_sequences": "别的序列", None: ""}
         rows = [[end(e["from"]), end(e["to"]), scope[e.get("scope")] + ("（%s）" % e["note"] if e.get("note") else "")]
@@ -171,9 +182,9 @@ class OrgSpec:
                           d.get("note", "")])
 
     def message_header_re(self):
-        """The header that starts every message between pool sessions: 【委托 #2101】Alg-p2-01 → Alg-p1-01."""
+        """The header that starts every message between pool sessions: 【委托 #2101】Alg-p1 → Alg-p0-01."""
         names = sorted(self.terms["msg"].values(), key=len, reverse=True)
-        name = r"[A-Za-z]+-p[0-2]-\d+(?:-\d{1,2}(?!\d))?"
+        name = SESSION_IN_TEXT
         return re.compile(r"【(%s)(?:\s*#(\d{3,}(?:-\d{1,2}(?![\d-]))?))?[^】]*】\s*(?:(%s)\s*(?:→|->)\s*(%s))?" % (
             "|".join(re.escape(n) for n in names), name, name))
 
@@ -188,11 +199,16 @@ class OrgSpec:
         for rid, row in s["ranks"].items():
             ranks[RANK_NUM[rid]] = {"label": row["label"], "given": self.render(row["given"]),
                                    "outputs": self.render(row["outputs"]), "escalate": self.render(row["escalate"])}
-        if sorted(s["ranks"]) != list(PMO_RANKS if sid == "pmo" else SEQUENCE_RANKS):
-            raise OrgSpecError("%s 序列的职级分工不是 %s" % (cn, "+0、+1、+2 三行" if sid == "pmo" else "+0、+2 两行"))
+        if sorted(s["ranks"]) != list(RANKS) or (sid == "pmo") != ("router" in s):
+            raise OrgSpecError("%s 序列的职级分工不是 %s" % (cn, "入口、路由、书记员三行" if sid == "pmo" else "+0、+1 两行"))
+        rows = {role: ranks[rank] for role, rank in self.roles_of(sid)}
+        if sid == "pmo":                        # the router's row stands beside the two ranks
+            row = s["router"]
+            rows[ROUTER] = {"label": row["label"], "given": self.render(row["given"]),
+                            "outputs": self.render(row["outputs"]), "escalate": self.render(row["escalate"])}
         return {"id": sid, "cn": cn, "abbrev": s["abbrev"], "title": s["title"],
                 "heading": "序列设置 - %s：%s" % (cn, s["title"]), "focus": self.render(s["focus"]),
-                "intro": self.render(s["intro"]), "ranks": ranks, "notes": self.render(s.get("notes") or ""),
+                "intro": self.render(s["intro"]), "ranks": ranks, "roles": rows, "notes": self.render(s.get("notes") or ""),
                 "plan": self.render(s.get("plan") or "")}
 
     # ------------------------------------------------------- whole-org text
@@ -379,15 +395,15 @@ class OrgSpec:
                     if m.group(2) not in self.terms.get(m.group(1), {}):
                         problems.append("%s：术语表里没有 %s" % (where, m.group(0)))
         walk(self.rules, "rules")
-        if [r["id"] for r in self.rules["ranks"]] != list(SEQUENCE_RANKS):
-            problems.append("ranks 要依次是 p0、p2")
+        if [r["id"] for r in self.rules["ranks"]] != list(RANKS):
+            problems.append("ranks 要依次是 p0、p1")
         for s in self.rules["sequences"]:
             if s["id"] not in self.terms["seq"] or s["id"] not in self.terms["abbrev"]:
                 problems.append("序列 %s 缺中文名或简写" % s["id"])
             if self.terms["abbrev"].get(s["id"]) != s["abbrev"]:
                 problems.append("序列 %s 的简写和术语表不一致" % s["id"])
-            if sorted(s["ranks"]) != list(PMO_RANKS if s["id"] == "pmo" else SEQUENCE_RANKS):
-                problems.append("序列 %s 的职级分工要是 %s" % (s["id"], "p0、p1、p2" if s["id"] == "pmo" else "p0、p2"))
+            if sorted(s["ranks"]) != list(RANKS) or (s["id"] == "pmo") != ("router" in s):
+                problems.append("序列 %s 的职级分工要是 p0、p1%s" % (s["id"], "，另有 router 一行" if s["id"] == "pmo" else ""))
             if s["id"] != "pmo" and not (s.get("plan") or "").strip():
                 problems.append("序列 %s 缺方案的填写要点（plan）" % s["id"])
         pids = [p["id"] for p in self.rules["packages"]]
@@ -415,8 +431,8 @@ class OrgSpec:
             if n not in tree["nodes"]:
                 problems.append("按序列分层的节点 %s 不在一级节点里" % n)
         d = self.rules.get("dispatch") or {}
-        roles = {self.role_name(x["id"], RANK_NUM[r]) for x in self.rules["sequences"] for r in x["ranks"]}
-        ends = roles | set(SEQUENCE_RANKS)
+        roles = {role for x in self.rules["sequences"] for role, _ in self.roles_of(x["id"])}
+        ends = roles | set(RANKS)
         for group in DISPATCH_GROUPS:
             for e in d.get(group, []):
                 for end in (e.get("from"), e.get("to")):
@@ -604,8 +620,8 @@ HEADER_KEYS = ["包类型", VERSION, "发出方", "接收方", "关联工作项"
 # 挂 API、开 Docker ..., 无 when nothing). The two agree: 研究员 has something to do, a session has 无.
 # Required on decision packages only. The registration receipt keeps both; `ledger.py query queue` lists
 # a decided decision until it is archived while the researcher carries it out.
-# The session is one that answers for the matter (the researcher, 2026-11-16): a sequence's +2, the entry or
-# the router (EXECUTOR_RANKS); a +1, a +0 and the scribe are sent back, and what a lower rank is to do the +2
+# The session is one that answers for the matter (the researcher, 2026-11-16): a sequence's +1, the entry or
+# the router (EXECUTOR_RANKS); a +0 and the scribe are sent back, and what a lower rank is to do the +1
 # delegates with a request package. When one option needs the researcher's own hands the header says 研究员;
 # should the researcher pick an option that does not, `workitem.py confirm --executor` hands the decision to a
 # session, under the same check.
@@ -613,18 +629,18 @@ EXECUTOR = "执行方"
 RESEARCHER = "研究员"
 RESEARCHER_ACTION = "研究员要做的事"
 NOTHING = "无"
-EXECUTOR_RANKS = "研究员、各序列的 +2、入口和路由"
-WHO_EXECUTES = ("写“研究员”，或者执行这条决策的那个会话的名字：各序列的 +2、入口或路由（多半是发出方的会话名），"
-                "只写名字、不加说明，比如 Alg-p2-01")
+EXECUTOR_RANKS = "研究员、各序列的 +1、入口和路由"
+WHO_EXECUTES = ("写“研究员”，或者执行这条决策的那个会话的名字：各序列的 +1、入口或路由（多半是发出方的会话名），"
+                "只写名字、不加说明，比如 Alg-p1")
 WHAT_RESEARCHER_DOES = "写这条决策定下以后要研究员亲手做的事，没有写“%s”" % NOTHING
 # How 研究员要做的事 is filled when the researcher carries the decision out: never 无 alone, which the
 # check would send back as disagreeing with 执行方.
 RESEARCHER_DOES = ("执行方是研究员，写清楚要研究员亲手做什么；不用他亲手做什么的，执行方改写执行这条决策的会话名，"
                    "“%s”写“%s”" % (RESEARCHER_ACTION, NOTHING))
-# One session's name alone (Alg-p2-01), or written like 发出方: 算法 +2（Alg-p2-01）, the sequence and rank
+# One session's name alone (Alg-p1), or written like 发出方: 算法 +1（Alg-p1）, the sequence and rank
 # in front being the session's own. The name is ASCII only, so that a remark run on after it is no part of it.
-EXECUTOR_SESSION = re.compile(r"([A-Za-z]+-p[0-2]-[A-Za-z0-9]+)"
-                              r"|([^\s（()）<>、，,；;]+)\s*\+([0-2])\s*[（(]\s*([A-Za-z]+-p[0-2]-[A-Za-z0-9]+)\s*[）)]")
+SESSION_IN_TEXT = pool.NAME_IN_TEXT
+EXECUTOR_SESSION = re.compile(r"(%s)|([^\s（()）<>、，,；;]+)\s*\+([0-2])\s*[（(]\s*(%s)\s*[）)]" % (SESSION_IN_TEXT, SESSION_IN_TEXT))
 # 无 alone or followed by punctuation or a remark (无。 无，发出方自己办 无（…）) says nothing; 无需…, 无论… do not
 # start with the word 无.
 SAYS_NOTHING = re.compile(r"无(?:$|[\s（(，,。.；;：:、])")
@@ -933,8 +949,8 @@ def read_executor(spec, value):
     """(who, None) when a decision package's 执行方 line names 研究员 or a session that may carry a decision
     out, else (None, how to write it). A session's abbreviation names a sequence, case aside as the ledger
     compares names (the name comes back spelled with the sequence's abbreviation), and a sequence and rank
-    written in front of it (算法 +2（Alg-p2-01）) are its own. The session is a sequence's +2, the entry
-    (项目管理 +2) or the router (项目管理 +1): a +1, a +0 and the scribe are sent back with what to write
+    written in front of it (算法 +1（Alg-p1）) are its own. The session is a sequence's +1, the entry
+    (项目管理 +1) or the router: a +0 and the scribe are sent back with what to write
     instead. `workitem.py confirm --executor` takes a session under the same check. A receipt that names
     another session from before 1.0.6 is read as it is: nothing here looks at receipts."""
     value = (value or "").strip().rstrip("。.")
@@ -943,18 +959,17 @@ def read_executor(spec, value):
     m = EXECUTOR_SESSION.fullmatch(value)
     if not m:
         return None, WHO_EXECUTES
-    name = m.group(1) or m.group(4)
-    head, rank = name.split("-")[0], name.split("-")[1][1:]
+    head, rank, rest = pool.parse_name(m.group(1) or m.group(4))       # a name from before 1.1.0 is read as it is called now
     seq = next(((cn, abbrev, sid) for sid, cn, abbrev in spec.sequences() if abbrev.lower() == head.lower()), None)
     if not seq:
         return None, "序列的简写只有 %s，没有 %s" % ("、".join(abbrev for _, _, abbrev in spec.sequences()), head)
-    name = seq[1] + name[len(head):]
-    if m.group(4) and (m.group(2), m.group(3)) != (seq[0], rank):
+    name = "%s-p%d%s" % (seq[1], rank, "" if rest is None else "-" + rest)
+    if m.group(4) and (m.group(2), m.group(3)) != (seq[0], str(rank)):
         return None, "%s 是%s +%s 的会话，前面写的序列和职级要和它一致，或者只写会话名" % (name, seq[0], rank)
-    role = OrgSpec.role_name(seq[2], int(rank))
-    if rank != "2" and role != "pmo-router":
-        what = "书记员" if role == "pmo-scribe" else "%s +%s 的会话" % (seq[0], rank)
-        return None, ("%s 是%s：执行方只收%s。改写负责这件事的 +2 的会话名（比如 %s-p2-01）；要下级干的活，由 +2 用需求包委托"
+    router, scribe = seq[2] == "pmo" and rest == "router", seq[2] == "pmo" and rest == "ledger"
+    if rank != LEAD and not router:
+        what = "书记员" if scribe else "%s +%s 的会话" % (seq[0], rank)
+        return None, ("%s 是%s：执行方只收%s。改写负责这件事的 +1 的会话名（比如 %s-p1）；要下级干的活，由 +1 用需求包委托"
                       % (name, what, EXECUTOR_RANKS, seq[1]))
     return name, None
 
