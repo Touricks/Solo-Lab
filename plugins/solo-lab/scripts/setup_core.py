@@ -85,7 +85,7 @@ READ_ALLOW = [
 # "allow" does not lift a deny. So nothing a role may run belongs here. Until 1.0.10 the list also denied
 # every lark-cli command with --yes, and build_settings denied every high-risk command: the scribe's
 # wiki +node-delete, which guard.py let through, was refused all the same. --yes and the high-risk commands
-# are guard.py's to judge, by role (check_lark); tools/lint.py holds the two lists against each other.
+# are guard.py's to judge, by role (check_lark); the development repository's lint holds the two lists against each other.
 ADMIN_DENY = [
     "Bash(lark-cli auth login *)",
     "Bash(lark-cli auth logout *)", "Bash(lark-cli config *)", "Bash(lark-cli profile *)",

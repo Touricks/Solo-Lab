@@ -101,7 +101,7 @@ Download links:
 - meegle-cli: https://github.com/larksuite/meegle-cli
 - lark-cli: https://github.com/larksuite/cli
 
-The Feishu Project space does not have to be built by hand: initialisation creates it from the template that comes with the plugin. The template is described in [feishu-template/README.md](feishu-template/README.md).
+The Feishu Project space does not have to be built by hand: initialisation creates it from the template that comes with the plugin. The template is described in [Feishu Project template](docs/飞书项目模板/README.md), in Chinese.
 
 2. Install the plugin:
 
@@ -236,8 +236,7 @@ The documents below are in Chinese.
 | --- | --- |
 | [User guide](docs/使用说明.md) | The full guide: every step of initialisation, the five types of work item, the decision queue, the session pool, upgrading and common questions |
 | [Changelog](CHANGELOG.md) | What each version changed |
-| [Feishu Project template](feishu-template/README.md) | The template's structure, build manual and changelog |
-| [Developer notes](docs/开发说明.md) | The plugin's directory layout, tests and release |
+| [Feishu Project template](docs/飞书项目模板/README.md) | The template's structure, build manual and changelog |
 
 ## Limitations
 
@@ -246,4 +245,4 @@ The documents below are in Chinese.
 
 ## Version
 
-v1.1.2
+v1.1.3

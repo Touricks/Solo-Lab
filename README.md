@@ -99,7 +99,7 @@ Claude Desktop、飞书项目和飞书知识库的交互方式概览
 - meegle-cli：https://github.com/larksuite/meegle-cli
 - lark-cli：https://github.com/larksuite/cli
 
-飞书项目的空间不用自己搭，初始化时照插件带的模板创建，模板的说明见 [feishu-template/README.md](feishu-template/README.md)。
+飞书项目的空间不用自己搭，初始化时照插件带的模板创建，模板的说明见[飞书项目模板](docs/飞书项目模板/README.md)。
 
 2. 安装插件：
 
@@ -228,8 +228,7 @@ claude plugin install solo-lab@solo-lab
 | --- | --- |
 | [使用说明](docs/使用说明.md) | 完整的用法：初始化的每一步、五类工作项、决策队列、会话池、升级、常见问题 |
 | [更新记录](CHANGELOG.md) | 每一版改了什么 |
-| [飞书项目模板](feishu-template/README.md) | 模板的结构、搭建手册和更新记录 |
-| [开发说明](docs/开发说明.md) | 插件的目录结构、测试和发布 |
+| [飞书项目模板](docs/飞书项目模板/README.md) | 模板的结构、搭建手册和更新记录 |
 
 ## 当前限制
 
@@ -238,4 +237,4 @@ claude plugin install solo-lab@solo-lab
 
 ## 插件版本
 
-v1.1.2
+v1.1.3
