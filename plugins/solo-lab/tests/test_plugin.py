@@ -47,6 +47,8 @@ def no_cli(cmd, timeout=30):
 
 
 setup_core.run = no_cli
+# ...and what this machine's Claude was told to trust is never read: a test that needs a record writes its own
+setup_core.TRUST_FILE = os.devnull
 FIX = os.path.join(ROOT, "tests", "fixtures", "feishu")
 EXAMPLES = os.path.join(ROOT, "skills", "packages", "references", "examples.md")
 
@@ -532,6 +534,10 @@ class DecisionsFileTest(ProjectCase):
         self.assertIn("alg-p1", agents["pmo-router"]["spawn"])              # which passes the researcher's words on
         self.assertEqual(agents["alg-p1"]["spawn"], ["alg-p0"])            # 1.1.0: a +1 hands work to its +0s
         self.assertEqual(agents["alg-p0"]["spawn"], [])
+        # 1.1.1: whom a session opens is no longer whom it hands work to. The entry opens the router and the scribe,
+        # another +1 the +0s of its sequence, a +0 nobody: the router hands work to every +1 and opens no session
+        self.assertEqual([pool_lib.opens(pol, r) for r in ("pmo-p1", "pmo-router", "pmo-scribe", "alg-p1", "alg-p0", "nobody")],
+                         [["pmo-router", "pmo-scribe"], [], [], ["alg-p0"], [], []])
         self.assertTrue(agents["pmo-scribe"]["ledger_write"])
         self.assertFalse(agents["pmo-p1"]["ledger_write"])
         with open(os.path.join(self.tmp, ".claude", "settings.json"), encoding="utf-8") as f:
@@ -1783,28 +1789,23 @@ class PoolSetupTest(PoolProjectCase):
         plan = json.loads(self.read(".claude/solo-lab/pool-plan.json"))
         entries = list(setup_core.plan_entries(plan))
         names = [e["name"] for e in entries]
-        self.assertEqual((plan["version"], plan["total"], len(plan["top"]), len(set(names))), (6, 15, 7, 15))
+        self.assertEqual((plan["version"], plan["total"], len(plan["top"]), len(set(names))), (7, 15, 7, 15))
         # the +1s are opened in batches: what a batch opens below itself stays within what the app runs at once
-        self.assertEqual(plan["batches"], [["PMO-p1", "Product-p1", "Alg-p1"],
-                                           ["RnD-p1", "Infra-p1", "Quality-p1", "Liaison-p1"]])
+        self.assertEqual(plan["batches"], [["PMO-p1", "Product-p1", "Alg-p1", "RnD-p1"],
+                                           ["Infra-p1", "Quality-p1", "Liaison-p1"]])
         # ...and the batches in rounds: after one message of the researcher the app lets sessions open ten sessions
         self.assertEqual(plan["rounds"], [[1, 2]])
         self.assertEqual(plan["order"], [t["name"] for t in plan["top"]])
-        self.assertEqual(plan["order"][0], "PMO-p1")                     # the scribe is two levels below the entry
-        for t in plan["top"]:                                                # a +1 opens its +0; the entry the router, the router the scribe
+        self.assertEqual(plan["order"][0], "PMO-p1")
+        for t in plan["top"]:                # 1.1.1: a +1 opens its +0s, the entry the router and the scribe; a +0 opens nobody
             self.assertTrue(t["opening"].startswith("认领 %s（会话名 %s）" % (t["role"], t["name"])))
-            one = t["children"][0]
-            self.assertIn("开出 %s，" % one["name"], t["brief"])
-            if t["role"] == "pmo-p1":
-                self.assertEqual(([c["name"] for c in t["children"]], [c["name"] for c in one["children"]]), (["PMO-p0-router"], ["PMO-p0-ledger"]))
-                self.assertIn("开出 PMO-p0-ledger，", one["brief"])
-                one = one["children"][0]
-            else:
-                self.assertEqual([c["name"] for c in t["children"]], ["%s-p0-01" % t["name"].split("-")[0]])
-            self.assertEqual(one["children"], [])
-            self.assertIn("就结束本轮，等委托消息", one["brief"])
-        pmo = plan["top"][0]
-        self.assertEqual((pmo["children"][0]["name"], pmo["children"][0]["children"][0]["name"]), ("PMO-p0-router", "PMO-p0-ledger"))
+            below = [c["name"] for c in t["children"]]
+            self.assertEqual(below, ["PMO-p0-router", "PMO-p0-ledger"] if t["role"] == "pmo-p1" else ["%s-p0-01" % t["name"].split("-")[0]])
+            self.assertIn("开出 %s，" % "、".join(below), t["brief"])
+            for one in t["children"]:
+                self.assertEqual(one["children"], [])
+                self.assertIn("就结束本轮，等委托消息", one["brief"])
+                self.assertNotIn("开出", one["brief"])
         for e in entries:
             self.assertTrue(re.fullmatch(r"[a-z0-9-]{1,24}", e["short"]))
             self.assertIn("pool.py claim %s --as %s" % (e["role"], e["name"]), e["brief"])
@@ -1812,9 +1813,17 @@ class PoolSetupTest(PoolProjectCase):
             self.assertEqual(e["title"], "[%s] %s" % (plan["label"], e["name"]))
             self.assertLess(len(e["title"]), 60)
             self.assertIn("pool.py expect %s --role %s" % (e["name"], e["role"]), e["expect"])
-        self.assertIn("ensure-node all --apply", plan["scribe_first"])
+        self.assertNotIn("ensure-node", "".join(e["brief"] for e in entries))      # 1.1.1: opening the pool writes nothing to Feishu:
+        self.assertTrue(plan["scribe_writes"].startswith("做初始化的两件写入，做完再回话。"))   # the scribe's two first writes are sent to it later
+        self.assertIn("ensure-node all --apply", plan["scribe_writes"])
         self.assertIn("docs.py upload %s --apply；workitem.py register %s --apply；照登记输出的工作项 ID 运行 docs.py relink <工作项 ID> --apply" % (
-            setup_core.FIRST_TASK, setup_core.FIRST_TASK), plan["scribe_first"])
+            setup_core.FIRST_TASK, setup_core.FIRST_TASK), plan["scribe_writes"])
+        self.assertIn("入口 `PMO-p1` 下面是路由 `PMO-p0-router` 和书记员 `PMO-p0-ledger`。", self.read("CLAUDE.md"))
+        self.assertIn("你不开会话：书记员和你一样由入口开出，+0 之间不分上下级。", self.read(".claude/agents/pmo-router.md"))
+        self.assertIn("路由和书记员由你开，其余序列的会话由那个序列的 +1 开", self.read(".claude/agents/pmo-p1.md"))
+        for seq in ("rnd", "product"):       # how a +1 knows what its +0s are doing: the pool's own record, no session in between
+            self.assertIn("- 派给哪个 +0：先运行 `python3.12 -I .claude/solo-lab/bin/pool.py show --role %s-p0`，" % seq,
+                          self.read(".claude/agents/%s-p1.md" % seq))
 
     def test_the_label_names_the_titles_and_the_section(self):
         with open(self.task_path, encoding="utf-8") as f:
@@ -1841,8 +1850,9 @@ class PoolSetupTest(PoolProjectCase):
             json.dump(task, f, ensure_ascii=False)
         doc = json.loads(setup_core.build_plan(self.tmp, self.task_path, None).files[".claude/solo-lab/pool-plan.json"][0])
         self.assertEqual(doc["total"], 12)
-        self.assertEqual((doc["batches"], doc["rounds"]), ([["PMO-p1", "Product-p1", "Alg-p1", "RnD-p1", "Infra-p1"],
-                                                            ["Quality-p1", "Liaison-p1"]], [[1, 2]]))
+        # the default pool: five sessions below the seven +1s, so one batch in one round (1.1.1)
+        self.assertEqual((doc["batches"], doc["rounds"]), ([["PMO-p1", "Product-p1", "Alg-p1", "RnD-p1", "Infra-p1",
+                                                             "Quality-p1", "Liaison-p1"]], [[1]]))
         for role in ("liaison-p1", "product-p1", "alg-p1"):
             self.assertEqual(next(t for t in doc["top"] if t["role"] == role)["children"], [], role)
         self.assertEqual(len(next(t for t in doc["top"] if t["role"] == "rnd-p1")["children"]), 1)
@@ -1965,27 +1975,69 @@ class PoolSetupTest(PoolProjectCase):
         self.assertIn("1. PMO-p1（未认领）", text)
         self.assertIn("只开下面这 7 个 +1，分 2 批、1 轮开", text)                   # 1.1.0: 15 sessions, six fewer than with the +1s
         self.assertIn("\n第 1 轮（研究员说完初始化那句话以后）\n第 1 批\n1. PMO-p1", text)
-        self.assertIn("\n第 2 批\n4. RnD-p1", text)
+        self.assertIn("\n第 2 批\n5. Infra-p1", text)
+        self.assertIn("一批的 +1 往下开的会话合起来不超过 5 个", text)
         self.assertNotIn("第 2 轮", text)
         self.assertIn("   └ Alg-p0-01（", text)
         self.assertIn("--wait 180 --batch", text)
         self.assertLess(text.index("各调一次 detach_session"), text.index("逐个运行它们的 expect"))   # top level first, then the permit
         self.assertNotIn("注意：", text)
-        self.assertIn("   └ PMO-p0-router（", text)                                    # the levels below, opened by the level above
-        self.assertIn("     └ PMO-p0-ledger（", text)
+        self.assertIn("   └ PMO-p0-router（", text)                                    # the level below, opened by the level above
+        self.assertIn("   └ PMO-p0-ledger（", text)
+        self.assertNotIn("     └ ", text)                                               # 1.1.1: no +0 under a +0
+        self.assertIn("+0 不开会话，+0 之间不分上下级。", text)
         self.assertNotIn("PMO-p0-router（未认领）\n   name：", text)
-        self.assertIn("再照输出里的表开出 PMO-p0-router，", text)
+        self.assertIn("再照输出里的表开出 PMO-p0-router、PMO-p0-ledger，", text)
+        self.assertIn("- 开池不碰飞书。会话池开齐以后，书记员的两件初始化写入（建知识库节点、登记首条研究任务）单独做：运行 pool.py open --target <项目目录> --writes，", text)
         self.assertIn("] Initialization”", text)
         self.assertIn("当前：0/15 条认领", text)
         self.assertNotIn("--watch", text)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(pool_cmd.main(["open", "--target", self.tmp, "--manual"]), 0)
-        self.assertIn("认领 pmo-p1（会话名 PMO-p1），然后照认领输出开出 PMO-p0-router。本会话由研究员手工开出。", out.getvalue())
-        self.assertIn("书记员由路由开出", out.getvalue())
+        self.assertIn("认领 pmo-p1（会话名 PMO-p1），然后照认领输出开出 PMO-p0-router、PMO-p0-ledger。本会话由研究员手工开出。", out.getvalue())
+        self.assertIn("路由和书记员由入口开出，开局只认领。", out.getvalue())
+        self.assertIn("--writes --wait 240", out.getvalue())
         self.assertIn("--wait 240", text)                                         # how the initialising session waits for the levels below
         plan = json.loads(self.read(".claude/solo-lab/pool-plan.json"))
         self.assertNotIn(setup_core.BY_HAND, "".join(e["brief"] for e in setup_core.plan_entries(plan)))   # only a +1 opened by hand files itself
+
+
+class WorkspaceTrustTest(unittest.TestCase):
+    """1.1.1: the desktop app starts no session that a session opens in a directory which holds hooks and which the
+    researcher has not trusted. The record is read from Claude's own file; only the researcher can change it."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="solo-lab-trust-")
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.project = os.path.join(self.tmp, "project")
+        os.mkdir(self.project)
+
+    def record(self, content):
+        path = os.path.join(self.tmp, "claude.json")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content if isinstance(content, str) else json.dumps({"projects": content}))
+        return mock.patch.object(setup_core, "TRUST_FILE", path)
+
+    def test_the_record_is_read_for_this_directory_alone(self):
+        yes = {"hasTrustDialogAccepted": True}
+        for projects, trusted in (({}, False), ({self.project: {"hasTrustDialogAccepted": False}}, False),
+                                  ({self.tmp: yes}, False),                               # the directory above does not count
+                                  ({self.project + "-2": yes}, False), ({self.project: "yes"}, False),
+                                  ({os.path.abspath(self.project): yes}, True), ({os.path.realpath(self.project): yes}, True)):
+            with self.record(projects):
+                self.assertIs(setup_core.workspace_trust(self.project), trusted, projects)
+                self.assertEqual(len(setup_core.trust_lines(self.project)), 0 if trusted else 3, projects)
+
+    def test_nothing_is_said_when_there_is_no_record_to_read(self):
+        self.assertIsNone(setup_core.workspace_trust(self.project))             # the tests' own setting: an empty file
+        for content in ("", "not json", "[]", '"x"', "{}", '{"projects": null}', '{"projects": []}'):
+            with self.record(content):                     # unreadable: not known. Readable, nothing recorded: not trusted
+                self.assertIs(setup_core.workspace_trust(self.project), False if content.startswith("{") else None, content)
+                self.assertEqual(len(setup_core.trust_lines(self.project)), 3 if content.startswith("{") else 0, content)
+        with mock.patch.object(setup_core, "TRUST_FILE", os.path.join(self.tmp, "missing.json")):
+            self.assertIsNone(setup_core.workspace_trust(self.project))
+            self.assertEqual(setup_core.trust_lines(self.project), [])
 
 
 class AnnounceTest(PoolProjectCase):
@@ -2184,7 +2236,7 @@ class CheckLayersTest(PoolProjectCase):
         self.assertEqual(code, 1)
         self.assertIn("21 个会话里还有 21 个没认领", text)
         self.assertIn("- PMO-p1：+1，由做初始化的会话开出", text)
-        self.assertIn("- PMO-p0-ledger：由 PMO-p0-router 开出，PMO-p0-router 还没认领", text)
+        self.assertIn("- PMO-p0-ledger：由 PMO-p1 开出，PMO-p1 还没认领", text)           # 1.1.1: the entry opens the scribe
         self.assertNotIn("请研究员点开上一级的会话", text)
         self.claim_all()
         with pool_lib.locked(self.tmp) as table:
@@ -2239,7 +2291,7 @@ class CheckLayersTest(PoolProjectCase):
             self.assertEqual(pool_cmd.main(["open", "--target", self.tmp, "--batch", "1"]), 2)
         self.assertIn("--batch 要和 --wait 一起用", out.getvalue())
 
-    def test_wait_ends_when_the_scribe_has_done_its_first_writes(self):
+    def test_wait_ends_when_the_pool_is_open_and_looks_at_nothing_in_feishu(self):
         scribe = "s-PMO-p0-ledger"
         self.claim_all()
         code, text = self.wait()
@@ -2248,25 +2300,115 @@ class CheckLayersTest(PoolProjectCase):
         self.prompt(scribe, "认领 pmo-scribe（会话名 PMO-p0-ledger）。")
         self.assertIn("书记员的首轮还没结束（状态：busy）", self.wait()[1])
         self.hook("instances.py", {"hook_event_name": "Stop", "session_id": scribe})
-        code, text = self.wait()                                  # its turn is over, nothing registered from this directory
+        code, text = self.wait()                                  # its turn is over: the pool is open, whatever Feishu holds
         self.assertEqual(code, 0, text)
-        self.assertIn("没有首条研究任务的登记回执", text)
+        self.assertIn("会话池已开齐：21/21 条认领。接着做书记员的两件初始化写入：运行 pool.py open --target <项目目录> --writes，", text)
+        ids = self.read("feishu/ids.json")
+        nodes = json.loads(ids)
+        nodes["wiki"]["nodes"].pop(sorted(nodes["wiki"]["nodes"])[0])
+        with open(os.path.join(self.tmp, "feishu", "ids.json"), "w", encoding="utf-8") as f:
+            json.dump(nodes, f, ensure_ascii=False)
+        code, text = self.wait()                                  # a node is missing: still the pool's business no longer
+        self.assertEqual(code, 0, text)
+        self.assertIn("接着做书记员的两件初始化写入", text)
+        os.remove(os.path.join(self.tmp, "feishu", "ids.json"))
+        code, text = self.wait()                                  # only the pool was opened: nothing is bound
+        self.assertEqual(code, 0, text)
+        self.assertIn("会话池已开齐：21/21 条认领。项目还没绑定飞书：飞书项目空间还没绑定", text)
+        self.assertIn("只开会话池的到此为止", text)
+        with open(os.path.join(self.tmp, "feishu", "ids.json"), "w", encoding="utf-8") as f:
+            f.write(ids)
+        lg = fake_space.SimLedger(self.tmp, "apply", self.fake, ())
+        with contextlib.redirect_stdout(io.StringIO()):
+            fake_space.register(lg, os.path.join(self.tmp, setup_core.FIRST_TASK))
+        code, text = self.wait()
+        self.assertEqual(code, 0, text)
+        self.assertIn("书记员的两件初始化写入已经做过。接着运行 check.py check --target <项目目录> --live。", text)
+        self.hook("instances.py", {"hook_event_name": "PermissionRequest", "session_id": scribe, "tool_name": "Bash"})
+        self.assertIn("书记员停在一个确认框上", self.wait()[1])
+
+    def writes(self, *more):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = pool_cmd.main(["open", "--target", self.tmp, "--writes"] + list(more))
+        return code, out.getvalue()
+
+    def test_the_scribes_two_first_writes_are_a_step_of_their_own(self):
+        scribe = "s-PMO-p0-ledger"
+        code, text = self.writes()
+        self.assertEqual(code, 2)
+        self.assertIn("书记员还没有认领：先把会话池开齐", text)
+        self.claim_all()
+        code, text = self.writes()                                # what the initialising session sends, and to whom
+        self.assertEqual(code, 0, text)
+        self.assertIn("用会话管理工具 send_message 把下面这段话原样发给书记员 PMO-p0-ledger（桌面会话 local_PMO-p0-ledger）：", text)
+        self.assertIn("\n\n%s\n\n" % self.plan["scribe_writes"], text)
+        self.assertIn("发完运行 pool.py open --target <项目目录> --writes --wait 240", text)
+        code, text = self.writes("--wait", "0")
+        self.assertEqual(code, 1)
+        self.assertIn("书记员这一轮还没结束（状态：unknown），两件初始化写入还在做", text)
+        self.hook("instances.py", {"hook_event_name": "Stop", "session_id": scribe})
+        code, text = self.writes("--wait", "0")                   # its turn is over, nothing registered from this directory
+        self.assertEqual(code, 0, text)
+        self.assertIn("这个目录里没有首条研究任务的登记回执", text)
         self.assertIn("桌面会话 local_PMO-p0-ledger", text)
         lg = fake_space.SimLedger(self.tmp, "apply", self.fake, ())
         with contextlib.redirect_stdout(io.StringIO()):
             task = fake_space.register(lg, os.path.join(self.tmp, setup_core.FIRST_TASK))
-        code, text = self.wait()
+        code, text = self.writes("--wait", "0")
         self.assertEqual(code, 0, text)
-        self.assertIn("知识库节点都在，首条研究任务已登记（#%s）" % task, text)
+        self.assertIn("书记员的两件初始化写入做完了：知识库节点都在，首条研究任务已登记（#%s）" % task, text)
+        code, text = self.writes()                                # asked again: nothing is sent twice
+        self.assertEqual(code, 0, text)
+        self.assertIn("书记员的两件初始化写入已经做过", text)
+        self.assertNotIn(self.plan["scribe_writes"], text)
         ids = json.loads(self.read("feishu/ids.json"))
         ids["wiki"]["nodes"].pop(sorted(ids["wiki"]["nodes"])[0])
         with open(os.path.join(self.tmp, "feishu", "ids.json"), "w", encoding="utf-8") as f:
             json.dump(ids, f, ensure_ascii=False)
-        code, text = self.wait()
+        code, text = self.writes("--wait", "0")
         self.assertEqual(code, 1)
-        self.assertIn("书记员的首轮已结束，但是知识库节点还缺 1 个", text)
+        self.assertIn("书记员没有在跑，但是知识库节点还缺 1 个", text)
+        self.assertIn(self.plan["scribe_writes"], self.writes()[1])            # a node is missing: the step is due again
         self.hook("instances.py", {"hook_event_name": "PermissionRequest", "session_id": scribe, "tool_name": "Bash"})
-        self.assertIn("书记员停在一个确认框上", self.wait()[1])
+        self.assertIn("书记员停在一个确认框上", self.writes("--wait", "0")[1])
+        os.remove(os.path.join(self.tmp, "feishu", "ids.json"))
+        code, text = self.writes()                                # only the pool was opened: the step is not for this project
+        self.assertEqual(code, 2)
+        self.assertIn("书记员的两件初始化写入要等飞书绑定好：飞书项目空间还没绑定", text)
+
+    def trust(self, projects):
+        """What Claude was told to trust, as a file of the test's own."""
+        path = os.path.join(self.tmp, "trust.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"projects": projects, "userID": "x"}, f)
+        return mock.patch.object(setup_core, "TRUST_FILE", path)
+
+    def test_the_checklist_and_init_ask_for_trust_before_sessions_are_opened(self):
+        def checklist():
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(pool_cmd.main(["open", "--target", self.tmp]), 0)
+            return out.getvalue()
+        self.assertNotIn("信任", checklist().split("开池清单：")[0])            # no record to read: nothing is said
+        with self.trust({os.path.dirname(os.path.realpath(self.tmp)): {"hasTrustDialogAccepted": True}}):
+            before = self.read("trust.json")
+            text = checklist()
+            self.assertTrue(text.startswith("注意：没有查到研究员信任这个目录的记录。"), text[:60])
+            self.assertIn("Couldn't start: This workspace isn't trusted", text)
+            self.assertLess(text.index("开会话之前先停下，请研究员信任这个目录"), text.index("开池清单："))
+            self.assertIn("只有研究员能批准，会话不替他改设置，也不绕开。", text)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(setup.main(["init", "--target", self.tmp, "--task", self.task_path, "--apply"]), 0)
+            self.assertIn("\n注意：没有查到研究员信任这个目录的记录。", out.getvalue())   # said right after the files are written
+            self.claim_all()
+            self.assertNotIn("没有查到研究员信任这个目录的记录", checklist())     # every session is open: nothing left to warn of
+            self.assertEqual(self.read("trust.json"), before)                   # read, never written
+        with self.trust({os.path.realpath(self.tmp): {"hasTrustDialogAccepted": True}}):
+            with pool_lib.locked(self.tmp) as table:
+                table["claims"].clear()
+            self.assertTrue(checklist().startswith("开池清单："))
 
     def test_a_fresh_project_says_what_each_layer_lacks(self):
         code, text = self.check()
@@ -2416,6 +2558,7 @@ class CheckLayersTest(PoolProjectCase):
             rows["Alg-p1"]["isArchived"] = True
             rows["Alg-p0-01"]["group"] = None
             rows["Alg-p0-02"]["cwd"] = "/tmp"
+            rows["Quality-p0-01"]["cwd"] = os.path.join(self.tmp, "runs", "quality")     # inside the project: no problem
             rows["RnD-p1"]["pinned"] = True
             rows["RnD-p0-01"]["title"] = "随手起的名字"
             del rows["Infra-p1"]
@@ -2423,9 +2566,10 @@ class CheckLayersTest(PoolProjectCase):
         code, text = self.check("--sessions", self.listing(edit))
         self.assertEqual(code, 1)
         for line in ("客户端的会话列表里没有这些认领的会话：Infra-p1", "已经归档的会话还占着认领：Alg-p1",
-                     "工作目录不是项目目录的会话：Alg-p0-02", "”里的会话：Alg-p0-01", "还没报告这些会话的分区，没核对：Infra-p0-01",
+                     "工作目录不在项目目录里的会话：Alg-p0-02", "”里的会话：Alg-p0-01", "还没报告这些会话的分区，没核对：Infra-p0-01",
                      "置顶了的会话：RnD-p1", "<会话名>”的会话：RnD-p0-01", "会话：4 个问题"):
             self.assertIn(line, text)
+        self.assertIn("工作目录不在项目目录里的会话：Alg-p0-02\n", text)       # and not Quality-p0-01
         with open(os.path.join(self.tmp, "bad.json"), "w", encoding="utf-8") as f:
             f.write("{}")
         self.assertIn("不是会话列表", self.check("--sessions", os.path.join(self.tmp, "bad.json"))[1])
@@ -2497,8 +2641,22 @@ class CheckLayersTest(PoolProjectCase):
         self.route("expect", "Alg-p0-03", "--role", "alg-p0", "--desk", "local_extra", sid="s-researcher")
         code, text = self.check()
         self.assertEqual(code, 1)
-        self.assertIn("工作目录不是项目目录的会话：Alg-p1", text)
+        self.assertIn("工作目录不在项目目录里的会话：Alg-p1", text)
         self.assertIn("有 1 条预登记还没转正：Alg-p0-03", text)
+
+    def test_a_session_in_a_subdirectory_is_in_the_project(self):
+        here = os.path.realpath(self.tmp)
+        for cwd, inside in ((self.tmp, True), (os.path.join(self.tmp, "runs", "infra"), True),
+                            (os.path.join(self.tmp, ".claude", "worktrees", "x"), False),      # a worktree is a copy
+                            (os.path.dirname(here), False), (here + "-other", False), ("/tmp", False)):
+            self.assertEqual(check.in_project(here, cwd), inside, cwd)
+        self.ready()
+        self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-Infra-p0-02", "source": "startup",
+                                   "cwd": os.path.join(self.tmp, "runs", "infra")})
+        self.hook("instances.py", {"hook_event_name": "SessionStart", "session_id": "s-Infra-p0-01", "source": "startup",
+                                   "cwd": os.path.join(self.tmp, ".claude", "worktrees", "x")})
+        text = self.check()[1]
+        self.assertIn("工作目录不在项目目录里的会话：Infra-p0-01（", text)      # Infra-p0-02 was a problem until 1.1.1
 
     def test_live_reads_the_space_the_nodes_and_the_first_task_back(self):
         task = self.ready()
@@ -2715,22 +2873,32 @@ class PoolOpenedByTheResearcherTest(PoolProjectCase):
             self.assertEqual(self.route("expect", name, "--role", role, "--desk", "d-x", sid="s-alg0")[0], 1, name)
         self.assertEqual(sorted(self.pool()["claims"]), ["Alg-p0-01", "Alg-p1"])
 
-    def test_the_router_opens_the_scribe_with_its_first_writes(self):
+    def test_the_entry_opens_the_router_and_the_scribe(self):
         plan = json.loads(self.read(".claude/solo-lab/pool-plan.json"))
         self.prompt("s-entry", plan["top"][0]["brief"], desk="d-entry")        # the entry claims through its opening line
         _, out = self.route("claim", "pmo-p1", "--as", "PMO-p1", "--wait", "0", sid="s-entry", desk="d-entry")
-        self.assertIn("- PMO-p0-router：", out)
-        self.assertNotIn("- PMO-p0-ledger：", out)
-        self.route("expect", "PMO-p0-router", "--role", "pmo-router", "--desk", "d-router", sid="s-entry")
+        for name in ("PMO-p0-router", "PMO-p0-ledger"):                          # 1.1.1: both are the entry's
+            row = out[out.index("- %s：" % name):].split("\n  background：")[0]
+            self.assertIn("就结束本轮，等委托消息", row)                         # the scribe's opening line only claims
+            self.assertNotIn("（补位用）", row)
+        self.assertNotIn("做初始化的两件写入", out)                             # opening the pool writes nothing to Feishu
+        for name, role, desk in (("PMO-p0-router", "pmo-router", "d-router"), ("PMO-p0-ledger", "pmo-scribe", "d-scribe")):
+            self.assertEqual(self.route("expect", name, "--role", role, "--desk", desk, sid="s-entry")[0], 0, name)
         _, out = self.claim("pmo-router", "PMO-p0-router", "s-router", desk="d-router")
-        row = out[out.index("- PMO-p0-ledger："):]
-        self.assertIn("docs.py ensure-node all --apply", row)                # nothing is registered yet
-        self.assertNotIn("就结束本轮，等委托消息", row.split("background：")[0])
-        self.assertEqual(self.route("expect", "PMO-p0-ledger", "--role", "pmo-scribe", "--desk", "d-scribe", sid="s-router")[0], 0)
-        with open(os.path.join(self.tmp, "packages", "sent", "7160000001.json"), "w", encoding="utf-8") as f:
-            json.dump({"status": "registered", "draft": "packages/drafts/pmo/x.md"}, f)
-        _, out = self.route("claim", "pmo-router", "--as", "PMO-p0-router", "--wait", "0", sid="s-router", desk="d-router")
-        self.assertNotIn("ensure-node all --apply", out)                       # a later scribe gets the plain opening
+        self.assertNotIn("- PMO-p0-ledger：", out)                              # a +0 opens no session: the router is shown no table...
+        self.assertNotIn("照下表开", out)
+        with pool_lib.locked(self.tmp) as table:
+            table["permits"] = [x for x in table["permits"] if x.get("name") != "PMO-p0-ledger"]
+        code, out = self.route("expect", "PMO-p0-ledger", "--role", "pmo-scribe", "--desk", "d-scribe", sid="s-router")
+        self.assertEqual(code, 1)                                               # ...and may not pre-register one
+        self.assertIn("PMO-p0-router 不能预登记 pmo-scribe", out)
+        self.assertIn("+0 不开会话", out)
+        self.assertEqual(self.route("expect", "PMO-p0-ledger", "--role", "pmo-scribe", "--desk", "d-scribe", sid="s-entry")[0], 0)
+        code, out = self.claim("pmo-scribe", "PMO-p0-ledger", "s-scribe", desk="d-scribe")
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("做初始化的两件写入", out)
+        code, out = self.route("refill", "pmo-scribe", sid="s-router")          # whom to ask for another one
+        self.assertIn("这个角色由入口开：给 PMO-p1 发一条", out)
 
     def test_a_p2_is_told_its_title_and_section(self):
         self.open_all()
@@ -2891,6 +3059,11 @@ class PoolBatchTest(PoolProjectCase):
         text = out.getvalue()
         self.assertEqual(plan["rounds"], [[1, 2], [3], [4], [5], [6]])
         self.assertIn("分 6 批、5 轮开", text)
+        self.assertNotIn("注意：", text)                 # 1.1.1: a batch holds five, as many +0s as a sequence may have
+        out = io.StringIO()
+        with mock.patch.object(setup_core, "OPEN_BUDGET", 4), contextlib.redirect_stdout(out):
+            self.assertEqual(pool_cmd.main(["open", "--target", self.tmp]), 0)
+        text = out.getvalue()
         self.assertIn("注意：Product-p1 下面要开 5 个会话，一批最多容得下 4 个", text)
         self.assertEqual(text.count("注意："), 5)                               # not the entry: a router and a scribe
         self.assertNotIn("注意：PMO-p1", text)
@@ -3701,8 +3874,13 @@ class PythonVersionTest(unittest.TestCase):
         settings = json.loads(plan.files[".claude/settings.json"][0])
         commands = [h["command"] for groups in settings["hooks"].values() for g in groups for h in g["hooks"]]
         self.assertTrue(commands)
-        for command in commands:
-            self.assertTrue(command.startswith("python3.12 -I -B "), command)
+        for command in commands:                           # 1.1.1: in full, whatever PATH the app gives a hook
+            self.assertTrue(command.startswith(setup_core.hook_python() + " -I -B \"$CLAUDE_PROJECT_DIR/.claude/hooks/"), command)
+        self.assertTrue(os.path.isabs(shlex.split(setup_core.hook_python())[0]))
+        with mock.patch.object(setup_core.shutil, "which", return_value="/opt/py thon/bin/python3.12"):
+            self.assertEqual(setup_core.hook_python(), "'/opt/py thon/bin/python3.12'")
+        with mock.patch.object(setup_core.shutil, "which", return_value=None):
+            self.assertEqual(setup_core.hook_python(), "python3.12")            # init stops on that before anything is written
         rules = [r for kind in ("allow", "ask", "deny") for r in settings["permissions"][kind] if "solo-lab/bin" in r]
         self.assertTrue(rules)
         for rule in rules:

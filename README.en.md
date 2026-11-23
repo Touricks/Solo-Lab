@@ -90,8 +90,8 @@ Responsibilities of the seven sequences
 
 | Software | Tested version | Responsibility |
 | --- | --- | --- |
-| Claude Desktop | 5.11492.0 | The user interface; maintains the task sessions |
-| Claude | 2.1.219 | The command line used to install the plugin |
+| Claude Desktop | 6.28899.6 | The user interface; maintains the task sessions |
+| Claude | 2.1.257 | The command line used to install the plugin |
 | Lark-cli & Feishu | 1.0.98 | Reads and writes Feishu Docs and Feishu Wiki |
 | Meegle-cli & Feishu Project/Meegle/Meego | 1.0.27 | Reads and writes Feishu Project |
 | Python | 3.12.13 | Runs the plugin. `python3.12` has to be on the PATH: the plugin's hooks and script commands use that name, not `python3` |
@@ -120,6 +120,7 @@ The phrase means "initialise this directory with solo-lab".
 
 - It is best to add the project name and a one-line description. The project name is also the name of the Feishu Project space and the Feishu Wiki, and the prefix of the session titles.
 - This session is called the initialisation session. When a command-line login has expired, it shows a QR code for the user to scan. It does everything else itself and hands over to the user at the end.
+- Once the project files are written, the initialisation session stops and asks the user to trust the directory: choose Trust workspace in the app and send one message, and it goes on. With hooks and permission rules now in the directory, the app starts sessions that other sessions open there only after the user has trusted it.
 - The default pool opens in one round and needs no further message. Only a pool made larger in the task file is opened in two rounds: the app lets a session open at most 10 further sessions after each message from the user, so the initialisation session then stops partway and waits for the user to send one more message before it goes on:
 
 ```text
@@ -245,4 +246,4 @@ The documents below are in Chinese.
 
 ## Version
 
-v1.1.0
+v1.1.1

@@ -14,6 +14,8 @@ import hashlib
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -444,6 +446,52 @@ TERMINAL_TOOL = "^mcp__.+__run_in_terminal$"
 WRAPUP_TOOL = "^mcp__.+__wrap_up$"
 
 
+def hook_python():
+    """The interpreter a hook command names. A hook runs in the environment the desktop app gives it, and
+    whether python3.12 is on that PATH is the app's doing: so the full path found now is written out. The
+    bare name stays when it cannot be found (init stops on that before anything is written)."""
+    found = shutil.which(PYTHON)
+    return shlex.quote(found) if found else PYTHON
+
+
+TRUST_FILE = os.path.join(os.path.expanduser("~"), ".claude.json")     # where Claude keeps what it was told to trust
+
+
+def workspace_trust(target):
+    """Has the researcher trusted this directory in Claude? True or False as TRUST_FILE records it for this
+    path, None when the file cannot be read: then nothing is known, and nothing is said. The desktop app
+    starts no session that another session opens in a directory which holds hooks and is not trusted; only
+    the researcher can trust one. The file is read, never written."""
+    try:
+        with open(TRUST_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):                         # not the file this was written against
+        return None
+    projects = data.get("projects")
+    for path in dict.fromkeys((os.path.abspath(target), os.path.realpath(target))):
+        rec = projects.get(path) if isinstance(projects, dict) else None
+        if isinstance(rec, dict) and rec.get("hasTrustDialogAccepted"):
+            return True
+    return False
+
+
+TRUST_HOW = ("请研究员信任这个目录：在侧栏点开做初始化的这个会话，应用提示这个目录还没有受信任时选 Trust workspace；"
+             "没有提示的话，在桌面应用里新建一个会话、目录选本项目，应用会问。只有研究员能批准，会话不替他改设置，也不绕开。")
+
+
+def trust_lines(target):
+    """What to say before sessions are opened in a directory the researcher has not trusted: [] when the
+    record says trusted, or when there is no record to read."""
+    if workspace_trust(target) is not False:
+        return []
+    return ["注意：没有查到研究员信任这个目录的记录。目录里现在有 hook 和权限规则，桌面应用要研究员信任这个目录，"
+            "才让会话在里面开出会话；没信任时开出来的会话显示 “Couldn't start: This workspace isn't trusted”。",
+            "开会话之前先停下，" + TRUST_HOW,
+            "研究员说信任过了就接着做：查不到记录也可能是应用把它记在了别处。"]
+
+
 def build_settings(task, risk, policy):
     high = sorted(k for k, v in risk.get("commands", {}).items() if v == "high-risk-write")
     deny = ADMIN_DENY + ["Bash(lark-cli %s *)" % k for k in high if k != "update"]
@@ -455,7 +503,7 @@ def build_settings(task, risk, policy):
 
     def hook(script):
         return [{"type": "command", "timeout": 30,
-                 "command": "python3.12 -I -B \"$CLAUDE_PROJECT_DIR/.claude/hooks/%s\"" % script}]
+                 "command": "%s -I -B \"$CLAUDE_PROJECT_DIR/.claude/hooks/%s\"" % (hook_python(), script)}]
     hooks = {
         "PreToolUse": [{"matcher": "Bash|Monitor|Edit|Write|NotebookEdit|Agent|Task|AskUserQuestion",
                         "hooks": hook("guard.py")},
@@ -648,6 +696,10 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
         lines.append("- 同序列的活委托给 +0，分两种，看一件事做到一半还需不需要新的信息或新的判断。需要的（要设计、要开跑一个批次并盯着、要合并和解冲突这类）写下发关系："
                      "建工作项，承接的 +0 先交方案，你确认了它才动手，之后它在方案的范围内自己判断。不需要的是封闭任务，写执行关系：方法和验收标准一起写明，不建工作项。"
                      "补 +0 之前先看：%s。" % overlap)
+        # 1.1.1: which +0 takes it. The +1 reads the pool table itself: no session relays what the +0s are doing.
+        lines.append("- 派给哪个 +0：先运行 `python3.12 -I .claude/solo-lab/bin/pool.py show --role %s`，它列出本序列每个 +0 是空闲还是在忙、手上负责哪些活。"
+                     "有空闲的，交给它。都在忙，新活和在途的活不碰同一批文件的，补位新开一个（见下面“上限和补位”）。"
+                     "新活接着某个 +0 手上的事，或者和它碰同一批文件的，排给那个 +0，等它交付了再委托，不新开。" % zero)
         lines.append("- 委托下发的需求：写好需求包，运行 `%sdocs.py upload <草稿路径> --apply` 自己上传，再给 `%s` 发【%s】（写草稿路径）。"
                      "拿到【%s #ID】后先运行 `docs.py relink <ID> --apply` 把工作项 ID 写进文档，再跑 `python3.12 -I .claude/solo-lab/bin/pool.py show --role %s` 找空闲的 +0，"
                      "发 `%s：<包名> <包路径>`。没有空闲的，工作项留在“%s”排队，等有会话空出来再委托。" % (
@@ -789,7 +841,7 @@ def entry_values(spec, policy):
             "这时那个会话会自己运行 `notify.py focus open`，并告诉路由；`pool.py show` 显示它“研究员在用”。"
             "谈定的事它会写成决策包（渠道：研究员主动发起），自己上传，请书记员登记、确认“决定”，再告诉路由；路由照 R6 通知受影响的会话，改状态包。\n\n**会话池。"
             "** 研究员说“恢复”时，运行 `pool.py show --recover`，把清单交给路由，由它照清单发消息、让书记员补完写到一半的登记。"
-            "研究员在本会话明确说“补位”或“再开一个 …”时才开会话：路由由你开（书记员由路由开），其余序列的会话由那个序列的 +1 开；"
+            "研究员在本会话明确说“补位”或“再开一个 …”时才开会话：路由和书记员由你开，其余序列的会话由那个序列的 +1 开；"
             "开法照 `pool.py claim` 输出里的开池表，开好马上 `pool.py expect` 预登记。没人要求时不开会话。"
             "你开的会话每结束一轮，应用会叫醒你一次，这不算交付：没有路由发来的消息，就一句话结束本轮。") % (
             bullets([spec.render(spec.rules["entry"]["focus_rule"])])),
@@ -836,7 +888,7 @@ def pmo_file(spec, name, task, policy):
         me, notice, reg, receipt = pol["fixed_session"], spec.term("msg", "notice"), spec.term("msg", "register_request"), spec.term("msg", "register_receipt")
         router_scribe = "**交给书记员。** 要登记、确认、回滚或归档时，给 `%s` 发【%s】，等它回【%s】。格式：\n\n%s" % (scribe, reg, receipt, REGISTER_FORM)
         router_report = ("**给入口的消息。** 只有三种：里程碑，要研究员定的事（【%s #ID】），你判断不了归属的话。正文长的写进 `packages/drafts/pmo/`，消息里只给路径和三行摘要。"
-                         "你开的会话（书记员）每结束一轮，应用会叫醒你一次，这不算交付：没有要处理的消息，就一句话结束本轮。" % spec.term("msg", "decide"))
+                         "你不开会话：书记员和你一样由入口开出，+0 之间不分上下级。" % spec.term("msg", "decide"))
         router_status = ("**状态包由你维护。** 研究任务主文档末尾的“状态包”记这条任务现在的状态：上游卡在哪条决策、哪些实验条件已经定死、哪些工作暂停了；各会话压缩上下文以后先读它，入口用它回答研究员。"
                          "工作项状态变化、研究员定下新决策、暂停或恢复某类工作时，你改写它：先 `ledger.py status <研究任务 ID>` 读现在的，把整段（简介、当前状态、近期变化、风险）改好存成 `packages/drafts/pmo/` 下的文件，"
                          "运行 `python3.12 -I .claude/solo-lab/bin/docs.py status-block <研究任务 ID> --file <文件> --apply` 整段替换。")
@@ -922,7 +974,7 @@ def shared_mechanics(spec, policy):
     entry, router, scribe = (agents[r]["fixed_session"] for r in ("pmo-p1", "pmo-router", "pmo-scribe"))
     words = "、".join("【%s】" % spec.term("msg", k) for k in ("report", "register_request", "register_receipt", "decide", "resume", "notice"))
     return bullets([
-        "本目录是会话池：每个角色是研究员看得见的一个桌面会话。侧栏顶层是 %d 个序列的 +1，+1 下面是本序列的 +0：谁开出的会话就嵌在谁下面；入口 `%s` 下面是路由 `%s`，路由下面是书记员 `%s`。研究员平时找入口，特殊情况直接点开某个会话交代。" % (
+        "本目录是会话池：每个角色是研究员看得见的一个桌面会话。侧栏顶层是 %d 个序列的 +1，+1 下面是本序列的 +0：谁开出的会话就嵌在谁下面；入口 `%s` 下面是路由 `%s` 和书记员 `%s`。研究员平时找入口，特殊情况直接点开某个会话交代。" % (
             len(policy.get("sequences") or []), entry, router, scribe),
         "认领：只有开局第一句写着“认领 <角色>（会话名 <名字>）”的会话才认领，照那句话运行 `python3.12 -I .claude/solo-lab/bin/pool.py claim <角色> --as <会话名>`，读输出里的角色说明，它就是本会话的工作说明。第一句没有这句话的，是研究员自己的会话：不要自己认领，也不替池里的角色干活。",
         "找人：委托前先跑 `python3.12 -I .claude/solo-lab/bin/pool.py show --role <角色>`，看各会话忙不忙、手上是哪个工作项、桌面会话 ID，照脚本的建议发给空闲的会话。没有空闲的就排队，台账里“待开工”的工作项就是队列。",
@@ -1080,16 +1132,20 @@ def pool_label(task, ids=None):
 
 BRIEF_END = "，回一句“已认领 %s”就结束本轮，等委托消息。"      # how an opening line ends when nothing else is asked
 # The desktop app runs at most this many sessions at once that sessions started on their own: a +0
-# opened by its +1, the scribe opened by the router. It counts them across everything one initialising session set
-# off, also after a +1 is moved to top level. One is kept for the scribe, whose first turn is long.
+# opened by its +1, the router and the scribe opened by the entry. It counts them across everything one initialising session set
+# off, also after a +1 is moved to top level. Measured again on the desktop app 6.28899.6 (2026-11-23): both
+# limits stand. A start past the first is refused; a +1 is woken to open what it was refused only when one of
+# its own sessions reports, so a +1 both of whose sessions were refused stays stuck: hence the batches.
+# Until 1.1.0 one of the five was kept for the scribe, whose first turn did the two first writes; they are a
+# step of their own now (SCRIBE_WRITES), and a batch takes all five.
 AUTO_RUNNING = 5
-OPEN_BUDGET = AUTO_RUNNING - 1
+OPEN_BUDGET = AUTO_RUNNING
 # ...and after each message from the user it starts at most this many of them. A round is what the
 # initialising session opens after one message; two are kept spare.
 MESSAGE_STARTS = 10
 ROUND_BUDGET = MESSAGE_STARTS - 2
 RESUME_WORDS = "继续开池"                  # what the researcher is asked to say between two rounds
-PLAN_VERSION = 6
+PLAN_VERSION = 7
 # what the researcher pastes into a +1 opened by hand ends with this: that +1 titles and files itself
 BY_HAND = "本会话由研究员手工开出。"
 # ...and when the session opens the next level in its first turn
@@ -1113,8 +1169,11 @@ def pool_entry(spec, task, policy, role, name, label):
     }
 
 
-SCRIBE_FIRST = (
-    "。认领以后接着做初始化的两件写入，做完再回话。命令都在项目目录里运行，前缀是 python3.12 -I .claude/solo-lab/bin/；"
+# 1.1.1: the scribe's two first writes are no longer part of its opening line. The pool opens without Feishu
+# (the scribe only claims), and the session that initialises sends this once the project is bound: so a pool
+# can be opened on its own, and a pool that fails to open has cost nothing on the Feishu side.
+SCRIBE_WRITES = (
+    "做初始化的两件写入，做完再回话。命令都在项目目录里运行，前缀是 python3.12 -I .claude/solo-lab/bin/；"
     "onboarding.py 只管计时，它报错就跳过，不影响写入："
     "1. onboarding.py start nodes；docs.py ensure-node all --apply；onboarding.py end nodes。"
     "2. ledger.py query tasks，空间里已经有研究任务就跳过这一件；没有的话 onboarding.py start first_task；"
@@ -1145,31 +1204,28 @@ def plan_entries(plan):
 def pool_plan(spec, task, policy, seqs, ids=None):
     """.claude/solo-lab/pool-plan.json: the pool as a tree, the way work is handed down. The
     initialising session opens each sequence's +1; a +1 opens its +0s in its first turn (the entry
-    the router, and the router the scribe), so the sidebar nests them: a session sits under the one that opened
-    it. When that session cannot open any, the researcher opens the +1s by hand (`opening`)."""
+    the router and the scribe), so the sidebar nests them: a session sits under the one that opened
+    it. A +0 opens no session, so the tree is two levels deep (1.1.1). When that session cannot open
+    any, the researcher opens the +1s by hand (`opening`)."""
     cfg = task["pool"]
     later = set(cfg.get("later") or [])
     label = pool_label(task, ids)
     tops = []
-    for seq in sorted(seqs, key=lambda x: x != "pmo"):     # the entry first: the scribe is two levels below it
+    for seq in sorted(seqs, key=lambda x: x != "pmo"):     # the entry first
         role2 = agent_name(seq, LEAD)
         top = pool_entry(spec, task, policy, role2, policy["agents"][role2]["fixed_session"], label)
         members = [role for role, _ in spec.roles_of(seq)[1:]]
-        if seq == "pmo":                                    # the entry opens the router, and the router the scribe
-            router, scribe = (pool_entry(spec, task, policy, role, policy["agents"][role]["fixed_session"], label) for role in members)
-            router["children"], top["children"] = [scribe], [router]
-            chain = [top, router]
+        if seq == "pmo":                                    # the entry opens the router and the scribe
+            top["children"] = [pool_entry(spec, task, policy, role, policy["agents"][role]["fixed_session"], label)
+                               for role in members]
         else:                                               # the +0s hang under their +1
             pol = policy["agents"][members[0]]
             top["children"] = [] if seq in later else [
                 pool_entry(spec, task, policy, members[0], pool_state.slot_name(pol, i), label) for i in range(1, cfg["p0"] + 1)]
-            chain = [top]
-        for entry in chain:
-            kids = [c["name"] for c in entry["children"]]
-            if kids:
-                entry["brief"] = entry["claim"] + OPENS % ("、".join(kids), entry["name"])
         kids = [c["name"] for c in top["children"]]
-        if not kids:
+        if kids:
+            top["brief"] = top["claim"] + OPENS % ("、".join(kids), top["name"])
+        else:
             top["brief"] += "本序列的 +0 开池时先不开，研究员说“补位”时再照认领输出开。"
         # templates for a refill: a +1 opens another +0
         top["child_roles"] = [pool_entry(spec, task, policy, role, "{name}", label) for role in members]
@@ -1196,7 +1252,7 @@ def pool_plan(spec, task, policy, seqs, ids=None):
         load += weight
     plan = {"version": PLAN_VERSION, "project": task["name"], "label": label, "max_sessions": cfg["max_sessions"],
             "order": [t["name"] for t in tops], "batches": batches, "rounds": rounds,
-            "scribe_first": SCRIBE_FIRST, "opens": OPENS, "top": tops}
+            "scribe_writes": SCRIBE_WRITES, "opens": OPENS, "top": tops}
     plan["total"] = sum(1 for _ in plan_entries(plan))
     if plan["total"] > cfg["max_sessions"]:
         raise SetupError("开池要开 %d 个会话，超过任务文件的 pool.max_sessions=%d：调小 pool.p0，把不急的序列写进 pool.later，"

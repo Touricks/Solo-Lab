@@ -625,6 +625,19 @@ def role_limit(policy, role):
     return 1 if role in single_roles(policy) else int(pol.get("limit") or 1)
 
 
+def opens(policy, role):
+    """The roles whose sessions a session of this role opens (1.1.1): the entry the router and the scribe,
+    another +1 the +0s of its sequence, a +0 none. Whom a role hands work to is its policy's spawn, and the
+    two differ in the project management sequence: the router hands work to every +1 and opens no session."""
+    agents = policy.get("agents") or {}
+    mine = agents.get(role) or {}
+    if role == policy.get("entry_role"):
+        return [r for r in (policy.get("router_role"), policy.get("scribe_role")) if r]
+    if mine.get("rank") != 1:
+        return []
+    return [r for r, a in agents.items() if a.get("sequence") == mine.get("sequence") and a.get("rank") == 0]
+
+
 def fixed_name(policy, role):
     return (policy["agents"].get(role) or {}).get("fixed_session")
 

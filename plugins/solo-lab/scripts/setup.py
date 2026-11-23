@@ -384,6 +384,8 @@ def main(argv=None):
             report(target, plan, acts, args.apply)
             if args.apply:
                 apply_plan(target, plan, acts)
+                for line in setup_core.trust_lines(target):    # hooks are in the directory now: before a session is
+                    print(line)                                # opened in it, the researcher trusts it
             return 0
         if args.cmd == "login":
             return login(args.wait, args.timeout)

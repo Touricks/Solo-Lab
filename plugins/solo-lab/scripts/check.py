@@ -290,6 +290,18 @@ def first_task_layer(target, live):
     return problems, []
 
 
+def in_project(here, cwd):
+    """Is a session's working directory the project directory or a directory inside it? A session that
+    changed into runs/<序列>/ is still in the project (reported as a problem until 1.1.1); one in a
+    worktree under .claude/worktrees is not: it works on a copy."""
+    cwd = os.path.realpath(cwd)
+    if cwd == here:
+        return True
+    rel = os.path.relpath(cwd, here)
+    parts = rel.split(os.sep)
+    return parts[0] != os.pardir and not os.path.isabs(rel) and parts[:2] != [".claude", "worktrees"]
+
+
 def listed_sessions(target, path, plan, pl):
     """(problems, reminders) of the claims against the client's own list of sessions: the
     result of list_sessions saved as it came."""
@@ -307,7 +319,7 @@ def listed_sessions(target, path, plan, pl):
             continue
         if row.get("isArchived"):
             archived.append(name)
-        if row.get("cwd") and os.path.realpath(row["cwd"]) != here:
+        if row.get("cwd") and not in_project(here, row["cwd"]):
             elsewhere.append(name)
         above, seen = row, set()                       # a nested session is filed where the pool session above it is
         while above.get("startedBy") in desks and above["startedBy"] in by_id and above["startedBy"] not in seen:
@@ -325,7 +337,7 @@ def listed_sessions(target, path, plan, pl):
     problems = [text % some(names) for names, text in (
         (gone, "客户端的会话列表里没有这些认领的会话：%s（会话被删了，或者列表没取全）"),
         (archived, "已经归档的会话还占着认领：%s"),
-        (elsewhere, "工作目录不是项目目录的会话：%s"),
+        (elsewhere, "工作目录不在项目目录里的会话：%s"),
         (loose, "不在侧栏分区“" + str(label) + "”里的会话：%s")) if names]
     notes = [text % some(names) for names, text in (
         (unknown, "客户端还没报告这些会话的分区，没核对：%s"),
@@ -474,9 +486,9 @@ def pool_health(target, manifest):
     mixed = pool.mixed_modes(rows)
     if mixed:
         problems.append("权限模式和多数会话不是一类：%s（bypass 和其他模式之间的消息会被扣下）" % "、".join(mixed))
-    away = [r["name"] for r in rows if r.get("cwd") and os.path.realpath(r["cwd"]) != os.path.realpath(target)]
+    away = [r["name"] for r in rows if r.get("cwd") and not in_project(os.path.realpath(target), r["cwd"])]
     if away:
-        problems.append("工作目录不是项目目录的会话：%s（会话要在项目目录里开，不开 worktree）" % "、".join(away))
+        problems.append("工作目录不在项目目录里的会话：%s（会话要在项目目录里开，不开 worktree）" % "、".join(away))
     old = [r["name"] for r in rows if r.get("plugin_version") != manifest.get("plugin_version")]
     if old:
         notes.append("还停在旧版插件规则上的会话：%s；它们下次开局、压缩或清空上下文时收到新的角色说明，研究员退出并重开桌面应用的话下一轮就收到" % "、".join(old))

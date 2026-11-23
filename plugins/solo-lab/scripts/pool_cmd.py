@@ -73,14 +73,14 @@ def plan_entry(plan, name):
 
 def opener(policy, role, seq="本序列"):
     """Whose session opens a new session of this role, so that it nests there: the +1 of its sequence; the
-    scribe is the router's."""
-    if role == policy.get("scribe_role"):
-        return "路由"
+    router and the scribe are the entry's."""
+    if role in (policy.get("router_role"), policy.get("scribe_role")):
+        return "入口"
     return "%s +1" % seq
 
 
 def children_text(root, policy, claim):
-    """What a session opens below itself: a +1 its +0s (the entry the router, the router the scribe). The rows come from
+    """What a session opens below itself: a +1 its +0s (the entry the router and the scribe). The rows come from
     pool-plan.json, the ones already claimed marked, plus a ready row for the next free slot
     (for a refill). A session sits in the sidebar under the one that opened it, so the pool
     nests as work is handed down."""
@@ -103,8 +103,8 @@ def children_text(root, policy, claim):
     # names the plan keeps for sessions another session of the sequence opens
     reserved = {e["name"] for e in plan_walk(top)} - {ch["name"] for ch, _, _ in rows}
     for tpl in ([] if full else top.get("child_roles", [])):
-        # a session opens the roles it hands work to: the assign edges of the dispatch graph (its policy's spawn)
-        if tpl["role"] not in (mine.get("spawn") or []) or pool.role_limit(policy, tpl["role"]) <= len(pool.claims_of(pl, tpl["role"])):
+        # a +1 opens the +0s of its sequence, the entry the router and the scribe; a +0 opens none
+        if tpl["role"] not in pool.opens(policy, claim["role"]) or pool.role_limit(policy, tpl["role"]) <= len(pool.claims_of(pl, tpl["role"])):
             continue
         name = next_slot(policy, pl, tpl["role"], reserved)
         if any(ch["name"] == name for ch, _, _ in rows):
@@ -125,12 +125,9 @@ def children_text(root, policy, claim):
         lines.append("本序列开池时只开 +1，下表只有补位用的行。")
     if full:
         lines.append("会话池已到任务文件的总上限 max_sessions=%d，不能再补位：先请研究员归档不用的会话并 release。" % cap)
-    first = pool.first_writes_due(root)
-    for ch, done, refill in rows:
-        mark = "（已认领，不用再开）" if done else ("（补位用）" if refill else "")
+    for ch, done, refill in rows:                          # the scribe's opening line only claims (1.1.1): its two
+        mark = "（已认领，不用再开）" if done else ("（补位用）" if refill else "")   # first writes come as a message
         prompt = ch["brief"]
-        if first and ch["role"] == policy.get("scribe_role"):      # the scribe's first turn does the two first writes
-            prompt = ch["claim"] + plan.get("scribe_first", "")
         lines.append("- %s：name=%s，title=“%s”，model=%s%s\n  prompt：%s\n  background：%s\n  然后：%s" % (
             ch["name"], ch["short"], ch["title"], ch["model"], mark, prompt, ch["background"], ch["expect"]))
     if entry is top:
@@ -176,7 +173,7 @@ def claim_cmd(spec, root, role, name=None, desk_arg=None, wait=CLAIM_WAIT):
                 print("待转正：本会话的 ID 有变化，这条命令结束时 hook 会把认领 %s 接到本会话上。" % claim["name"])
             print("已认领：%s。" % pool.describe(policy, claim))
             print(pool.injection(root, policy, claim, owners=pl.get("owners")))
-            more = children_text(root, policy, claim) if policy["agents"][role].get("spawn") else ""
+            more = children_text(root, policy, claim) if pool.opens(policy, role) else ""
             if more:
                 print("\n" + more)
             return 0
@@ -199,7 +196,7 @@ def claim_cmd(spec, root, role, name=None, desk_arg=None, wait=CLAIM_WAIT):
                                   "name": permit["name"], "role": role})
             print("待转正：%s（%s）。这条命令结束时 hook 会转正，下一条命令起本会话就是 %s。" % (permit["name"], role, permit["name"]))
             print(pool.injection(root, policy, dict(permit, name=permit["name"]), owners=pl.get("owners")))
-            more = children_text(root, policy, permit) if policy["agents"][role].get("spawn") else ""
+            more = children_text(root, policy, permit) if pool.opens(policy, role) else ""
             if more:                                 # what it opens below itself, right in its first turn
                 print("\n" + more)
             return 0
@@ -236,13 +233,8 @@ def expect_cmd(spec, root, name, role, desk=None, session=None, card=False):
         print("出错：要给 --desk <桌面会话 ID>（开会话时返回的 ID），终端里测试时给 --session <会话 ID>；提启动卡时给 --card。")
         return 1
     if origin == "claim":
-        mine, target = policy["agents"][me["role"]], policy["agents"][role]
-        ok = ((me["role"] == policy.get("entry_role") and role in (policy.get("router_role"), policy.get("scribe_role")))
-              or (mine["rank"] == 1 and me["role"] != policy.get("entry_role")
-                  and target["sequence"] == mine["sequence"] and target["rank"] == 0)
-              or (me["role"] == policy.get("router_role") and role == policy.get("scribe_role")))
-        if not ok:
-            print("出错：%s 不能预登记 %s：+1 只预登记本序列的 +0，入口只预登记路由和书记员，路由只预登记书记员。" % (me["name"], role))
+        if role not in pool.opens(policy, me["role"]):     # 1.1.1: a +0 opens no session, the router included
+            print("出错：%s 不能预登记 %s：+1 只预登记本序列的 +0，入口只预登记路由和书记员；+0 不开会话。" % (me["name"], role))
             return 1
     elif origin != "researcher":
         print("出错：本会话（%s）不能预登记。" % origin)
@@ -640,15 +632,13 @@ def refill_cmd(spec, root, role, count=1):
                                        "研究员在那个会话里点一下就开。列的时候照 pool.py show 写明卡片在哪个会话。" % (
                                    role, count, opener(policy, role, "那个序列"))})
     me, origin = pool.caller(root, policy)
-    mine, target = (policy["agents"].get(me["role"]) if me else None), policy["agents"][role]
-    opens = bool(mine) and me["role"] != role and role in (mine.get("spawn") or [])
+    opens = bool(me) and role in pool.opens(policy, me["role"])
     if opens:
         how = ("这个角色由你开：本轮接着提一张启动卡，照 `pool.py claim %s --as %s` 输出里“补位用”的那一行"
                "（先 expect --card，再 start_session，initiation 写 own_initiative）。" % (me["role"], me["name"]))
     else:
         pl, _ = pool.load(root)
-        up = sorted(c["name"] for c in pl["claims"].values() if c.get("role") in policy["agents"]
-                    and role in (policy["agents"][c["role"]].get("spawn") or []))
+        up = sorted(c["name"] for c in pl["claims"].values() if role in pool.opens(policy, c.get("role")))
         how = "这个角色由%s开：%s" % (opener(policy, role), "给 %s 发一条【%s】，请它为这条补位请求提启动卡。" % (
             "、".join(up), spec.term("msg", "notice")) if up else "那一级还没有会话，先请研究员开出来。")
     print("已记补位请求：%s ×%d。要研究员在提卡片的那个会话里点一下才会开，不会自动开；入口向研究员列出时附那个会话。%s新会话认领后这条请求自动销掉。" % (
@@ -755,8 +745,9 @@ def main(argv=None):
     p = sub.add_parser("open")
     p.add_argument("--target", required=True)
     p.add_argument("--manual", action="store_true", help="研究员的会话开不了会话时：打印手工开池的做法")
-    p.add_argument("--wait", type=int, metavar="SECONDS", help="等到清单里的会话都认领、书记员的首轮结束，最多等这么多秒")
+    p.add_argument("--wait", type=int, metavar="SECONDS", help="等到清单里的会话都认领、首轮都结束，最多等这么多秒")
     p.add_argument("--batch", type=int, metavar="N", help="和 --wait 一起用：只等第 N 批的会话认领、首轮结束")
+    p.add_argument("--writes", action="store_true", help="打印发给书记员的两件初始化写入；和 --wait 一起用：等书记员做完")
     args = ap.parse_args(argv)
     if args.cmd == "open":
         # the list of sessions an initialisation opens comes from what setup_core.py knows about the project; it is in
