@@ -73,8 +73,7 @@ def next_step(lg, item_id):
     return "\n".join(lines)
 SHOWN = (("urgency", "紧急程度"), ("due", "回复期限"), ("executor", orgspec.EXECUTOR),
          ("researcher_action", orgspec.RESEARCHER_ACTION), ("blocked_reason", "阻塞原因"), ("doc", "主文档"))
-# A decision goes through three stages (the researcher, 2026-11-16): 待决定; 待执行, called 已决定 in a space
-# made from template 2.1.0 or earlier (the scribe confirms 决定 as soon as the researcher decides and tells
+# A decision goes through three stages (the researcher, 2026-11-16): 待决定; 待执行 (the scribe confirms 决定 as soon as the researcher decides and tells
 # the 执行方, so every session knows the choice); 归档, which means it was carried out. The package header's
 # 执行方 carries it out: the researcher, or a session, which asks the scribe to archive it as soon as it is
 # done. query queue shows the stage in place of the state: every decision 待决定, and a decided one only

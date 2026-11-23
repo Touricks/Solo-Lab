@@ -45,7 +45,7 @@ import orgspec  # noqa: E402
 import setup_core  # noqa: E402
 
 def load_task(path):
-    return setup_core.load_task_and_seeds(path)[0]
+    return setup_core.load_task(path)
 
 
 def project_dir(path):
@@ -78,7 +78,7 @@ def announce(target, name=None, task_path=None, seq_arg=None):
         if not name:                               # a directory's name is no project's name: it may not follow any rule
             raise setup_core.SetupError("还没有项目名：先问研究员这个项目叫什么，再用 --name 传进来。研究员只说了飞书项目空间或知识空间的名字的，"
                              "就用那个名字。它会用作项目名、两个空间的名字和会话标题的前缀，不拿目录名代替")
-        task = setup_core.parse_task({"name": name, "description": "待立项访谈补充", "feishu": {"meegle_space": name}})[0]
+        task = setup_core.parse_task({"name": name, "description": "待立项访谈补充", "feishu": {"meegle_space": name}})
     setup_core.refuse_other_runtime(target)
     seqs = setup_core.pick_sequences(spec, seq_arg)
     policy = setup_core.build_policy(spec, task, seqs)

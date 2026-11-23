@@ -156,20 +156,8 @@ def plugin_version():
 
 # -------------------------------------------------------------- inputs
 TASK_KEYS = ("name", "description", "runtime", "mode", "pool", "editable_paths", "protected_paths", "feishu", "models")
-# Earlier task files described the experiment in one line each (x, f, g, h, search). Their
-# paths are taken over; the lines only seed the documents in spec/ the first time.
-LEGACY_SEEDS = (("x", "可改范围"), ("f", "目标指标"), ("g", "实验资源"), ("h", "评测协议"), ("search", "搜索方法"))
-
-
-def legacy_text(raw, key):
-    v = raw.get(key)
-    if isinstance(v, dict):
-        v = v.get("definition")
-    return v.strip() if isinstance(v, str) else ""
-
-
-def load_task_and_seeds(path):
-    """The task file in its current form, plus the one-line descriptions an earlier file gave.
+def load_task(path):
+    """The task file, checked and filled in with the defaults.
 
     The task file holds only what scripts and hooks use: names, editable_paths (可改范围),
     protected_paths (评测协议), the Feishu space this project is bound to and the models.
@@ -185,25 +173,17 @@ def load_task_and_seeds(path):
 
 
 def parse_task(raw):
-    """What a task file says, checked and filled in with the defaults: (task, seeds, legacy keys)."""
+    """What a task file says, checked and filled in with the defaults. Only this version's keys are read: a task
+    file from an older plugin is written again (the researcher, 2026-11-23: no backward compatibility)."""
     for key in ("name", "description"):
         if not isinstance(raw.get(key), str) or not raw[key].strip():
             raise SetupError("研究任务的 %s 要写成非空的文字" % key)
-    for key in ("x", "f", "g", "h"):
-        v = raw.get(key)
-        if v is not None and not (isinstance(v, dict) and isinstance(v.get("definition", ""), str)):
-            raise SetupError("研究任务里的 %s 是旧写法，只认 {\"definition\": \"...\", ...}；新写法见插件的 scaffold/task.example.json" % key)
-    if raw.get("search") is not None and not isinstance(raw["search"], str):
-        raise SetupError("研究任务的 search 要写成文字")
-    unknown = sorted(k for k in raw if k not in TASK_KEYS + ("x", "f", "g", "h", "search") and not k.startswith("_"))
+    unknown = sorted(k for k in raw if k not in TASK_KEYS and not k.startswith("_"))
     if unknown:
         raise SetupError("研究任务里有不认识的字段：%s；能写的是 %s" % ("、".join(unknown), "、".join(TASK_KEYS)))
     task = {"name": raw["name"], "description": raw["description"]}
-    for key, old in (("editable_paths", "x"), ("protected_paths", "h")):
-        legacy = (raw.get(old) or {}).get("paths")
-        if key in raw and legacy is not None:
-            raise SetupError("研究任务里同时有 %s 和旧写法的 %s.paths；只留 %s" % (key, old, key))
-        paths = raw.get(key, legacy)
+    for key in ("editable_paths", "protected_paths"):
+        paths = raw.get(key)
         if paths is None:
             paths = []
         if not isinstance(paths, list) or not all(isinstance(p, str) and p for p in paths):
@@ -236,20 +216,13 @@ def parse_task(raw):
     if raw.get("runtime", "claude") != "claude":
         raise SetupError("这一版只在 Claude 桌面端运行：把研究任务里 runtime 那一行删掉，或者写成 claude")
     task["runtime"] = "claude"
-    former = sorted(k for k in (raw.get("models") or {}) if k == "p2" or k.endswith("-p2"))
-    if former:
-        raise SetupError("研究任务的 models 里还写着 1.1.0 以前的职级（%s）：各序列带队的会话从 1.1.0 起叫 +1，"
-                         "把 p2 改成 p1、pmo-p2 改成 pmo-p1；路由和书记员是 pmo-router、pmo-scribe，不写就照 p0" % "、".join(former))
     models = dict(DEFAULT_MODELS)
     models.update(raw.get("models") or {})
     task["models"] = models
     if raw.get("mode", "pool") != "pool":
         raise SetupError("研究任务的 mode 只支持 pool（桌面会话池）：CLI 模式已取消，把 mode 这一行删掉或写成 pool")
     task["pool"] = load_pool_settings(raw.get("pool"))
-    task = {k: task[k] for k in TASK_KEYS if k in task}
-    seeds = {k: legacy_text(raw, k) for k, _ in LEGACY_SEEDS if legacy_text(raw, k)}
-    legacy = [k for k, _ in LEGACY_SEEDS if k in raw]
-    return task, seeds, legacy
+    return {k: task[k] for k in TASK_KEYS if k in task}
 
 
 def load_pool_settings(raw):
@@ -1043,7 +1016,7 @@ def pool_sections(spec, policy):
             "“研究员要做的事”没有要研究员亲手做的写“无”，执行方是研究员时不能是“无”，执行方是会话时写“无”。"
             "执行方写会话的只收各序列的 +1、入口和路由；只要有一个选项要研究员亲手做就写“研究员”，"
             "他选了不用他动手的选项，书记员确认“决定”时用 `--executor` 把执行方改成会话。"
-            "每条决策走三步：待决定、待执行（用 2.1.0 及以前的模板建的空间里叫“已决定”）、归档（已执行）。研究员定了，书记员马上确认“决定”这一步，并通知执行方，各会话就知道选了哪个选项。"
+            "每条决策走三步：待决定、待执行、归档（已执行）。研究员定了，书记员马上确认“决定”这一步，并通知执行方，各会话就知道选了哪个选项。"
             "执行方是会话的，照决定执行完，马上请书记员归档，不在待执行里停留；"
             "执行方是研究员的，他在入口会话说做完了，入口把他的原话交给路由，路由请书记员归档，书记员在评论里记下他做了什么。"
             "决策归档以后，卡住的那个 +1 请书记员清掉阻塞。" % router,
@@ -1328,21 +1301,17 @@ def phases_md(spec, snap=None, binding=None):
         "rules": spec.task_rules()})
 
 
-SEED_PLACEHOLDERS = {
-    "x": "<能改哪些模块、配置、超参或提示词；即使在可写路径里也不能碰的文件；一个候选是什么，比如一个 git 快照；从哪个版本起步，它的分数是多少；能用哪些依赖和外部服务>",
-    "f": "<指标名称和方向，在哪个划分上算；多个种子怎么合成一个分数；提高多少才算数，用什么检验或置信区间判断；哪些护栏指标不能变差；优化时看哪个分数，最终报告用哪个>",
-    "g": "<用什么计成本：GPU 小时、API 费用、token、墙钟时间，评测本身的花费也算；单个候选的上限和总预算；谁计量、记在哪；超了谁叫停>",
-    "h": "<一句话说清：用什么数据、怎么打分、优化过程中谁能看到什么>",
-    "search": "<外层怎样生成候选、怎样挑下一个要扩展的候选、什么时候停>",
+# What each section of spec/spec.md and spec/eval-protocol.md asks for, until the interview fills it in.
+SECTION_HINTS = {
+    "scope_seed": "<能改哪些模块、配置、超参或提示词；即使在可写路径里也不能碰的文件；一个候选是什么，比如一个 git 快照；从哪个版本起步，它的分数是多少；能用哪些依赖和外部服务>",
+    "metric_seed": "<指标名称和方向，在哪个划分上算；多个种子怎么合成一个分数；提高多少才算数，用什么检验或置信区间判断；哪些护栏指标不能变差；优化时看哪个分数，最终报告用哪个>",
+    "resources_seed": "<用什么计成本：GPU 小时、API 费用、token、墙钟时间，评测本身的花费也算；单个候选的上限和总预算；谁计量、记在哪；超了谁叫停>",
+    "eval_seed": "<一句话说清：用什么数据、怎么打分、优化过程中谁能看到什么>",
+    "search_seed": "<外层怎样生成候选、怎样挑下一个要扩展的候选、什么时候停>",
 }
 
 
-def seeded(seeds, key):
-    text = seeds.get(key)
-    return "%s（取自旧版任务文件）〔推测，待确认〕" % text if text else SEED_PLACEHOLDERS[key]
-
-
-def spec_files(spec, task, seeds, seqs):
+def spec_files(spec, task, seqs):
     sign = "需求文档、规格、权限策略……由研究员签字"
     for item in spec.rules.get("only_humans", []):
         if item.startswith("签字"):
@@ -1352,10 +1321,7 @@ def spec_files(spec, task, seeds, seqs):
     common = {"project": task["name"], "sign_rule": sign, "req_sections": req,
               "spec_drafting": "由%s +1 访谈研究员后起草" % spec.term("seq", "alg") if "alg" in seqs
                                else "这个项目没有启用算法序列，由研究员本人写",
-              "eval_drafting": "由%s +1 访谈研究员后起草" % spec.term("seq", "quality"),
-              "scope_seed": seeded(seeds, "x"), "metric_seed": seeded(seeds, "f"),
-              "resources_seed": seeded(seeds, "g"), "search_seed": seeded(seeds, "search"),
-              "eval_seed": seeded(seeds, "h")}
+              "eval_drafting": "由%s +1 访谈研究员后起草" % spec.term("seq", "quality"), **SECTION_HINTS}
     return {"spec/spec.md": render(scaffold("spec/spec.md.tmpl"), common),
             "spec/requirements.md": render(scaffold("spec/requirements.md.tmpl"), common),
             "spec/eval-protocol.md": render(scaffold("spec/eval-protocol.md.tmpl"), common),
@@ -1363,9 +1329,6 @@ def spec_files(spec, task, seeds, seqs):
 
 
 # Headings only the templates before the rename used; such a document is still the old draft.
-OLD_SPEC_HEADINGS = {"spec/spec.md": "## x：可以改的代码", "spec/eval-protocol.md": "## h 的定义"}
-
-
 def deviations_text(spec):
     items = []
     for item in spec.rules.get("plugin_decisions", []):
@@ -1381,17 +1344,10 @@ PLUGIN_SECTION = "## 插件定下的几处安排"
 # SHA-256 of that section as each version of the plugin wrote it, white space collapsed (squeeze). A
 # section that still reads like one of them was not edited: init replaces it in place. When
 # plugin_decisions change, add the new hash here (a test says which) so the next version can do the same.
+# Only the versions projects still run are kept: no backward compatibility (the researcher, 2026-11-23).
 PLUGIN_SECTIONS = {
-    "da04954351482219e763b897bc64d8f5c0a652e15c2acc9c22dc9e52d7b30a45": "1.0.0 至 1.0.2",
-    "354838a5ab3b366410e5b748072309e6b5626e02560fca8b87fbab63989cc5b7": "1.0.3",
-    "dd2d7f72868799a7bf3f86b583dad924d4c1d8525d7e74b92f65c060c27c769a": "1.0.4",
-    "d0062ed622919fb97c63ba55db952a0b8a784a1c1d9f10f720becf1e8988f8b0": "1.0.5",
-    "1c0702acad9db570f7783b8d0ee3e34bc68a2c6301adc4bec33803e9fe8c06d4": "1.0.6 至 1.0.9",
-    "c80f58059cf5cb10a43cc52da992aeb7b420f68618042de373c679496a383233": "1.0.10",
-    "27f611c7282725b164819e37100fac25b86d8252a113c36b8a0a7fda75df2cc1": "1.0.11",
-    "477a750ca960f939523f71466a9bd67391ecb9ae4f0afeeae5d691676d5fd753": "1.0.12",
-    "96f90c7115793754cd199474d98663c523282cf3e99af0830c5f3cf6d06c624c": "1.1.0 至 1.1.1",
-    "01170a9e6b1cd5fe3a6cbc425d143d27f966bb89259bf9bfe39faaaa625b8532": "1.1.2",
+    "01170a9e6b1cd5fe3a6cbc425d143d27f966bb89259bf9bfe39faaaa625b8532": "1.1.2 至 1.1.3",
+    "ca19a785bde1d22d7fc124d57fd27747f7e7b01c43f7befc76fe4a34c0bff946": "1.1.4",
 }
 
 
@@ -1455,7 +1411,7 @@ def build_plan(target, task_path, seq_arg):
     problems = spec.validate()
     if problems:
         raise SetupError("规则文件有问题，先修好：\n" + "\n".join(problems))
-    task, seeds, legacy = load_task_and_seeds(task_path)
+    task = load_task(task_path)
     refuse_other_runtime(target)
     seqs = pick_sequences(spec, seq_arg)
     ids = load_ids(target)
@@ -1505,12 +1461,8 @@ def build_plan(target, task_path, seq_arg):
         plan.decided["org/phases.md"] = "regen"
     else:
         put("org/phases.md", phases_md(spec), keep=True)
-    for rel, content in spec_files(spec, task, seeds, seqs).items():
+    for rel, content in spec_files(spec, task, seqs).items():
         put(rel, content, keep=rel != "spec/task.json")
-    if legacy:
-        plan.notes.append("提醒：任务文件还是旧写法（%s）。路径已经当作 editable_paths、protected_paths 读进来；旧的一句话说明只在"
-                          "第一次生成 spec/ 下的文档时填进对应小节，标成〔推测，待确认〕。换成新写法时，先把 x.paths、h.paths 改写成 "
-                          "editable_paths、protected_paths，再删掉这几项；格式见插件的 scaffold/task.example.json。" % "、".join(legacy))
     if not task["editable_paths"]:
         plan.notes.append("提醒：任务文件没有写 editable_paths，工程序列改不了任何代码。")
     if not task["protected_paths"]:
@@ -1519,18 +1471,6 @@ def build_plan(target, task_path, seq_arg):
         for p in task[key]:
             if not re.search(r"[*?\[]", p) and os.path.isdir(os.path.join(target, p)):
                 plan.notes.append("提醒：%s 里的 %s 是目录，写成 %s/** 才能管到里面的文件。" % (key, p, p))
-    for rel, heading in sorted(OLD_SPEC_HEADINGS.items()):
-        path = os.path.join(target, rel)
-        if not os.path.isfile(path):
-            continue
-        try:
-            old = heading in read_text(path)
-        except (UnicodeDecodeError, OSError):
-            plan.notes.append("提醒：%s 读不了（不是 UTF-8 编码？），没检查它是不是旧模板；请另存成 UTF-8。" % rel)
-            continue
-        if old:
-            plan.notes.append("提醒：%s 还是改名前的旧模板。新模板按小节写清每一项，用技能 `solo-lab:spec` 和研究员访谈后重写；"
-                              "新模板在插件的 scaffold/%s.tmpl。" % (rel, rel))
     put("feishu/README.md", feishu_readme(task, ids))
     put("packages/README.md", scaffold("packages/README.md.tmpl"))
     for seq in seqs:

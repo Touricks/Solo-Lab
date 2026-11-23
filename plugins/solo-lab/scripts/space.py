@@ -15,8 +15,7 @@ A snapshot is what a space really has: types, fields with options, roles, the fi
 work item must fill, states and, for every flow that already has a work item, the nodes
 in order with their roles and required form items. Binding says which object of the space
 fills each slot; it matches by --map, then what was bound last time, then the identifier
-(api_name, role id, the field alias shown on the new-item page), then the name (a state also
-by a name it had in an earlier template: terms.zh.json state_former). The binding
+(api_name, role id, the field alias shown on the new-item page), then the name. The binding
 itself (feishu/ids.json) is written by `space.py feishu --apply` only, which the researcher's
 own session runs: every session can read a space, one place changes what the ledger trusts.
 

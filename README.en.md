@@ -245,4 +245,4 @@ The documents below are in Chinese.
 
 ## Version
 
-v1.1.3
+v1.1.4

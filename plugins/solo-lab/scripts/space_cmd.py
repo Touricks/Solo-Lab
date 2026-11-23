@@ -25,7 +25,6 @@ import argparse
 import datetime
 import json
 import os
-import shutil
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -62,7 +61,7 @@ def normalise_ids(raw):
             m.pop("bound_at")
             return raw, ["feishu/ids.json 记着绑定时间，却一种类型都没绑上，按没绑定处理"]
         return raw, []
-    notes = ["feishu/ids.json 不是这一版的格式：这一版只认用节点流程的空间，按空间重新绑定；--apply 时原文件备份成 ids.legacy.json"] if raw else []
+    notes = ["feishu/ids.json 不是这一版的格式，按没绑定处理：重新绑定，--apply 时覆盖它"] if raw else []
     return {"schema": space.IDS_SCHEMA, "lark": {}, "meegle": {}, "wiki": {}}, notes
 
 
@@ -417,10 +416,6 @@ def feishu(target, maps, live, apply, leave_old=False):
             print(files[binding_path])
         return 1 if problems or blank else 0
     os.makedirs(fd_dir, exist_ok=True)
-    if os.path.isfile(ids_path) and raw.get("schema") != space.IDS_SCHEMA:
-        backup = os.path.join(fd_dir, "ids.legacy.json")
-        if not os.path.exists(backup):
-            shutil.copyfile(ids_path, backup)
     for p, content in files.items():
         os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, "w", encoding="utf-8") as fh:

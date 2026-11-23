@@ -959,7 +959,7 @@ def receipt_kind(spec, wid, d, pairs=None):
     """What the receipt says the registration was, for the inbox hook of the session the
     【登记回执】 reaches: the work item type, whether a decision waits in the decision queue and
     whether it jumps it. A decision's 回复期限 has no field in the space, and 执行方 and 研究员要做的事
-    have one only in a space made from template 2.2.0 on (header_fields); all three are kept here as
+    have fields of their own outside the contract (header_fields); all three are kept here as
     the package header wrote them, for `query queue` and `confirm`. executor is
     研究员 or the session's name; researcher_action is null when the header says 无, which the package
     check allows only when a session carries the decision out. A receipt without the keys is older than
@@ -986,10 +986,9 @@ def receipt_kind(spec, wid, d, pairs=None):
             "cards": orgspec.CARD_HEAD.findall(orgspec.section_of(getattr(d, "text", "") or "", orgspec.SETTLED) or "")}
 
 
-# A decision package's header lines that go into fields of the same name where the space has them: template
-# 2.2.0 added the two fields, and its view 待定决策 lists the researcher's decisions by 执行方 = 研究员. They are no
-# contract slots, so they are found by name, like every field outside the contract; a space made from template
-# 2.1.0 or earlier has neither, and the registration goes on without them.
+# A decision package's header lines that go into the template's fields of the same name; its view 待定决策 lists
+# the researcher's decisions by 执行方 = 研究员. They are no contract slots, so they are found by name, like every
+# field outside the contract, and left out where a space lacks them.
 HEADER_FIELDS = (orgspec.EXECUTOR, orgspec.RESEARCHER_ACTION)
 
 
