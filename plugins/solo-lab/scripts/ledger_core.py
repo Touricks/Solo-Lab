@@ -871,6 +871,25 @@ class Sheet(Draft):
 
 
 # ------------------------------------------------------------- receipts
+# Receipts in packages/sent/ that are not a registration's: a delivery, an upload before its registration, a
+# step's output document, a note for the researcher (1.1.2). <ID>.json and its like are registrations.
+OTHER_RECEIPTS = ("reply-", "upload-", "attach-", "brief-")
+
+
+def brief_receipts(lg):
+    """The receipts of the 简版决策 this project uploaded (packages/sent/brief-*.json), the oldest first; each
+    carries _file, its path from the project directory."""
+    d, out = sent_dir(lg), []
+    if os.path.isdir(d):
+        for name in sorted(os.listdir(d)):
+            if name.startswith("brief-") and name.endswith(".json"):
+                rec = load_json(os.path.join(d, name))
+                if isinstance(rec, dict) and rec.get("doc"):
+                    rec["_file"] = "packages/sent/%s" % name
+                    out.append(rec)
+    return sorted(out, key=lambda r: (r.get("day") or "", r["_file"]))
+
+
 def sent_dir(lg):
     return os.path.join(lg.root, "packages", "sent")
 
@@ -881,7 +900,7 @@ def find_receipt(lg, path):
     if not os.path.isdir(d):
         return None
     for name in sorted(os.listdir(d)):
-        if name.endswith(".json") and not name.startswith(("reply-", "upload-", "attach-")):
+        if name.endswith(".json") and not name.startswith(OTHER_RECEIPTS):
             rec = load_json(os.path.join(d, name))
             if isinstance(rec, dict) and rec.get("draft") == rel:
                 rec["_file"] = "packages/sent/%s" % name
@@ -1462,10 +1481,10 @@ def text_digest(title, body):
     return hashlib.sha256(("%s\n%s" % (title, body)).encode("utf-8")).hexdigest()
 
 
-def upload_receipt(lg, path):
+def upload_receipt(lg, path, stem="upload"):
     """(path, receipt) of a draft's upload receipt packages/sent/upload-<draft file>.json; the receipt is {}
-    when the draft was not uploaded."""
-    target = receipt_file(lg, ["upload-%s" % safe_name(path)], path)
+    when the draft was not uploaded. A note for the researcher keeps its own under brief-<draft file>.json."""
+    target = receipt_file(lg, ["%s-%s" % (stem, safe_name(path))], path)
     rec = load_json(target, {}) if os.path.exists(target) else {}
     return target, rec if isinstance(rec, dict) else {}
 

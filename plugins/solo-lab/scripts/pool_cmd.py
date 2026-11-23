@@ -506,7 +506,7 @@ def recover_cmd(root, policy):
     print("恢复清单（入口把它交给路由 %s，下面的消息由路由发）：" % hub if hub != entry else "恢复清单：")
     unfinished, replies = [], []
     uploads, sent = [], pool.files_in(os.path.join(root, "packages", "sent"), "*.json")
-    known = {(pool.load_json(p, {}) or {}).get("draft") for p in sent if not os.path.basename(p).startswith(("reply-", "upload-", "attach-"))}
+    known = {(pool.load_json(p, {}) or {}).get("draft") for p in sent if not os.path.basename(p).startswith(("reply-", "upload-", "attach-", "brief-"))}
     for path in sent:
         rec = pool.load_json(path, {}) or {}
         if isinstance(rec, dict) and os.path.basename(path).startswith("upload-"):     # the author's step of a registration

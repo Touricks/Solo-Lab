@@ -1836,6 +1836,288 @@ class WhoWritesTest(LedgerCase):
         self.as_session("Alg-p1")
         self.quiet(docs.ensure_node, self.lg("offline"), "feedback")                    # offline nothing is written, nothing asked
 
+    # 1.1.2: what the researcher is asked to decide or confirm reaches him with its background. The entry of a
+    # real project put five such things to him in one line each, with no document behind any of them (the only
+    # documents a session could upload were packages, each one a work item), and he could answer none. A 简版决策
+    # is one decision in one document, written from a template, no work item; his answer is written back into
+    # it, and it becomes a work item only when it is promoted: the Feishu project is an index, and what he only
+    # nodded to once would bury what is looked up later.
+    BRIEF = """# 简版决策：正式集标签要不要加技术隔离？
+
+- 所属研究任务：无
+- 来源工作项：无
+
+## 这是什么事
+正式集标签按规则只有质量序列读，本机没有技术隔离，别的会话读得到那个目录。
+
+## 为什么现在要定
+比较阶段开跑以前要定：开跑以后再改，已经跑完的条数要重跑。
+
+## 选项和后果
+- 现在加：质量 +1 花半天改目录权限，能撤回。
+- 先不加：照现在的规则办，比较阶段开跑前再看一次。
+
+## 建议
+先不加。现在没有会话读过标签，是质量 +1 的建议。
+
+## 定了以后谁做
+Alg-p1 在比较阶段开跑前再提一次。
+
+## 要不要升级成决策项
+建议升级：比较阶段开跑前还要回头查这条。
+
+## 出处
+规则在交接记录第 7 节，没有别的材料。
+"""
+    SMALL = BRIEF.replace("建议升级：比较阶段开跑前还要回头查这条。", "建议不升级：只影响眼前这一步。")
+
+    def brief_receipt(self, name="brief.md"):
+        return ledger_core.load_json(os.path.join(self.tmp, "packages", "sent", "brief-%s.json" % name))
+
+    def test_a_brief_decision_is_a_document_and_no_work_item(self):
+        self.as_session("PMO-p1")
+        path = self.write(self.BRIEF, "brief.md")
+        url, out = self.out(docs.brief, self.lg("preview"), path)
+        self.assertIn("预览：会把简版决策建在“简版决策”节点下", out)
+        self.assertEqual((len(self.fake.docs), len(self.fake.items)), (0, 0))
+        lg = self.lg()
+        url, out = self.out(docs.brief, lg, path)
+        doc = self.fake.doc_of_link(url)
+        self.assertEqual(doc["parent"], "node_brief")
+        self.assertRegex(doc["title"], r"^\d{4}-\d{2}-\d{2}｜简版决策（PMO-p1）：正式集标签要不要加技术隔离？$")
+        self.assertTrue(doc["body"].startswith("- 所属研究任务：无"))             # the title line is the document's title, not its text
+        self.assertNotIn("状态包", doc["body"])                                    # no package: nothing is added to it
+        self.assertIn("上传：简版决策建在“简版决策”节点下：%s\n把链接给研究员：对话里只写一行，背景都在文档里；作者建议升级成决策项。" % url, out)
+        self.assertEqual(len(self.fake.items), 0)                                  # nothing for the scribe
+        self.assertFalse([c for c in lg.calls if c[0][0] == "meegle"])
+        rec = self.brief_receipt()
+        self.assertEqual((rec["doc"], rec["by"], rec["status"], rec["type"], rec["suggested"]), (url, "PMO-p1", "uploaded", "brief", True))
+        self.assertIsNone(ledger_core.find_receipt(self.lg(), path))               # it is no registration, and no upload waiting for one
+        again, out = self.out(docs.brief, self.lg(), path)                         # the same file: no second document
+        self.assertEqual((again, len(self.fake.docs)), (url, 1))
+        self.assertIn("这份简版决策已经上传过，没有再传", out)
+
+    def test_a_brief_decision_is_held_against_its_template(self):
+        self.as_session("Alg-p1")
+        bad = (self.BRIEF.replace("## 出处\n规则在交接记录第 7 节，没有别的材料。\n", "")
+               .replace("- 先不加：照现在的规则办，比较阶段开跑前再看一次。\n", "")
+               .replace("建议升级：比较阶段开跑前还要回头查这条。", "看情况。")
+               .replace("- 来源工作项：无", "- 来源工作项：#<引出这件事的工作项 ID>（没有写“无”）")
+               .replace("## 建议\n", "## 补充说明\n随手加的一节。\n\n## 建议\n"))
+        said = self.fails(docs.brief, self.lg(), self.write(bad, "bad.md"))
+        self.assertTrue(said.startswith("简版决策 packages/drafts/alg/bad.md 和模板对不上（模板在 .claude/solo-lab/templates/brief.md）：\n- "))
+        for part in ("- 缺栏目“出处”", "- 模板里没有栏目“补充说明”：一份简版决策只讲一件事，不临时加栏目",
+                     "- “选项和后果”至少写两个选项，一行一个，以“- ”开头；其中一个可以是“不做”",
+                     "- “来源工作项”写工作项 ID（比如 #2101），没有写“无”",
+                     "- “要不要升级成决策项”以“建议升级”或“建议不升级”开头，后面写理由"):
+            self.assertIn(part, said)
+        for text, part in (("没有标题的一段话。\n", "- 第一行写标题：`# 简版决策：<要研究员定什么，一个问句>`"),
+                           (self.BRIEF.replace("先不加。现在没有会话读过标签，是质量 +1 的建议。", "<选哪个，为什么。>"), "- 栏目“建议”没写内容")):
+            self.assertIn(part, self.fails(docs.brief, self.lg(), self.write(text, "bad.md")))
+        self.assertIn("找不到 packages/drafts/alg/none.md", self.fails(docs.brief, self.lg(), "packages/drafts/alg/none.md"))
+        self.assertEqual(len(self.fake.docs), 0)
+        template = open(os.path.join(ROOT, "skills", "packages", "assets", "brief.md"), encoding="utf-8").read()
+        block = orgspec.template_block(template)                                   # the template names the sections the check asks for
+        self.assertEqual(tuple(orgspec.headings(block)), docs.BRIEF_SECTIONS)
+        self.assertIn("\n- 所属研究任务：", block)
+        self.assertIn("\n- 来源工作项：", block)
+
+    def test_a_changed_brief_decision_keeps_its_link_and_its_author(self):
+        self.as_session("Alg-p1")
+        path = self.write(self.BRIEF, "brief.md")
+        url, out = self.out(docs.brief, self.lg(), path)
+        self.assertIn("接着给路由 PMO-p0-router 发【通知】：要研究员确认 <一句话> <上面的链接>，作者建议升级成决策项。", out)      # a +1 hands it to the router
+        self.write(self.BRIEF.replace("要不要加技术隔离？", "现在加不加技术隔离？").replace("花半天", "花一天"), "brief.md")
+        lg = self.lg()
+        again, out = self.out(docs.brief, lg, path)
+        doc = self.fake.doc_of_link(url)
+        self.assertEqual((again, len(self.fake.docs)), (url, 1))
+        self.assertTrue(lg.wrote("docs", "+update", "overwrite"))
+        self.assertIn("花一天", doc["body"])
+        self.assertTrue(doc["title"].endswith("｜简版决策（Alg-p1）：正式集标签现在加不加技术隔离？"))
+        self.assertIn("研究员已经写在文档上的批注还读得到，但不再挂在原文上。", out)
+        self.as_session("Product-p1")                                              # another +1 does not rewrite it
+        self.assertEqual(self.fails(docs.brief, self.lg(), path), "（Product-p1）不能改这份简版决策：它是 Alg-p1 传的，请它来改。")
+
+    def test_a_brief_decision_is_a_leads_or_the_entrys_to_write(self):
+        path = self.write(self.BRIEF, "brief.md")
+        for name in ("Alg-p0-01", "PMO-p0-router", "PMO-p0-ledger"):
+            self.as_session(name)
+            self.assertEqual(self.fails(docs.brief, self.lg(), path),
+                             "（%s）不能上传简版决策：简版决策由各序列的 +1 和入口写；+0 要研究员定的事写进交付包，由本序列 +1 去提。" % name, name)
+        self.as_session("sid-new")
+        self.assertIn("还没转正的会话不能上传简版决策", self.fails(docs.brief, self.lg(), path))
+        self.assertEqual(len(self.fake.docs), 0)
+        self.as_session()                                                          # the researcher's own session
+        url = self.quiet(docs.brief, self.lg(), path)
+        self.assertIn("｜简版决策（研究员）：", self.fake.doc_of_link(url)["title"])
+        ids_path = os.path.join(self.tmp, "feishu", "ids.json")                     # a project bound before 1.1.2 has no such node yet
+        ids = ledger_core.load_json(ids_path)
+        del ids["wiki"]["nodes"]["brief"]
+        ledger_core.save_json(ids_path, ids)
+        self.assertEqual(self.fails(docs.brief, self.lg(), self.write(self.BRIEF, "other.md")),
+                         "ids.json 里没有知识库节点“简版决策”：请书记员运行 python3.12 -I .claude/solo-lab/bin/docs.py ensure-node brief --apply")
+
+    def test_the_researchers_answer_is_written_back_into_the_document(self):
+        self.as_session("Alg-p1")
+        path = self.write(self.BRIEF, "brief.md")
+        self.assertIn("还没上传", self.fails(docs.brief, self.lg(), path, words="先不加"))
+        url = self.quiet(docs.brief, self.lg(), path)
+        self.as_session("Product-p1")                                              # neither its author nor the entry
+        self.assertEqual(self.fails(docs.brief, self.lg(), url, words="先不加"),
+                         "（Product-p1）不能记研究员对这份简版决策的回答：由入口，或者写它的 Alg-p1 来记。")
+        self.as_session("PMO-p1")                                                  # the entry heard him: it has the link, not the draft
+        for words, promote, part in (("  \n", None, "--words 写研究员的原话，照抄，不改写"), ("先不加", "升", "--promote 写“是”或“否”")):
+            self.assertIn(part, self.fails(docs.brief, self.lg(), url, words=words, promote=promote))
+        self.assertIn("--promote 和 --words 一起用", self.fails(docs.brief, self.lg(), url, promote="是"))
+        _, out = self.out(docs.brief, self.lg("preview"), url, words="先不加")
+        self.assertIn("预览：会把研究员的回答写回文档，标题改成“已定”", out)
+        self.assertEqual(self.brief_receipt()["status"], "uploaded")
+        words = "先不加，比较阶段开跑前再看。\n到时候提醒我。"
+        _, out = self.out(docs.brief, self.lg(), url, words=words)
+        doc = self.fake.doc_of_link(url)
+        self.assertTrue(doc["title"].startswith("已定｜"))
+        self.assertIn("## 研究员的决定", doc["body"])
+        self.assertIn("> 先不加，比较阶段开跑前再看。\n> 到时候提醒我。", doc["body"])            # his words, as he said them
+        self.assertRegex(doc["body"], r"- 决定人：研究员；日期：\d{4}-\d{2}-\d{2}；记录：PMO-p1\n- 升级成决策项：是（照作者的建议）")
+        self.assertIn("## 这是什么事", doc["body"])                                # the question and its background stay above the answer
+        self.assertIn("这件升级成决策项（照作者的建议）：请作者 Alg-p1 运行 python3.12 -I .claude/solo-lab/bin/docs.py brief packages/drafts/alg/brief.md --package --apply 生成决策包", out)
+        rec = self.brief_receipt()
+        self.assertEqual((rec["status"], rec["promote"], rec["decided_by"], rec["gist"], rec["words"]), ("decided", True, "PMO-p1", "先不加，比较阶段开跑前再看。", words))
+        self.assertEqual(len(self.fake.items), 0)                                  # still no work item
+        self.assertIn("已经记过研究员的决定", self.fails(docs.brief, self.lg(), url, words="改主意了"))
+        self.as_session("Alg-p1")                                                  # decided: its text is not changed again
+        self.write(self.BRIEF.replace("花半天", "花一天"), "brief.md")
+        self.assertIn("已经定了，不再改", self.fails(docs.brief, self.lg(), path))
+
+    def test_the_researcher_says_whether_it_is_promoted(self):
+        self.as_session("Alg-p1")
+        a, b = self.write(self.BRIEF, "a.md"), self.write(self.SMALL, "b.md")
+        self.quiet(docs.brief, self.lg(), a)
+        self.quiet(docs.brief, self.lg(), b)
+        self.assertFalse(self.brief_receipt("b.md")["suggested"])
+        self.as_session("PMO-p1")
+        _, out = self.out(docs.brief, self.lg(), a, words="先不加", promote="否")       # he overrules the author either way
+        self.assertIn("这件不升级（研究员说的），回答留在这份文档里。用一行告诉研究员，再把他的原话交给路由，转给 Alg-p1。", out)
+        self.assertIn("- 升级成决策项：否（研究员说的）", self.fake.doc_of_link(self.brief_receipt("a.md")["doc"])["body"])
+        _, out = self.out(docs.brief, self.lg(), b, words="同意，修吧")
+        self.assertIn("这件不升级（照作者的建议）", out)
+        self.assertEqual((self.brief_receipt("a.md")["promote"], self.brief_receipt("b.md")["promote"]), (False, False))
+
+    def test_a_decided_brief_decision_is_promoted_with_a_package_the_script_writes(self):
+        self.as_session("Alg-p1")
+        path = self.write(self.BRIEF, "20261123-简版决策-标签隔离.md")
+        url = self.quiet(docs.brief, self.lg(), path)
+        name = "20261123-简版决策-标签隔离.md"
+        self.assertIn("研究员还没定：定了以后才升级", self.fails(docs.brief, self.lg(), path, package=True))
+        self.as_session("PMO-p1")
+        self.quiet(docs.brief, self.lg(), url, words="先不加，比较阶段开跑前再看。")
+        self.assertEqual(self.fails(docs.brief, self.lg(), url, package=True),
+                         "（PMO-p1）不能把这份简版决策升级成决策项：决策包由写这份简版决策的 Alg-p1 来传。")
+        self.as_session("Alg-p1")
+        out_path, out = self.out(docs.brief, self.lg("preview"), path, package=True)
+        self.assertIn("预览：会生成决策包草稿：", out)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, out_path)))
+        out_path, out = self.out(docs.brief, self.lg(), path, package=True)
+        self.assertRegex(out_path, r"^packages/drafts/alg/\d{8}-决策包-标签隔离\.md$")
+        text = open(os.path.join(self.tmp, out_path), encoding="utf-8").read()
+        self.assertEqual(orgspec.lint_text(self.spec, text), ([], []))            # it passes the package check as it is
+        for part in ("# 决策包：正式集标签要不要加技术隔离？\n", "- 渠道：研究员主动发起\n", "- 发出方：算法 +1（Alg-p1）\n", "- 关联工作项：待建\n", "- 执行方：Alg-p1\n",
+                     "- 研究员要做的事：无\n", "- 可逆性：可逆\n", "- 到期默认动作：无\n", "- 决定内容：先不加，比较阶段开跑前再看。\n", "- 决定人：研究员\n",
+                     "- 现在加：质量 +1 花半天改目录权限，能撤回。\n", "- 简版决策（问题、背景和研究员的原话）：%s\n" % url, "## 已有的决定和结论\n无（由简版决策升级，没有另查范围）\n"):
+            self.assertIn(part, text)
+        self.assertNotIn("所属研究任务", text)                                    # the 简版决策 said 无
+        for part in ("1. python3.12 -I .claude/solo-lab/bin/docs.py upload %s --apply" % out_path,
+                     "2. 给书记员 PMO-p0-ledger 发【登记请求】：草稿 %s，新建工作项；接着确认节点“决定”，由 研究员 提出，必填项：决定内容=先不加，比较阶段开跑前再看。，决定人=研究员" % out_path,
+                     "3. 拿到工作项 ID 后运行 python3.12 -I .claude/solo-lab/bin/docs.py relink <工作项 ID> --apply，再用【通知 #ID】告诉路由 PMO-p0-router。"):
+            self.assertIn(part, out)
+        self.assertEqual(self.brief_receipt(name)["package"], out_path)
+        _, out = self.out(docs.brief, self.lg(), path, package=True)               # again: the draft is kept
+        self.assertIn("决策包草稿已经有了，没有重写", out)
+        self.assertIn("要升级，决策包 %s 还没登记" % out_path, "\n".join(ledger.brief_lines(self.lg())))
+        self.as_session()                                                          # registered as any decision made in a talk
+        item = self.quiet(register, self.lg(), os.path.join(self.tmp, out_path))
+        self.assertEqual(self.receipt(item)["type"], "decision")
+        self.assertIn("已升级成决策 #%s" % item, "\n".join(ledger.brief_lines(self.lg())))
+
+    def test_one_that_was_not_to_be_promoted_can_be_promoted_later(self):
+        self.as_session("Alg-p1")
+        path = self.write(self.SMALL.replace("- 所属研究任务：无", "- 所属研究任务：#2000").replace("- 来源工作项：无", "- 来源工作项：#2101"), "brief.md")
+        url = self.quiet(docs.brief, self.lg(), path)
+        self.quiet(docs.brief, self.lg(), path, words="同意，先不加")              # its author may write the answer down too
+        self.assertFalse(self.brief_receipt()["promote"])
+        lg = self.lg()
+        out_path = self.quiet(docs.brief, lg, path, package=True)
+        self.assertTrue(self.brief_receipt()["promote"])
+        self.assertRegex(self.fake.doc_of_link(url)["body"], r"- 升级成决策项：改为是（\d{4}-\d{2}-\d{2}，Alg-p1）")
+        text = open(os.path.join(self.tmp, out_path), encoding="utf-8").read()
+        self.assertIn("- 所属研究任务：#2000\n", text)
+        self.assertIn("- 来源工作项：#2101\n", text)
+        self.assertIn("- 受影响的工作项：#2101\n", text)
+        self.assertEqual(orgspec.lint_text(self.spec, text)[0], [])
+        long = self.write(self.BRIEF.replace("别的会话读得到那个目录。", "别的会话读得到那个目录。" + "细节。" * 300), "long.md")   # a long background is cut to what a card takes
+        self.quiet(docs.brief, self.lg(), long)
+        self.quiet(docs.brief, self.lg(), long, words="先不加")
+        text = open(os.path.join(self.tmp, self.quiet(docs.brief, self.lg(), long, package=True)), encoding="utf-8").read()
+        self.assertLessEqual(len(orgspec.section_of(text, "背景")), orgspec.BACKGROUND_MAX)
+        self.assertIn("……（全文见事实依据里的简版决策）", text)
+
+    def test_the_brief_decisions_are_listed_after_the_queue(self):
+        self.as_session("Alg-p1")
+        a, b = self.write(self.BRIEF, "a.md"), self.write(self.SMALL.replace("加技术隔离", "删两份旧副本"), "b.md")
+        rows, out = self.out(ledger.query, self.lg(), "queue")
+        self.assertNotIn("简版决策", out)                                          # none uploaded: nothing is said
+        ua, ub = self.quiet(docs.brief, self.lg(), a), self.quiet(docs.brief, self.lg(), b)
+        rows, out = self.out(ledger.query, self.lg(), "queue")
+        self.assertEqual(rows, [])                                                 # they are no work items
+        self.assertIn("共 0 项。\n\n还没定的简版决策（不是工作项，不进决策队列；研究员来谈时列在决策清单后面）：\n", out)
+        self.assertRegex(out, r"待定  \d{4}-\d{2}-\d{2}  正式集标签要不要加技术隔离？（Alg-p1）  作者建议升级  %s\n" % re.escape(ua))
+        self.assertRegex(out, r"待定  \d{4}-\d{2}-\d{2}  正式集标签要不要删两份旧副本？（Alg-p1）  作者建议不升级  %s\n" % re.escape(ub))
+        self.as_session("PMO-p1")
+        self.quiet(docs.brief, self.lg(), ub, words="删吧")
+        _, out = self.out(ledger.query, self.lg(), "queue")
+        self.assertIn(ua, out)
+        self.assertNotIn(ub, out)                                                  # decided: it waits for nobody
+        lines, out = self.out(ledger.query, self.lg(), "briefs")
+        self.assertEqual(len(lines), 2)
+        self.assertRegex(out, r"已定  \d{4}-\d{2}-\d{2}  正式集标签要不要删两份旧副本？（Alg-p1）  决定（\d{4}-\d{2}-\d{2}）：删吧  不升级  %s\n" % re.escape(ub))
+        self.assertTrue(out.endswith("共 2 份简版决策，1 份待定。\n"))
+        self.assertNotIn("简版决策", self.out(ledger.query, self.lg(), "blocked")[1])
+
+    def test_the_command_line_takes_a_brief_decision(self):
+        self.as_session("PMO-p1")
+        path = self.write(self.BRIEF, "brief.md")
+        fake = self.fake
+
+        def ledger_of(root, mode):
+            return fake_space.SimLedger(root, mode, fake)
+
+        def run(*argv):
+            real, cwd = ledger_core.Ledger, os.getcwd()
+            ledger_core.Ledger = ledger_of
+            os.chdir(self.tmp)
+            try:
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    code = docs.main(list(argv))
+            finally:
+                ledger_core.Ledger = real
+                os.chdir(cwd)
+            return code, buf.getvalue()
+
+        rel = os.path.relpath(path, self.tmp)
+        code, out = run("brief", rel, "--apply")
+        self.assertEqual(code, 0, out)
+        self.assertIn("上传：简版决策建在“简版决策”节点下", out)
+        url = self.brief_receipt()["doc"]
+        code, out = run("brief", url, "--words", "先不加", "--promote", "否", "--apply")
+        self.assertEqual(code, 0, out)
+        self.assertIn("这件不升级（研究员说的）", out)
+        code, out = run("brief", rel, "--apply")
+        self.assertEqual(code, 1)
+        self.assertIn("出错：这份简版决策研究员", out)
+        self.assertEqual(len(self.fake.docs), 1)
+
 
 class WriteBackTest(LedgerCase):
     """1.0.10: register and revise wrote the draft back as they had read it ten seconds earlier, with the work
@@ -2341,7 +2623,7 @@ class DocumentsTest(LedgerCase):
         self.quiet(docs.ensure_all_nodes, lg)
         keys = self.spec.node_keys()
         self.assertEqual(len(made), len(keys))
-        self.assertEqual(len(keys), 21)
+        self.assertEqual(len(keys), 22)
         self.assertFalse([c for c in made[:len(top)] if "--parent-node-token" in c])
         self.assertTrue(all("--parent-node-token" in c for c in made[len(top):]))
         self.assertEqual(sorted(self.ids()["wiki"]["nodes"]), sorted(keys))

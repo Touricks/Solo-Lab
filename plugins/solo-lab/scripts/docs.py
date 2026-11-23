@@ -21,6 +21,10 @@ printed as the request to send to the scribe.
                                             opening up to 状态包 replaced in place, a line in 交接记录
     docs.py status-block <ID> --file F      replace the 状态包 section (block_replace)
     docs.py append <ID> --file F            append to 交接记录 (first line carries the session tag)
+    docs.py brief <draft>                   a 简版决策 (1.1.2): one decision the researcher is asked for, with its
+                                            background, under the node 简版决策; no work item
+    docs.py brief <draft|link> --words W    his answer, written back into the document (--promote 是|否)
+    docs.py brief <draft|link> --package    the 决策包 a decided one is promoted with, as a draft
     docs.py ensure-node <key> | all         create knowledge-base nodes such as feedback or archive/alg
 
 Work items are written with workitem.py, the ledger is read with ledger.py; what the three share is in
@@ -395,6 +399,285 @@ def attach(lg, item_id, field, path):
     remember(status="registered")
     print(("已上传“%s”：%s\n%s" if lg.mode == "apply" else "预览：会上传“%s”（%s）。\n%s") % (title, link, then))
     return link
+
+
+# ------------------------------------------------------------- 简版决策 (1.1.2)
+# What the researcher is asked to decide or confirm reaches him with its background. What has to be on the
+# ledger from the start (a signature, an irreversible step, a change of scope or of the rules, something he
+# does by hand) is a 决策包. The rest is a 简版决策: one decision, one document under the knowledge-base node
+# of that name, written from a template and checked against it, no work item. His answer is written back into
+# the document; when the decision is one others will have to follow or look up later, it is promoted: the script
+# writes a 决策包 from it, which is registered as a decision already made (渠道：研究员主动发起). The Feishu
+# project keeps what is worth indexing, the knowledge base keeps the rest with its answer.
+BRIEF_NODE = "brief"
+BRIEF_TEMPLATE = ".claude/solo-lab/templates/brief.md"
+BRIEF_PROMOTE, BRIEF_OPTIONS, BRIEF_DECIDED = "要不要升级成决策项", "选项和后果", "研究员的决定"
+BRIEF_SECTIONS = ("这是什么事", "为什么现在要定", BRIEF_OPTIONS, "建议", "定了以后谁做", BRIEF_PROMOTE, "出处")
+BRIEF_SAYS = re.compile(r"(建议不升级|建议升级)")
+BRIEF_TITLE = re.compile(r"^简版决策\s*[：:]\s*")
+BRIEF_HEADER = ("所属研究任务", "来源工作项")
+YES_NO = {"是": True, "否": False}
+DECIDED_MARK = "已定｜"
+
+
+def brief_parts(text, rel):
+    """What a 简版决策 draft says, held against its template: {heading, body, sections, promote}. The title and
+    the seven sections, nothing else; at least two options, one a line; the last but one section says whether
+    its author would promote it. Everything that is wrong is reported at once."""
+    lines = text.splitlines()
+    head = next((i for i, l in enumerate(lines) if l.startswith("# ")), None)
+    heading = BRIEF_TITLE.sub("", core.title_of(text).strip())
+    problems = []
+    if not heading or orgspec.placeholder(heading):
+        problems.append("第一行写标题：`# 简版决策：<要研究员定什么，一个问句>`")
+    sections = {}
+    for name in BRIEF_SECTIONS:
+        sec = orgspec.section_of(text, name)
+        if sec is None:
+            problems.append("缺栏目“%s”" % name)
+        elif orgspec.empty_text(sec):
+            problems.append("栏目“%s”没写内容" % name)
+        sections[name] = sec or ""
+    extra = [h for h in orgspec.headings(text) if h not in BRIEF_SECTIONS]
+    if extra:
+        problems.append("模板里没有栏目“%s”：一份简版决策只讲一件事，不临时加栏目" % "”“".join(extra))
+    options = [l for l in sections[BRIEF_OPTIONS].splitlines() if re.match(r"\s*[-*] \S", l)]
+    if sections[BRIEF_OPTIONS] and not orgspec.empty_text(sections[BRIEF_OPTIONS]) and len(options) < 2:
+        problems.append("“%s”至少写两个选项，一行一个，以“- ”开头；其中一个可以是“不做”" % BRIEF_OPTIONS)
+    header = core.header_of(text)
+    for key in BRIEF_HEADER:                           # optional lines; what they say goes into the 决策包 it may become
+        value = header.get(key)
+        if value is not None and not (orgspec.SAYS_NOTHING.match(value) or re.match(r"#?\d{3,}", value)):
+            problems.append("“%s”写工作项 ID（比如 #2101），没有写“无”" % key)
+    said = BRIEF_SAYS.match(sections[BRIEF_PROMOTE])
+    if sections[BRIEF_PROMOTE] and not orgspec.empty_text(sections[BRIEF_PROMOTE]) and not said:
+        problems.append("“%s”以“建议升级”或“建议不升级”开头，后面写理由" % BRIEF_PROMOTE)
+    if problems:
+        raise core.LedgerError("简版决策 %s 和模板对不上（模板在 %s）：\n- %s" % (rel, BRIEF_TEMPLATE, "\n- ".join(problems)))
+    body = "\n".join(l for i, l in enumerate(lines) if i != head).strip() + "\n"
+    return {"heading": heading, "body": body, "sections": sections, "promote": said.group(1) == "建议升级"}
+
+
+def brief_of(lg, ref):
+    """(receipt path, receipt, draft path) of the 简版决策 a draft path or a document link names. The receipt is
+    {} when the draft was not uploaded; a link nobody uploaded stops here."""
+    full = core.find_file(lg, ref) if not re.match(r"https?://", ref or "") else None
+    if full:
+        rpath, rec = core.upload_receipt(lg, full, "brief") if lg.mode != "offline" else (None, {})
+        return rpath, rec, full
+    for rec in core.brief_receipts(lg):
+        if rec.get("doc") and rec["doc"].split("?")[0].rstrip("/") == (ref or "").split("?")[0].rstrip("/"):
+            return os.path.join(lg.root, rec["_file"]), rec, os.path.join(lg.root, rec.get("draft") or "")
+    raise core.LedgerError("找不到 %s：写简版决策的草稿路径（先按当前目录、再按项目目录找），或者它上传以后的文档链接" % ref)
+
+
+def brief(lg, ref, doc=None, words=None, promote=None, package=False):
+    """`docs.py brief <草稿>` uploads a 简版决策; with --words it writes the researcher's answer back into the
+    document; with --package it writes the 决策包 a decided one is promoted with."""
+    if package:
+        return brief_package(lg, ref)
+    if words is not None:
+        return brief_decide(lg, ref, words, promote)
+    if promote is not None:
+        raise core.LedgerError("--promote 和 --words 一起用：记研究员的回答时写要不要升级")
+    return brief_upload(lg, ref, doc)
+
+
+def brief_upload(lg, path, doc=None):
+    """Upload a 简版决策 under the knowledge-base node of that name; return its /wiki/ link. No work item, no
+    place in the decision queue, nothing for the scribe.
+
+    A +1 or the entry runs it, or the researcher's own session; a +0 writes what it needs decided into its
+    delivery. The receipt packages/sent/brief-<file>.json keeps the link, the day and a digest: the same command
+    run again creates no second document, a changed file replaces the document's text under the same link,
+    and only the session that uploaded it may do that. Once the researcher has decided it is not changed."""
+    rpath, rec, full = brief_of(lg, path)
+    rel = os.path.relpath(full, lg.root)
+    parts = brief_parts(core.read_text_file(lg, full), rel)
+    me = lg.caller or {}
+    if rec.get("by") and rec["by"] != core.RESEARCHER:
+        core.must_be(lg, "改这份简版决策", names=[rec["by"]], why="它是 %s 传的，请它来改" % rec["by"])
+    else:
+        core.must_be(lg, "上传简版决策", seq=me.get("sequence"), why="简版决策由各序列的 +1 和入口写；+0 要研究员定的事写进交付包，由本序列 +1 去提")
+    if rec.get("status") == "decided":
+        raise core.LedgerError("这份简版决策研究员 %s 已经定了，不再改：%s\n他改了主意，或者事情变了，写一份新的。" % (
+            (rec.get("decided_at") or "")[:10], rec.get("doc")))
+    name = lg.spec.term("node", BRIEF_NODE)
+    parent = (lg.nodes.get(BRIEF_NODE) or {}).get("node_token")
+    if not parent:
+        raise core.LedgerError("ids.json 里没有知识库节点“%s”：请书记员运行 %sdocs.py ensure-node %s --apply" % (name, RUN, BRIEF_NODE))
+    author = rec.get("by") or me.get("name") or core.RESEARCHER
+    day = rec.get("day") or core.now()[:10]
+    title = "%s｜简版决策（%s）：%s" % (day, author, parts["heading"])
+    body = parts["body"]
+    digest = core.text_digest(title, body)
+
+    def remember(**kw):
+        rec.update({k: v for k, v in kw.items() if v is not None})
+        if lg.mode == "apply":
+            rec.update(draft=rel, updated_at=core.now(), by=author, day=day, heading=parts["heading"], suggested=parts["promote"])
+            rec.setdefault("status", "created")
+            os.makedirs(core.sent_dir(lg), exist_ok=True)
+            core.save_json(rpath, rec)
+
+    notice = lg.spec.term("msg", "notice")
+    advice = "作者%s" % ("建议升级成决策项" if parts["promote"] else "建议不升级")
+    if me.get("role") == lg.spec.rules["entry"]["role"] or not me:
+        then = "把链接给研究员：对话里只写一行，背景都在文档里；%s。他定了以后运行 %sdocs.py brief %s --words '<他的原话>' --apply 写回文档。" % (advice, RUN, rel)
+    else:
+        then = "接着给路由 %s 发【%s】：要研究员确认 <一句话> <上面的链接>，%s。它转给入口；简版决策不登记，不进决策队列。" % (
+            lg.spec.rules["naming"]["fixed_sessions"]["pmo-router"], notice, advice)
+    known = rec.get("doc") if not doc else None
+    if known and rec.get("sha256") == digest:
+        print("这份简版决策已经上传过，没有再传：%s\n%s" % (known, then))
+        return known
+    if known:
+        lg.lark("docs", "+update", "--doc", known, "--command", "overwrite", "--doc-format", "markdown", "--content", "-",
+                write=True, stdin=body)
+        if rec.get("title") != title:
+            retitle(lg, known, title)
+        remember(sha256=digest, title=title)
+        print(("草稿在上传以后改过：文档已经换成现在的内容，链接不变：%s\n研究员已经写在文档上的批注还读得到，但不再挂在原文上。\n%s" if lg.mode == "apply"
+               else "预览：草稿在上传以后改过，会把文档换成现在的内容，链接不变：%s\n研究员已经写在文档上的批注还读得到，但不再挂在原文上。\n%s") % (known, then))
+        return known
+
+    def create():
+        return lg.create_doc(parent, title, body, created=lambda x: remember(docx=x, doc_unknown=False))
+
+    try:
+        url = core.main_document(lg, dict(rec), doc, "“%s”节点" % name, create, remember)
+    except core.WriteMaybeDone as e:
+        raise core.WriteMaybeDone("%s\n建文档没有拿到确定的结果：先在网页上“%s”节点下核对。建好了的，运行 docs.py brief %s --doc <文档链接> --apply；"
+                                  "确认没建成的，运行 docs.py brief %s --doc new --apply" % (e, name, rel, rel))
+    remember(status="uploaded", sha256=digest, title=title, parent=parent, type=BRIEF_NODE)
+    print(("上传：简版决策建在“%s”节点下：%s\n%s" if lg.mode == "apply" else "预览：会把简版决策建在“%s”节点下（%s）。\n%s") % (name, url, then))
+    return url
+
+
+def brief_decide(lg, ref, words, promote=None):
+    """Write the researcher's answer back into a 简版决策: his words as he said them, the day, who wrote them
+    down, and whether the decision is promoted to a work item (--promote 是|否; left out, as its author
+    advised). The document's title says 已定 from then on and the document is not changed again. The entry
+    runs it, having heard him, or the session that wrote the 简版决策."""
+    rpath, rec, full = brief_of(lg, ref)
+    rel = rec.get("draft") or os.path.relpath(full, lg.root)
+    url = rec.get("doc")
+    if not url:
+        raise core.LedgerError("%s 还没上传：先运行 %sdocs.py brief %s --apply" % (rel, RUN, rel))
+    core.must_be(lg, "记研究员对这份简版决策的回答", names=[rec["by"]] if rec.get("by") and rec["by"] != core.RESEARCHER else [],
+                 roles=(lg.spec.rules["entry"]["role"],), why="由入口，或者写它的 %s 来记" % (rec.get("by") or "会话"))
+    said = [l.rstrip() for l in (words or "").strip().splitlines()]
+    if not any(said):
+        raise core.LedgerError("--words 写研究员的原话，照抄，不改写")
+    if promote is not None and promote not in YES_NO:
+        raise core.LedgerError("--promote 写“是”或“否”：研究员说了要不要升级成决策项就照他说的写，没说就不写这个参数，照作者的建议办")
+    if rec.get("status") == "decided":
+        raise core.LedgerError("这份简版决策 %s 已经记过研究员的决定（%s）：%s\n不再改。他改了主意，写一份新的；只是要升级成决策项，运行 %sdocs.py brief %s --package --apply" % (
+            (rec.get("decided_at") or "")[:10], rec.get("gist") or "", url, RUN, rel))
+    up = YES_NO[promote] if promote is not None else bool(rec.get("suggested"))
+    why = "研究员说的" if promote is not None else "照作者的建议"
+    today, who = core.now()[:10], (lg.caller or {}).get("name") or core.RESEARCHER
+    section = "\n## %s\n\n%s\n\n- 决定人：研究员；日期：%s；记录：%s\n- 升级成决策项：%s（%s）\n" % (
+        BRIEF_DECIDED, "\n".join("> " + l if l else ">" for l in said), today, who, "是" if up else "否", why)
+    lg.lark("docs", "+update", "--doc", url, "--command", "append", "--doc-format", "markdown", "--content", "-", write=True, stdin=section)
+    title = rec.get("title") or ""
+    if title and not title.startswith(DECIDED_MARK):
+        retitle(lg, url, DECIDED_MARK + title)
+    if lg.mode == "apply":
+        rec.pop("_file", None)
+        rec.update(status="decided", decided_at=core.now(), decided_by=who, words="\n".join(said), gist=next(l for l in said if l.strip()).strip()[:80],
+                   promote=up, promote_why=why, title=DECIDED_MARK + title if title and not title.startswith(DECIDED_MARK) else title)
+        core.save_json(rpath, rec)
+    author = rec.get("by") or core.RESEARCHER
+    if up:
+        then = ("这件升级成决策项（%s）：请作者 %s 运行 %sdocs.py brief %s --package --apply 生成决策包，照它打印的步骤上传、登记。"
+                "用一行告诉研究员这件会登记成决策项，再把他的原话和这一行交给路由。" % (why, author, RUN, rel))
+    else:
+        then = "这件不升级（%s），回答留在这份文档里。用一行告诉研究员，再把他的原话交给路由，转给 %s。" % (why, author)
+    print(("已把研究员的回答写回文档，标题改成“已定”：%s\n%s" if lg.mode == "apply" else "预览：会把研究员的回答写回文档，标题改成“已定”：%s\n%s") % (url, then))
+    return url
+
+
+def brief_package(lg, ref):
+    """Write the 决策包 a decided 简版决策 is promoted with: a draft next to it, filled from what it says and
+    from the researcher's words, 渠道 研究员主动发起. The draft passes the package check or nothing is written.
+    Its author uploads it, has the scribe register it and confirm 决定, and writes the item's ID into it, as
+    with any decision the researcher made in a conversation (R6). Returns the draft's path."""
+    rpath, rec, full = brief_of(lg, ref)
+    rel = rec.get("draft") or os.path.relpath(full, lg.root)
+    if rec.get("status") != "decided":
+        raise core.LedgerError("%s 研究员还没定：定了以后才升级。他定了，先运行 %sdocs.py brief %s --words '<他的原话>' --apply" % (rel, RUN, rel))
+    me = lg.caller or {}
+    by = rec.get("by") if rec.get("by") and rec["by"] != core.RESEARCHER else None
+    core.must_be(lg, "把这份简版决策升级成决策项", names=[by] if by else [], seq=None if by else me.get("sequence"),
+                 why="决策包由写这份简版决策的 %s 来传" % (by or "+1"))
+    sender = by or me.get("name") or lg.spec.rules["naming"]["fixed_sessions"]["pmo-p1"]
+    seq = core.seq_of_session(lg, sender) or "pmo"
+    parts = brief_parts(core.read_text_file(lg, full), rel)
+    s, today = parts["sections"], core.now()[:10]
+    header = core.header_of(core.read_text_file(lg, full))
+    names = [n for n in re.findall(core.pool.NAME_IN_TEXT, s["定了以后谁做"]) if orgspec.read_executor(lg.spec, n)[0] not in (None, core.RESEARCHER)]
+    executor = orgspec.read_executor(lg.spec, names[0])[0] if names else orgspec.read_executor(lg.spec, sender)[0] or sender
+    background = "%s\n\n%s" % (s["这是什么事"], s["为什么现在要定"])
+    if len(background) > orgspec.BACKGROUND_MAX:
+        tail = "……（全文见事实依据里的简版决策）"
+        background = background[:orgspec.BACKGROUND_MAX - len(tail)] + tail
+    words = rec.get("words") or ""
+    gist = " ".join(l.strip() for l in words.splitlines() if l.strip())
+    lines = ["# 决策包：%s" % parts["heading"], "", "- 包类型：决策包", "- 版本：第 1 版（%s）" % today, "- 渠道：%s" % lg.spec.term("channel", "researcher"),
+             "- 紧急程度：本周"]
+    ref = {k: "#%s" % core.item_id_of(header[k]) for k in BRIEF_HEADER if header.get(k) and not orgspec.SAYS_NOTHING.match(header[k])}
+    if ref.get("所属研究任务"):
+        lines.append("- 所属研究任务：%s" % ref["所属研究任务"])
+    source = ref.get("来源工作项") or ""
+    lines += ["- 发出方：%s +1（%s）" % (lg.spec.term("seq", seq), sender), "- 接收方：研究员", "- 关联工作项：待建",
+              "- 来源工作项：%s" % (source if source and not orgspec.placeholder(source) else "无"), "- 取代的决策：无",
+              "- 需要接收方做的事：确认记录无误", "- 执行方：%s" % executor, "- 研究员要做的事：无", "- 可逆性：可逆", "- 到期默认动作：无",
+              "- 回复期限：无", "- 上下文范围：只读本包；需要细节时按事实依据查", "",
+              "## 认知层", "研究员 %s 定了“%s”：%s" % ((rec.get("decided_at") or today)[:10], parts["heading"], gist), "",
+              "## 背景", background, "",
+              "## 已有的决定和结论", "无（由简版决策升级，没有另查范围）", "",
+              "## 选项", s[BRIEF_OPTIONS], "",
+              "## 没有列入的选项", "无", "", "## 约束的出处", "无", "",
+              "## 建议", s["建议"], "",
+              "## 已发生的偏向性工作", "无", "", "## 冻结的动作", "无", "",
+              "## 不决定的后果", s["为什么现在要定"], "",
+              "## 待签版本", "无", "",
+              "## 决定", "- 决定内容：%s" % gist, "- 决定人：研究员", "- 理由：见研究员的原话，记在简版决策末尾",
+              "- 在哪里定的：%s，%s 记录；简版决策 %s" % ((rec.get("decided_at") or today)[:10], rec.get("decided_by") or "入口", rec.get("doc")),
+              "- 受影响的工作项：%s" % (source if source and not orgspec.placeholder(source) else "无"), "",
+              "## 事实依据", "- 简版决策（问题、背景和研究员的原话）：%s" % rec.get("doc"), s["出处"], ""]
+    text = "\n".join(lines)
+    errors, _ = orgspec.lint_text(lg.spec, text)
+    if errors:
+        raise core.LedgerError("照 %s 生成的决策包没过包检查，没有写文件：\n- %s\n多半是简版决策里哪一栏的写法脚本没料到：改不了的话，照 %s 手写一份决策包（渠道：研究员主动发起）。" % (
+            rel, "\n- ".join(errors), ".claude/solo-lab/templates/decision.md"))
+    stem = re.sub(r"^\d{8}-", "", os.path.splitext(os.path.basename(full))[0])
+    stem = re.sub(r"^(?:简版决策|说明)-?", "", stem) or "简版"
+    target = os.path.join(os.path.dirname(full), "%s-决策包-%s.md" % (today.replace("-", ""), stem))
+    out = rec.get("package") or os.path.relpath(target, lg.root)
+    target = os.path.join(lg.root, out)
+    if os.path.exists(target) and lg.mode != "offline":
+        print("决策包草稿已经有了，没有重写：%s" % out)
+    elif lg.mode == "apply":
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(text)
+    if lg.mode == "apply":
+        rec.pop("_file", None)
+        if not rec.get("promote"):                     # the researcher, or its author, changed his mind about it later
+            lg.lark("docs", "+update", "--doc", rec["doc"], "--command", "append", "--doc-format", "markdown", "--content", "-", write=True,
+                    stdin="\n- 升级成决策项：改为是（%s，%s）\n" % (today, me.get("name") or core.RESEARCHER))
+        rec.update(promote=True, package=out)
+        core.save_json(rpath, rec)
+    scribe, router = (lg.spec.rules["naming"]["fixed_sessions"][k] for k in ("pmo-scribe", "pmo-router"))
+    reg = lg.spec.term("msg", "register_request")
+    print(("%s：%s\n" % ("决策包草稿已生成" if lg.mode == "apply" else "预览：会生成决策包草稿", out)) +
+          "接着照研究员当面定下的事办：\n"
+          "1. %sdocs.py upload %s --apply\n"
+          "2. 给书记员 %s 发【%s】：草稿 %s，新建工作项；接着确认节点“决定”，由 研究员 提出，必填项：决定内容=%s，决定人=研究员；原话照抄。\n"
+          "3. 拿到工作项 ID 后运行 %sdocs.py relink <工作项 ID> --apply，再用【%s #ID】告诉路由 %s。" % (
+              RUN, out, scribe, reg, out, gist, RUN, lg.spec.term("msg", "notice"), router))
+    return out
 
 
 def step_owner(lg, wid, it, item_id, what):
@@ -940,6 +1223,12 @@ def main(argv=None):
     for name in ("status-block", "append"):
         p = sub.add_parser(name); p.add_argument("id"); p.add_argument("--file", required=True); p.add_argument("--apply", action="store_true")
     p = sub.add_parser("relink"); p.add_argument("id"); p.add_argument("--apply", action="store_true")
+    p = sub.add_parser("brief"); p.add_argument("file", help="简版决策的草稿路径；--words 和 --package 也可以写它上传以后的文档链接")
+    p.add_argument("--doc", help="上次建文档没有拿到确定的结果时：已经建好的文档的链接，或者 new 重新建")
+    p.add_argument("--words", help="研究员的原话：写回文档")
+    p.add_argument("--promote", help="和 --words 一起用：是 或 否")
+    p.add_argument("--package", action="store_true", help="生成升级用的决策包草稿")
+    p.add_argument("--apply", action="store_true")
     p = sub.add_parser("ensure-node"); p.add_argument("key"); p.add_argument("--apply", action="store_true")
     return core.run(ap, argv, run_command)
 
@@ -961,6 +1250,8 @@ def run_command(lg, args):
         append(lg, args.id, args.file)
     elif args.cmd == "relink":
         relink(lg, args.id)
+    elif args.cmd == "brief":
+        brief(lg, args.file, args.doc, args.words, args.promote, args.package)
     elif args.cmd == "ensure-node":
         if args.key == "all":
             ensure_all_nodes(lg)

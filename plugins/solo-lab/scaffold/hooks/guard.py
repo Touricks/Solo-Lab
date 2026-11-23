@@ -55,7 +55,7 @@ import feishu_cmd as fc  # noqa: E402
 import pool  # noqa: E402
 
 TMP_PREFIXES = ("/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/")
-POLICY_VERSION = 9
+POLICY_VERSION = 10
 
 
 def glob_regex(pattern):
@@ -192,7 +192,7 @@ def check_lark(inv, c, who, policy, data, soft, rewritable):
         return refuse(who, data, NO_SUBCOMMAND % "lark-cli"), None
     if c["pos"][0] in DOC_DOMAINS:
         return refuse(who, data, "（%s）不能直接执行写命令 %s。文档谁负责谁写，但只经文档脚本：上传用 docs.py upload，修订用 docs.py revise，"
-                                 "状态包和交接记录用 docs.py status-block、append；要删的文档记进研究员任务清单（todo.py add）。" % (name, key)), new_args
+                                 "状态包和交接记录用 docs.py status-block、append，简版决策用 docs.py brief；要删的文档记进研究员任务清单（todo.py add）。" % (name, key)), new_args
     return refuse(who, data, "（%s）不能执行写命令 %s：这个角色没有这条飞书写命令。" % (name, key)), new_args
 
 
@@ -228,7 +228,7 @@ def check_meegle(inv, c, who, data, soft, rewritable):
 # settled reads the space; its --into writes the section of a draft of the session that runs it, a local file
 LEDGER_READS = {"", "get", "next", "query", "mql", "trace", "status", "settled", "-h", "--help"}
 LEDGER_WRITE_WORDS = {"register", "revise", "reply", "confirm", "rollback", "update", "comment", "status-block", "append",
-                      "archive", "relink", "ensure-node", "upload", "attach"}
+                      "archive", "relink", "ensure-node", "upload", "attach", "brief"}
 _WORDS = "|".join(re.escape(w) for w in sorted(LEDGER_WRITE_WORDS, key=len, reverse=True))
 # ledger.py was one script until 1.1.0. Its write commands are in docs.py and workitem.py now, over ledger_core.py,
 # and who may run them goes by the file: workitem.py is the scribe's alone; docs.py is every claimed session's,
@@ -238,7 +238,7 @@ _WORDS = "|".join(re.escape(w) for w in sorted(LEDGER_WRITE_WORDS, key=len, reve
 # as before, as a write of the scribe's. Code that imports any of the four modules counts as a write.
 LEDGER_SCRIPTS = fc.LEDGER_SCRIPTS
 DOCS_SCRIPT = "docs.py"
-LEDGER_DOC_WORDS = {"upload", "attach", "revise", "status-block", "append", "relink", "ensure-node"}   # the write commands of docs.py; the rest are workitem.py's
+LEDGER_DOC_WORDS = {"upload", "attach", "revise", "status-block", "append", "relink", "ensure-node", "brief"}   # the write commands of docs.py; the rest are workitem.py's
 DOCS_FREE = False       # set while ledger_write looks for writes other than the project's docs.py running its own commands
 LEDGER_MODULES = ("ledger", "ledger_core", "docs", "workitem")
 _SCRIPT = "(?:%s)" % "|".join(re.escape(s) for s in LEDGER_SCRIPTS)

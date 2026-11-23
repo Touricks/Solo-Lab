@@ -138,7 +138,33 @@ def shown_fields(lg, name, rows):
     return sorted(out, key=lambda r: r.get("stage") != PAST_DUE)          # stable: the space's order otherwise
 
 
+def brief_lines(lg, pending=False):
+    """One line for each 简版决策 this project uploaded, the oldest first: what the researcher is asked, who wrote
+    it, since when, its link; a decided one with the first line of his answer and whether it was promoted to a
+    work item. They are read from the upload receipts (packages/sent/brief-*.json): a 简版决策 is no work item
+    and the space knows nothing of it. pending keeps the ones he has not decided."""
+    out = []
+    for rec in core.brief_receipts(lg):
+        decided = rec.get("status") == "decided"
+        if pending and decided:
+            continue
+        head = "%s  %s  %s（%s）" % ("已定" if decided else "待定", rec.get("day") or "", rec.get("heading") or rec.get("title") or "", rec.get("by") or "?")
+        if decided:
+            item = (core.find_receipt(lg, os.path.join(lg.root, rec["package"])) or {}).get("work_item_id") if rec.get("package") else None
+            up = "已升级成决策 #%s" % item if item else "要升级，决策包 %s 还没登记" % rec["package"] if rec.get("package") else \
+                "要升级，决策包还没生成" if rec.get("promote") else "不升级"
+            head += "  决定（%s）：%s  %s" % ((rec.get("decided_at") or "")[:10], rec.get("gist") or "", up)
+        else:
+            head += "  作者%s" % ("建议升级" if rec.get("suggested") else "建议不升级")
+        out.append("%s  %s" % (head, rec.get("doc")))
+    return out
+
+
 def query(lg, name, sequence=None, as_json=False):
+    if name == "briefs":                               # no work items: the 简版决策, decided or not
+        lines = brief_lines(lg)
+        print("\n".join(lines + ["共 %d 份简版决策，%d 份待定。" % (len(lines), len(brief_lines(lg, pending=True)))]))
+        return lines
     rows = []
     for mql in core.mql_text(lg, name, sequence):
         rows += core.query_all(lg, mql)
@@ -153,6 +179,9 @@ def query(lg, name, sequence=None, as_json=False):
             print("#%s  %s  %s%s" % (r.get("work_item_id"), r.get("stage") or r.get("work_item_status", ""), r.get("name", ""), extra))
         if lg.mode != "offline":
             print("共 %d 项。" % len(rows))
+        waiting = brief_lines(lg, pending=True) if name == "queue" else []
+        if waiting:                                    # 1.1.2: what waits for the researcher without being a work item
+            print("\n还没定的简版决策（不是工作项，不进决策队列；研究员来谈时列在决策清单后面）：\n" + "\n".join(waiting))
     return rows
 
 

@@ -300,7 +300,8 @@ class OrgSpec:
             if rel:
                 name = "%s关系的%s" % (self.term("rel", rel), name)
             lines.append("- %s放在%s。" % (name, p["parent"]))
-        lines += ["- 文档由写它的会话自己上传；归档时的移动由%s做。" % self.term("role", "scribe"),
+        lines += ["- " + self.render(t["brief"]) + "。",
+                  "- 文档由写它的会话自己上传；归档时的移动由%s做。" % self.term("role", "scribe"),
                   "- " + t["archive"] + "。", "- " + self.render(t["granularity"]) + "。"]
         return "\n".join(lines)
 

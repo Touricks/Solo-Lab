@@ -69,6 +69,11 @@ STALE_BUSY = datetime.timedelta(minutes=15)
 FOCUS_IDLE = datetime.timedelta(minutes=30)
 OFFLINE_LONG = datetime.timedelta(hours=24)
 INJECT_LIMIT = 9500
+# 1.1.2: a role file has two parts. What a session keeps to in every turn is injected; how a thing is done that
+# it does now and then (handing work to a +0, putting a decision to the researcher) comes under this heading and
+# is read from the file when the session is about to do it. A real pool read a skill only when its role text named
+# it for an act; a rule in the last fifth of 9000 injected characters went unread.
+ON_DEMAND = "## 做下面的事之前先读"
 CONTEXT_LIMIT = 9500
 ITEMS_SHOWN = 20
 BYPASS_MODES = ("bypassPermissions", "dontAsk")
@@ -1271,6 +1276,13 @@ def role_body(root, role):
     return text.strip()
 
 
+def role_core(body):
+    """The part of a role file's text that is injected: what comes before ON_DEMAND, all of it when the file
+    has no such heading."""
+    at = body.find("\n" + ON_DEMAND)
+    return body[:at].rstrip() if at >= 0 else body
+
+
 def describe(policy, claim):
     pol = policy["agents"].get(claim.get("role")) or {}
     return "%s（%s +%s，角色 %s，标签 %s）" % (claim.get("name"), pol.get("sequence_cn") or pol.get("sequence", ""),
@@ -1310,11 +1322,11 @@ def injection(root, policy, claim, reason="", limit=INJECT_LIMIT, owners=None, c
     if owed:
         items.append("还欠交付：" + items_text(owed, "%s（交付给 %s）", "另有 %d 条"))
     head = "%s本会话是 %s。下面的角色说明就是本会话的工作说明。" % (reason, describe(policy, claim))
-    tail = "未了事项：%s。台账和状态包是正本：开工前用 ledger.py get 读工作项，找人用 pool.py show。完整说明在 .claude/agents/%s.md。" % (
+    tail = "未了事项：%s。台账和状态包是正本：开工前用 ledger.py get 读工作项，找人用 pool.py show。完整说明在 .claude/agents/%s.md，角色说明里点了名的小节，做那件事之前到这个文件里读。" % (
         "；".join(items) or "无", role)
     if compacted:
         tail += "\n\n" + status_hint(root, held_items(sent, owed, current), entry=reads_every_task(policy, role))
-    body = role_body(root, role)
+    body = role_core(role_body(root, role))
     room = limit - len(head) - len(tail) - 4
     if len(body) > room:
         cut = "……（下文略，见 .claude/agents/%s.md）" % role

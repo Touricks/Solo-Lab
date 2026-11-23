@@ -441,7 +441,7 @@ class DecisionsFileTest(ProjectCase):
         time kept."""
         old = setup_core.render(setup_core.scaffold("org/decisions.md.tmpl"), {"deviations": setup_core.bullets(self.V105)})
         self.assertEqual(setup_core.PLUGIN_SECTIONS.get(setup_core.sha256(setup_core.squeeze(self.section(old)))), "1.0.5")
-        self.assertEqual(setup_core.PLUGIN_SECTIONS.get(setup_core.sha256(setup_core.squeeze(self.current_section()))), "1.1.0")
+        self.assertEqual(setup_core.PLUGIN_SECTIONS.get(setup_core.sha256(setup_core.squeeze(self.current_section()))), "1.1.2")
         before = self.write(self.V105)
         kind, out = self.init()
         self.assertEqual(kind, "update")
@@ -903,6 +903,7 @@ class FifthRoundTest(ProjectCase):
         _, out = self.scribe("Bash", {"command": cmd})       # must not hang on the FIFO
         self.assertEqual(out.get("permissionDecision"), "deny")           # 1.1.0: a document is written through docs.py only
         self.assertIn("交接记录用 docs.py status-block、append", out.get("permissionDecisionReason", ""))
+        self.assertIn("简版决策用 docs.py brief", out.get("permissionDecisionReason", ""))     # 1.1.2
         code, out = self.guard("alg-p1", "Bash", {"command": "python3.12 -I %s register \ud800 --apply" % self.L})
         self.assertIn(code, (0, 2))
         if code == 0:
@@ -4827,9 +4828,9 @@ class DeliveryTextTest(PoolProjectCase):
                      "在状态里提一次，写事项、选项一句话、执行方、要研究员亲手做的事（包头写了的话）和主文档链接，不超过 3 行",
                      "紧急程度为“插队”的，这一轮可以在收尾里问研究员一次",
                      "距他上一条消息 30 分钟以上，或者第一次", "之前提过的也附", "改版、截止前、每日汇总都不推",
-                     "**面向研究员的内容。** 你主动给研究员的只有两类：决策（给主文档的飞书链接，执行方和要研究员亲手做的事一并写上）、"
-                     "里程碑（研究任务走完一步、出了结论）",
-                     "路由转来的【需拍板】都是登记好的决策包，没有决策包的事不转问研究员",
+                     "**面向研究员的内容。** 你主动给研究员的有三类：决策（给主文档的飞书链接，执行方和要研究员亲手做的事一并写上）、"
+                     "要他确认的事（给简版决策的飞书链接）、里程碑（研究任务走完一步、出了结论）",
+                     "路由转来的【需拍板】是登记好的决策包，给主文档链接",       # 1.1.2: what has no package reaches him as a note, not as a ban
                      "面向研究员最多写一行状态，不提问，不标“等研究员回答”，不复述已经登记过的决策",
                      "`pool.py show` 里的研究员任务清单和补位请求跟在决策清单后面列出，它们不算决策"):
             self.assertIn(part, entry)
@@ -4925,7 +4926,7 @@ class DeliveryTextTest(PoolProjectCase):
             self.assertIn("研究员要做的事", texts[name], name)
             self.assertIn("执行方", texts[name], name)
         entry = texts["pmo-p1.md"]
-        for part in ("你主动给研究员的只有两类：决策（给主文档的飞书链接，执行方和要研究员亲手做的事一并写上）、里程碑（研究任务走完一步、出了结论）",
+        for part in ("你主动给研究员的有三类：决策（给主文档的飞书链接，执行方和要研究员亲手做的事一并写上）、要他确认的事（给简版决策的飞书链接）、里程碑（研究任务走完一步、出了结论）",
                      "再把待决定的决策和等研究员执行的决策全部附在末尾，之前提过的也附，每条一行：状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、链接",
                      "**决策的三个阶段。** 每条决策走三步：待决定、待执行（用 2.1.0 及以前的模板建的空间里叫“已决定”）、归档（已执行）。"
                      "研究员定了，照上面马上把原话交给路由，路由请书记员确认“决定”这一步，书记员会通知包头写的执行方，各会话就知道选了哪个选项",
@@ -4977,7 +4978,7 @@ class DeliveryTextTest(PoolProjectCase):
         decisions = texts["org/decisions.md"]
         self.assertIn("每条决策走三步：待决定、待执行（用 2.1.0 及以前的模板建的空间里叫“已决定”）、归档（已执行）。研究员定了，书记员就确认“决定”这一步，并通知执行方", decisions)
         self.assertIn("决策包包头“执行方”写这条决策定下以后由谁执行，“研究员”或者执行它的会话名，多半是发出方", decisions)
-        self.assertIn("入口主动给研究员的内容只有决策（给主文档的飞书链接，执行方和要研究员亲手做的事一并写上）和里程碑两类。依据：研究员 2026-11-16 定，2026-11-20 改。", decisions)
+        self.assertIn("入口主动给研究员的内容只有决策（给主文档的飞书链接，执行方和要研究员亲手做的事一并写上）、要他确认的事（给简版决策的飞书链接）和里程碑三类。依据：研究员 2026-11-16 定，2026-11-20、2026-11-23 改。", decisions)
         self.assertIn("研究员任务清单和补位请求不算决策，入口跟在决策清单后面列给研究员。依据：研究员 2026-11-20 定。", decisions)
         self.assertIn("执行方、定下以后研究员要做的事", texts["org/org.md"])        # the package table
         for part in ("- 需要接收方做的事：拍板（决策队列）／确认记录无误（研究员主动发起）\n"
@@ -5059,6 +5060,215 @@ class DeliveryTextTest(PoolProjectCase):
         self.assertIn("\n决策包的“已有的决定和结论”一节：登记了 2 份，带卡片的 1 份（共 2 张），写“无”或只有清单的 1 份。\n",
                       self.route("audit", sid="s-entry")[1])
 
+
+
+# ----------------------------------------------------------------- 1.1.2
+class BriefDecisionTest(PoolProjectCase):
+    """1.1.2: what the researcher is asked to decide or confirm reaches him with a Feishu link behind which its
+    background can be read. The entry of a real project put five such things to him in one line each, the
+    background in a local file: the rule said "nothing without a 决策包 is put to the researcher" and "three
+    lines at most", and said nothing of what needs no 决策包; the only documents a session could upload were
+    packages, each a work item. From 1.1.2 such a thing is a 简版决策: one decision, one document under the
+    knowledge-base node of that name, written from a template, no work item. His answer is written back into
+    it; one that others will follow or look up later is promoted to a work item, the rest stays a document:
+    the Feishu project is an index and keeps what is looked up. The commands are tested in test_ledger."""
+
+    BAN = "没有决策包的事不转问" + "研究员"            # split so a grep for the rule 1.1.2 took out finds none here
+
+    def agent(self, name):
+        return self.read(os.path.join(".claude", "agents", name + ".md"))
+
+    def test_the_node_is_part_of_the_skeleton(self):
+        spec = orgspec.OrgSpec()
+        keys = spec.node_keys()
+        self.assertEqual((len(keys), keys.index("brief")), (22, keys.index("decision") + 1))
+        self.assertEqual(spec.term("node", "brief"), "简版决策")
+        org = self.read("org/org.md")
+        self.assertIn("- 一级节点：研究任务、同序列需求包、跨序列需求包、决策包、简版决策、反馈包、汇报文档、归档文档。", org)
+        line = "- 要研究员挑或点头、又不用写决策包的事写成简版决策，一事一份，放在简版决策节点下，不建工作项，不进决策队列；研究员的回答写回同一份文档，定了以后升级的才登记成决策工作项。"
+        self.assertIn(line, org)
+        with open(os.path.join(ROOT, "skills", "ledger", "references", "structure.md"), encoding="utf-8") as f:
+            structure = f.read()
+        for part in ("├─ 简版决策            brief\n", "一共 22 个节点：一级 8 个，", "| 简版决策（`docs.py brief`） | “简版决策”节点下；不建工作项 | `brief` |", line):
+            self.assertIn(part, structure)
+
+    def test_every_session_reads_the_rule(self):
+        rule = ("- 要研究员定或确认的事，都给他一个读得到背景的飞书链接，对话里每件事只写一行。用来签字的，不可逆的，改范围、成功标准、冻结项或组织规则的，"
+                "定下以后要研究员亲手做的，写决策包；其余要他挑或点头的事写简版决策，一事一份，照模板写，传到知识库的简版决策节点，不建工作项，不进决策队列。"
+                "研究员的回答写回同一份文档；定了以后别的会话还要照着做、或者以后还要回头查的，升级成决策项，其余只留在文档里。")
+        for text in (self.read("CLAUDE.md"), self.read("org/org.md")):     # CLAUDE.md is what every session reads; no role text repeats it
+            self.assertIn(rule, text)
+        self.assertIn("每份都写明建议升不升级，他说了算，没说照作者的建议：升级的由脚本生成决策包、登记成已决定的决策项，飞书项目里只留以后还要查的决定。依据：研究员 2026-11-23 定。",
+                      self.read("org/decisions.md"))
+        for name in sorted(os.listdir(os.path.join(self.tmp, ".claude", "agents"))):
+            self.assertNotIn(self.BAN, self.read(os.path.join(".claude", "agents", name)), name)
+        for rel in ("skills/entry/SKILL.md", "scaffold/agents/entry.md.tmpl", "scaffold/agents/router.md.tmpl"):
+            with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
+                self.assertNotIn(self.BAN, f.read(), rel)
+
+    def test_the_entry_asks_with_a_link_and_writes_the_answer_back(self):
+        entry = self.agent("pmo-p1")
+        for part in ("**路由交来的事。** 路由只给你四种消息：", "要研究员确认的事（一句话加简版决策的链接）",
+                     "**要研究员定或确认的事。** 每件事都带一个读得到背景的飞书链接，对话里每件只写一行：没有链接的事不问他。",
+                     "转来的要他确认的事是简版决策，照转链接，写上作者建议升不升级。没带链接的请路由退回提出的 +1 补，该写决策包的事不收简版决策。",
+                     "运行 `python3.12 -I .claude/solo-lab/bin/docs.py brief <链接> --words '<他的原话>' --apply` 把原话写回文档（他说了升不升级的加 `--promote 是` 或 `--promote 否`），"
+                     "用一行告诉他这件会不会登记成决策项，再把原话照录交给路由。",
+                     "没定的简版决策，`ledger.py query queue` 列在决策队列后面，他来谈时一并列出。",
+                     "只有一句话说得清、不用背景也能答的事可以直接问，比如核对他刚说的话是哪个意思。",
+                     "把研究员的回答写回简版决策。传文档："):
+            self.assertIn(part, entry)
+        self.assertLess(entry.index("**要研究员定或确认的事。**"), entry.index("**研究任务。**"))     # it stands before the long paragraphs, right after what the router hands over
+        self.assertLess(entry.index("**路由交来的事。**"), entry.index("**要研究员定或确认的事。**"))
+        with open(os.path.join(ROOT, "skills", "entry", "SKILL.md"), encoding="utf-8") as f:
+            skill = f.read()
+        for part in ("## 要研究员定或确认的事\n", "| 其余要他挑或点头的事 | 简版决策，一事一份 | 提出的 +1 | 默认不进；他定了以后升级的才进 |",
+                     "python3.12 -I .claude/solo-lab/bin/docs.py brief <链接或草稿路径> --words '<研究员的原话>' --apply",
+                     "他说了要不要升级成决策项的，加 `--promote 是` 或 `--promote 否`；没说就不加，照作者的建议办。",
+                     "用一行告诉研究员哪几件会登记成决策项、哪几件只留在文档里", "以前定过的简版决策用 `ledger.py query briefs` 查"):
+            self.assertIn(part, skill)
+
+    def test_a_lead_writes_it_and_the_router_passes_the_link(self):
+        lead = self.agent("alg-p1")
+        self.assertIn("- 只要研究员挑一下或点个头的事不写决策包，写简版决策，一事一份：照 `.claude/solo-lab/templates/brief.md` 写，"
+                      "运行 `docs.py brief <草稿> --apply` 上传，"
+                      "再给路由 `PMO-p0-router` 发 `【通知】<你的会话名> → PMO-p0-router：要研究员确认 <一句话> <链接>`。他定了以后的写回和升级见模板。"
+                      "用来签字的，不可逆的，改范围、成功标准、冻结项或组织规则的，定下以后要他亲手做的，照旧写决策包。", lead)
+        self.assertIn("有选项要他挑的不记清单：写决策包或简版决策。", self.read("CLAUDE.md"))
+        self.assertNotIn("docs.py brief", self.agent("alg-p0"))                                        # a +0 puts it into its delivery
+        policy = json.loads(self.read(".claude/hooks/policy.json"))                                    # the leads' texts are the longest a hook injects
+        for role in ("quality-p1", "product-p1"):
+            claim = {"name": "%s-p1" % policy["agents"][role]["abbrev"], "role": role}
+            text = pool_lib.injection(self.tmp, policy, claim, "规则已更新。", compacted=True, current="2999")
+            self.assertLessEqual(len(text), pool_lib.INJECT_LIMIT - 40, role)
+        router = self.agent("pmo-router")
+        for part in ("**给入口的消息。** 只有四种：里程碑，要研究员定的事（【需拍板 #ID】），要研究员确认的事（一句话加简版决策的链接），你判断不了归属的话。",
+                     "+1 用【通知】报来要研究员确认的事、带着简版决策链接的，把那一句话、链接和作者建议升不升级原样转给入口，不改写。"
+                     "没带链接的不转：请它先写简版决策（`docs.py brief`），该写决策包的（用来签字的，不可逆的，改范围、成功标准、冻结项或组织规则的，定下以后要研究员亲手做的）请它写决策包。"
+                     "入口把研究员对简版决策的回答交给你，原话转给作者；记的是升级的，提醒它运行 `docs.py brief <草稿> --package --apply`。"):
+            self.assertIn(part, router)
+        self.assertIn("只要他点头的事 +1 写简版决策交路由，+0 写进交付包。", self.read("CLAUDE.md"))
+
+    def test_the_template_and_the_command_come_with_the_project(self):
+        template = self.read(".claude/solo-lab/templates/brief.md")
+        with open(os.path.join(ROOT, "skills", "packages", "assets", "brief.md"), encoding="utf-8") as f:
+            self.assertEqual(template, f.read())
+        block = orgspec.template_block(template)
+        for part in ("# 简版决策：<要研究员定什么，一个问句>", "## 这是什么事", "## 为什么现在要定", "## 选项和后果", "## 建议", "## 定了以后谁做",
+                     "## 要不要升级成决策项", "## 出处"):
+            self.assertIn(part, block)
+        for part in ("一份只讲一件事。", "写到研究员不翻别的材料就能回答。", "清单逐条列出，不写“那十条”“在途的四条”。",
+                     "定了以后别的会话还要照着做，或者以后还要回头查的，建议升级", "只影响眼前这一步、做完就结束的，建议不升级。",
+                     "`docs.py brief <链接或草稿> --words '<研究员的原话>' --apply`", "`docs.py brief <草稿> --package --apply`", "`ledger.py query briefs`"):
+            self.assertIn(part, template)
+        self.assertNotIn("- 关联工作项：", block)                                          # no package: no work item of its own
+        allow = json.loads(self.read(".claude/settings.json"))["permissions"]["allow"]
+        self.assertIn("Bash(python3.12 -I .claude/solo-lab/bin/docs.py brief *)", allow)
+        hooks = self.read(".claude/hooks/guard.py")                                         # who may run it: HookScopeTest
+        self.assertIn('"relink", "ensure-node", "brief"}', hooks)
+        self.assertIn("POLICY_VERSION = 10\n", hooks)
+
+    def test_the_documents_say_how_to_upgrade(self):
+        with open(os.path.join(REPO, "docs", "使用说明.md"), encoding="utf-8") as f:
+            guide = f.read()
+        line = next(x for x in guide.splitlines() if x.startswith("**升到 1.1.2。**"))
+        for part in ("请初始化会话重跑 `init --apply`", "`docs.py ensure-node brief --apply`", "已经开好的会话池不用动", "不登记成工作项", "升级成决策项"):
+            self.assertIn(part, line)
+        self.assertIn("入口主动告诉你的有三类：", guide)
+        self.assertIn("这样飞书项目里只有以后还要查的决定。", guide)
+        self.assertNotIn("没有决策包的事入口不转问你", guide)
+        with open(os.path.join(ROOT, "skills", "setup", "references", "mechanisms.md"), encoding="utf-8") as f:
+            self.assertIn("- **升到 1.1.2。**", f.read())
+        with open(os.path.join(REPO, "CHANGELOG.md"), encoding="utf-8") as f:
+            log = f.read()
+        entry = log[log.index("## 1.1.2"):log.index("## 1.1.1")]
+        for part in ("`docs.py brief <草稿>`", "`docs.py brief <链接或草稿> --words '<研究员的原话>'`", "`docs.py brief <草稿> --package`", "`ledger.py query briefs`",
+                     "“简版决策”节点", "从 21 个变成 22 个", "`POLICY_VERSION` 从 9 升到 10", "`docs.py ensure-node brief --apply`"):
+            self.assertIn(part, entry)
+        with open(os.path.join(ROOT, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["version"], "1.1.2")
+
+
+class RoleTextCoreTest(PoolProjectCase):
+    """1.1.2: a role text is injected into its session by a hook, 9500 characters at most, and the leads' texts had
+    46 characters left. Two things were cut. What a session reads elsewhere anyway is not repeated: the entry's
+    text carried the hand-over rules and what only people do word for word as CLAUDE.md has them, the router's
+    table and why the sequence exists; the scribe's carried the naming rules. And what a session needs only when
+    it does a certain thing is no longer injected: it stays in the role file under a heading, with a line in the
+    injected part that names the section. In a real pool of 12 sessions, 3 had read a skill, each time one its
+    role text named for the act at hand; the skills named after a role were read by none."""
+
+    def injected(self, role):
+        policy = json.loads(self.read(".claude/hooks/policy.json"))
+        pol = policy["agents"][role]
+        claim = {"name": pol.get("fixed_session") or "%s-p%d%s" % (pol["abbrev"], pol["rank"], "" if pol["rank"] else "-01"), "role": role}
+        return pool_lib.injection(self.tmp, policy, claim, "规则已更新。", compacted=True, current="2999")
+
+    def agent(self, name):
+        return self.read(os.path.join(".claude", "agents", name + ".md"))
+
+    def test_what_a_lead_does_now_and_then_is_read_from_its_file(self):
+        mark = pool_lib.ON_DEMAND
+        self.assertEqual(mark, "## 做下面的事之前先读")
+        for role in ("alg-p1", "rnd-p1", "quality-p1", "product-p1", "infra-p1", "liaison-p1"):
+            whole, core = self.agent(role), self.injected(role)
+            self.assertEqual(whole.count("\n" + mark + "\n"), 1, role)
+            rest = whole[whole.index(mark):]
+            self.assertIn("这一节不随角色说明注入上下文。要做下面哪件事，先读那一小节，再动手。", rest)
+            self.assertEqual(re.findall(r"^### (.+)$", rest, re.M), ["把活交给本序列的 +0", "要研究员定、挑或点头的事"], role)
+            for part in ("- 同序列的活委托给 +0，分两种，", "- 派给哪个 +0：", "- 委托下发的需求：", "- 确认方案：", "- 委托封闭任务：需求包写执行关系。",
+                         "- 验收工作项（下发的需求、跨序列需求）：", "- 上限和补位：", "- 决策包写成草稿，", "- 只要研究员挑一下或点个头的事不写决策包，写简版决策，一事一份：",
+                         "- 决策包的“已有的决定和结论”一节不手写：", "- 决策定下以后要研究员亲手做的事", "- 决策登记以后、研究员定之前要改，"):
+                self.assertIn(part, rest, (role, part))                               # nothing was dropped: it moved
+                self.assertNotIn(part, core, (role, part))
+            self.assertNotIn(mark, core, role)
+            for part in ("- 把活交给本序列的 +0：做之前读 `.claude/agents/%s.md` 的“把活交给本序列的 +0”一节，分下发和执行两种，派给谁、怎么委托、确认方案、验收、补位都在里面。" % role,
+                         "- 要研究员定、挑或点头的事：做之前读同一个文件的“要研究员定、挑或点头的事”一节，先分清写决策包、简版决策还是记研究员任务清单，上传、登记、修订的步骤都在里面。",
+                         "- 交付：写好交付包，", "- 跨序列的需求包写成草稿，", "- 进展和里程碑发给路由", "- 被其他 agent 会话叫醒的轮次，研究员多半不在，不向研究员提问",
+                         "- 你开的会话每结束一轮，应用会叫醒你一次。", "完整说明在 .claude/agents/%s.md，角色说明里点了名的小节，做那件事之前到这个文件里读。" % role):
+                self.assertIn(part, core, (role, part))                               # what holds in every turn stays in front of it
+            self.assertLessEqual(len(core), 6500, role)                              # 9454 at most before
+            self.assertNotIn("下文略", core, role)
+        todo = "- 只要研究员动一下手、没有选项要他挑的事不写决策包，记进研究员任务清单（`todo.py add`）；做法和建错的工作项怎么终止，见 CLAUDE.md 的“所有会话共同遵守的运行机制”。"
+        self.assertIn(todo, self.agent("alg-p1"))
+        self.assertIn("只要研究员动一下手、没有选项要他挑的事（恢复集群连接、下载数据、连 VPN、跑一条只有他能跑的命令这类），不写决策包：运行 `todo.py add --text", self.read("CLAUDE.md"))
+        for role in ("alg-p0", "rnd-p0", "pmo-router", "pmo-scribe"):                 # nothing of theirs is on demand
+            self.assertNotIn(mark, self.agent(role), role)
+            self.assertLessEqual(len(self.injected(role)), pool_lib.INJECT_LIMIT - 500, role)
+
+    def test_the_entry_does_not_repeat_what_every_session_reads(self):
+        whole, core, claude, org = self.agent("pmo-p1"), self.injected("pmo-p1"), self.read("CLAUDE.md"), self.read("org/org.md")
+        for head in ("## 交接规则", "## 只能由人来做的事", "| R1 |", "互联网公司常设PMO"):
+            self.assertNotIn(head, whole, head)
+        for head in ("## 交接规则", "## 人的位置", "- 去现场：访谈真实用户，拿到真实数据。"):
+            self.assertIn(head, claude, head)                                         # where they are read
+        self.assertIn("| R1 |", org)
+        self.assertIn("互联网公司常设PMO", org)
+        for part in ("前两节是组织规则，由插件 solo-lab 的规则文件生成，全文在 `org/org.md`；交接规则和只能由人来做的事在 `CLAUDE.md` 里，这里不重复；",
+                     "## 项目管理序列的重心\n\n因此项目管理序列agent的重心是：\n",
+                     "路由怎么分流，见 `org/org.md`“入口和路由”一节的路由决策表（R1 到 R7）。它告诉你这是新任务（R4）时，先问研究员要不要做、交给哪个序列，他拍板后把原话交给路由。"):
+            self.assertIn(part, core)
+        mark = pool_lib.ON_DEMAND
+        rest = whole[whole.index(mark):]
+        self.assertEqual(re.findall(r"^### (.+)$", rest, re.M), ["决策队列的细则"])
+        for part in ("改过版的，清单里事项后面写版本号。可逆的决策登记满到期时长（默认 24 小时）没定，", "清单长、要附选项和建议时，请路由 `PMO-p0-router` 汇总成表：",
+                     "先核对出处：用会话管理工具读那个会话的记录", "**决策的三个阶段。** 每条决策走三步："):
+            self.assertIn(part, rest)
+            self.assertNotIn(part, core)
+        for part in ("**决策队列。** 决策只在两个时刻推给研究员，到时 hook 会在上下文里提示你。", "不超过 3 行",
+                     "研究员在本会话里拍板后，把他的原话照录成文件交给路由，写明是哪条决策、选了哪个选项（一个都没选写“无”）。他说要他亲手做的事做完了，也把原话交给路由。",
+                     "到期怎么办、清单长了怎么汇总、话是在别的会话里说的怎么核对、定了以后的三个阶段，做之前读 `.claude/agents/pmo-p1.md` 的“决策队列的细则”一节。",
+                     "**要研究员定或确认的事。**", "**面向研究员的内容。**"):
+            self.assertIn(part, core)
+        self.assertLessEqual(len(core), 6500)                                        # 8948 before
+        scribe = self.agent("pmo-scribe")
+        self.assertIn("命名照 `CLAUDE.md` 的“命名”一节：工作项名称、主文档标题、会话名、草稿路径、日期和 meegle 命令里类型的写法都在那里。", scribe)
+        self.assertNotIn("- 工作项名称写作 `<包名>（<作者会话名>）：<任务名>`", scribe)
+        self.assertIn("- 工作项名称写作 `<包名>（<作者会话名>）：<任务名>`", claude)
+
+    def test_a_file_without_the_heading_is_injected_whole(self):
+        self.assertEqual(pool_lib.role_core("甲\n\n乙"), "甲\n\n乙")
+        self.assertEqual(pool_lib.role_core("甲\n\n%s\n\n### 丙\n丁" % pool_lib.ON_DEMAND), "甲")
+        self.assertEqual(pool_lib.role_core("一句话里提到 %s 不算" % pool_lib.ON_DEMAND), "一句话里提到 %s 不算" % pool_lib.ON_DEMAND)
 
 
 # ----------------------------------------------------------------- 1.0.6
@@ -5437,7 +5647,8 @@ class HookScopeTest(PoolProjectCase):
         D = "python3.12 -I .claude/solo-lab/bin/docs.py"
         for words in ("revise 2140 packages/drafts/infra/v2.md --note '去掉沙箱' --apply", "upload packages/drafts/alg/x.md --apply",
                       "relink 2140 --apply", "append 2140 --file note.md --apply", "status-block 2140 --file s.md --apply",
-                      "attach 2140 规格 spec/spec.md --apply"):
+                      "attach 2140 规格 spec/spec.md --apply", "brief packages/drafts/alg/20261123-简版决策-标签隔离.md --apply",       # 1.1.2: a 简版决策, its answer, its promotion
+                      "brief packages/drafts/alg/20261123-简版决策-标签隔离.md --words '先不加' --apply", "brief packages/drafts/alg/x.md --package --apply"):
             cmd = "%s %s" % (D, words)
             for sid in ("s-scribe", "s-alg2", "s-alg1", "s-alg0", "s-entry"):
                 self.assertEqual(self.bash(sid, cmd)[1].get("permissionDecision"), "allow", (sid, cmd))
@@ -5911,7 +6122,8 @@ class TextsAfterTheGatesTest(PoolProjectCase):
                      "到期按决策包写的到期默认动作办。判据下面的清单是必须写不可逆的下限，清单以外的事由作者按判据判断。",
                      "每个选项要做的不可逆的动作"):
             self.assertIn(part, org)
-        self.assertIn("- 批准不可逆的事：", texts["pmo-p1.md"])                     # the entry carries what only people do
+        self.assertIn("- 批准不可逆的事：", claude)                                 # 1.1.2: every session reads it there; the entry's text no longer repeats it
+        self.assertNotIn("- 批准不可逆的事：", texts["pmo-p1.md"])
         for part in ("hook 不拦清单里的命令，也不按待定决策冻结：命令的权限照会话自己的权限检查，这几条规矩靠各会话照规则办和包检查。",
                      "一件事可逆不可逆由决策包的作者按判据判断，清单是必须写不可逆的下限。",
                      "待定的决策记在本地决策状态 `.claude/state/gates.json`，由台账脚本维护。",
@@ -6040,7 +6252,7 @@ class TextsAfterTheGatesTest(PoolProjectCase):
                      "选项表的“要放行的不可逆动作”一列改名“不可逆的动作”", "包头“执行方”写了 +1、+0 或书记员的，改写负责这件事的 +2",
                      "升级前回滚过、还在待决定的也算", "先读所属研究任务的状态包（`ledger.py status <研究任务 ID>`）"):
             self.assertIn(part, note)
-        self.assertEqual(setup_core.POLICY_VERSION, 9)                    # 7 from 1.0.6 on; 8, then 9, with 1.1.0: by the file, and no middle rank
+        self.assertEqual(setup_core.POLICY_VERSION, 10)                   # 7 from 1.0.6 on; 8, then 9, with 1.1.0: by the file, and no middle rank; 10 with 1.1.2: docs.py brief
         guide = next(x for x in texts["docs/使用说明.md"].splitlines() if x.startswith("**升到 1.0.6。**"))
         for part in ("这一版去掉了 1.0.4 加的三层命令拦截", "请初始化会话重跑 `init --apply`", "请你退出并重开一次桌面应用",
                      "升级以后不用登记放行", "选项表的“要放行的不可逆动作”一列改名“不可逆的动作”",

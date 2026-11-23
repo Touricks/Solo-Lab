@@ -436,7 +436,7 @@ POOL_ALLOW = ["Bash(python3.12 -I .claude/solo-lab/bin/onboarding.py *)"] + [
                                          "route.py audit", "route.py cross", "notify.py send", "notify.py focus")]
 SCRIBE_ALLOW = ["Bash(python3.12 -I .claude/solo-lab/bin/%s.py %s *)" % (script, w) for script, words in (
     ("workitem", ("register", "reply", "confirm", "rollback", "update", "comment", "archive")),
-    ("docs", ("upload", "attach", "revise", "status-block", "append", "relink", "ensure-node"))) for w in words]
+    ("docs", ("upload", "attach", "revise", "status-block", "append", "relink", "ensure-node", "brief"))) for w in words]
 POOL_HOOK_EVENTS = ("Stop", "StopFailure", "Notification", "PermissionRequest", "PermissionDenied", "PostCompact")
 # The desktop app's terminal panel tool runs shell commands outside the Bash tool. A matcher with
 # regex characters is an unanchored regex, so it gets its own anchored group.
@@ -659,6 +659,7 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
                    "接受委托时，委托消息里“会话名：”那一行给的 `%s` 只写进包里；任务编号是“上级工作项 ID-序号”，比如 2101-3。" % (pol["abbrev"], pol["session_pattern"]))
     else:
         session = "会话池里你是一个桌面会话，会话名是 `%s`，本序列只有你一个 +1；认领后不变，消息抬头用它。" % pol["session_pattern"]
+    delegate, decide = [], []      # the lead's on-demand part (pool.ON_DEMAND): read from the file, not injected
     lines = [
         "- 会话名：%s会话标签是 `%s`。" % (session, pol["tag"]),
         "- 开工或接手：先读交给你的包；再用 `python3.12 -I .claude/solo-lab/bin/ledger.py get <工作项 ID 或任务编号>` 读它，读主文档的“状态包”接上进度。不靠对话记状态。",
@@ -693,32 +694,33 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
     if rank == LEAD:
         # 1.1.0: a sequence has no middle rank. What needs judgement on the way goes to a +0 as a 下发 request: the +0 hands in
         # a plan first and the +1 confirms it (the first step of a 同序列需求). A closed task goes out as before.
-        lines.append("- 同序列的活委托给 +0，分两种，看一件事做到一半还需不需要新的信息或新的判断。需要的（要设计、要开跑一个批次并盯着、要合并和解冲突这类）写下发关系："
+        lines.append("- 把活交给本序列的 +0：做之前读 `.claude/agents/%s.md` 的“%s”一节，分下发和执行两种，派给谁、怎么委托、确认方案、验收、补位都在里面。" % (name, DELEGATE))
+        delegate.append("- 同序列的活委托给 +0，分两种，看一件事做到一半还需不需要新的信息或新的判断。需要的（要设计、要开跑一个批次并盯着、要合并和解冲突这类）写下发关系："
                      "建工作项，承接的 +0 先交方案，你确认了它才动手，之后它在方案的范围内自己判断。不需要的是封闭任务，写执行关系：方法和验收标准一起写明，不建工作项。"
                      "补 +0 之前先看：%s。" % overlap)
         # 1.1.1: which +0 takes it. The +1 reads the pool table itself: no session relays what the +0s are doing.
-        lines.append("- 派给哪个 +0：先运行 `python3.12 -I .claude/solo-lab/bin/pool.py show --role %s`，它列出本序列每个 +0 是空闲还是在忙、手上负责哪些活。"
+        delegate.append("- 派给哪个 +0：先运行 `python3.12 -I .claude/solo-lab/bin/pool.py show --role %s`，它列出本序列每个 +0 是空闲还是在忙、手上负责哪些活。"
                      "有空闲的，交给它。都在忙，新活和在途的活不碰同一批文件的，补位新开一个（见下面“上限和补位”）。"
                      "新活接着某个 +0 手上的事，或者和它碰同一批文件的，排给那个 +0，等它交付了再委托，不新开。" % zero)
-        lines.append("- 委托下发的需求：写好需求包，运行 `%sdocs.py upload <草稿路径> --apply` 自己上传，再给 `%s` 发【%s】（写草稿路径）。"
+        delegate.append("- 委托下发的需求：写好需求包，运行 `%sdocs.py upload <草稿路径> --apply` 自己上传，再给 `%s` 发【%s】（写草稿路径）。"
                      "拿到【%s #ID】后先运行 `docs.py relink <ID> --apply` 把工作项 ID 写进文档，再跑 `python3.12 -I .claude/solo-lab/bin/pool.py show --role %s` 找空闲的 +0，"
                      "发 `%s：<包名> <包路径>`。没有空闲的，工作项留在“%s”排队，等有会话空出来再委托。" % (
                          BIN, scribe, reg, receipt, zero, msg_head(spec, "assign", receiver="<+0 的池位名>"), spec.term("state", "queued")))
-        lines.append("- 确认方案：承接的 +0 用【%s #ID】把方案交给你。对照需求包的目标和验收标准看三件事：照这个做法能不能达到验收标准，拆出去的子任务是不是封闭任务，资源够不够。"
+        delegate.append("- 确认方案：承接的 +0 用【%s #ID】把方案交给你。对照需求包的目标和验收标准看三件事：照这个做法能不能达到验收标准，拆出去的子任务是不是封闭任务，资源够不够。"
                      "本序列的方案是%s。可以：给 `%s` 发【%s】，写“确认节点：#<ID>，由 <你的会话名> 提出，必填项：方案=@<方案文件>”，拿到【%s】后给那个 +0 发【%s #ID】让它动手。"
                      "要改：用【%s #ID】告诉它改什么，不确认节点。方案确认以后，要改目标、改验收标准、超出资源上限或者超出方案的事，它会停下来找你："
                      "你同意的，它交方案的下一版，你请书记员把“方案”字段换成新的（动作“改字段”，写 方案=@<新的方案文件>）。" % (
                          notice, plan, scribe, reg, receipt, resume, resume))
-        lines.append("- 委托封闭任务：需求包写执行关系。" + to_p0 % (
+        delegate.append("- 委托封闭任务：需求包写执行关系。" + to_p0 % (
             BIN, "这件活所属的工作项 ID：研究任务、跨序列需求或下发的需求", zero, msg_head(spec, "assign", item="<编号>", receiver="<+0 的池位名>"), pol["abbrev"],
             spec.term("msg", "report"), resume))
         if seq in (task.get("pool") or {}).get("later", []):
             lines.append("- 本序列开池时只有你一个会话：活自己做。有封闭任务（查文献、跑一段分析、独立复核这类），或者有可以先交方案再做的问题时补 +0。")
-        lines.append("- 验收工作项（下发的需求、跨序列需求）：收到【%s】后，对照需求包的验收标准看交付包，`ledger.py get <需求 ID>` 的“交付包”字段是它的链接。通过：给 `%s` 发【%s】，动作“确认节点”和“归档”，"
+        delegate.append("- 验收工作项（下发的需求、跨序列需求）：收到【%s】后，对照需求包的验收标准看交付包，`ledger.py get <需求 ID>` 的“交付包”字段是它的链接。通过：给 `%s` 发【%s】，动作“确认节点”和“归档”，"
                      "写“确认节点：#<需求 ID>，由 <你的会话名> 提出”。不通过：动作“回滚节点”，写“回滚节点：#<需求 ID> 退回到 执行，原因：<一句话>”，"
                      "拿到【%s】后给承接方发【%s】说明要改什么。你发起的跨序列需求，承接方 +1 直接给你发【%s】，验收的做法一样，要改什么也直接告诉它。" % (
                          spec.term("msg", "report"), scribe, reg, receipt, resume, spec.term("msg", "report")))
-        lines.append("- 上限和补位：本序列的 +0 最多 %d 个会话，由你开，侧栏里嵌在你下面。没有空闲会话就排队。"
+        delegate.append("- 上限和补位：本序列的 +0 最多 %d 个会话，由你开，侧栏里嵌在你下面。没有空闲会话就排队。"
                      "开局那句话点了名的，认领那一轮就开；此后研究员在你的会话里明确说“补位”或“再开一个 …”时照表开"
                      "（开法照 `pool.py claim` 输出里的表，开好马上 `pool.py expect` 预登记）。人手不够时运行 `pool.py refill %s` 记一条补位请求，"
                      "同一轮为表里“补位用”的那一行提一张启动卡（先 `pool.py expect … --card`，再 start_session，initiation 写 own_initiative），"
@@ -744,10 +746,17 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
                      "用【%s #ID】把工作项 ID 回给你；你运行 `docs.py relink <ID> --apply`，再直接给承接方 +1 发 `%s：<包名> <包路径>`。它说和进行中的工作重复、或者碰到冻结项的，照它说的先处理，不发委托。" % (
                          BIN, router, msg_head(spec, "notice", item=None, receiver=router), spec.term("msg", "notice"),
                          msg_head(spec, "assign", receiver="<承接方 +1 的会话名>")))
-        lines.append("- 决策包写成草稿，运行 `%sdocs.py upload <草稿路径> --apply` 自己上传，给 `%s` 发【%s】登记；拿到【%s #ID】后运行 `docs.py relink <ID> --apply`，"
+        lines.append("- 要研究员定、挑或点头的事：做之前读同一个文件的“%s”一节，先分清写决策包、简版决策还是记研究员任务清单，上传、登记、修订的步骤都在里面。" % DECIDE)
+        decide.append("- 决策包写成草稿，运行 `%sdocs.py upload <草稿路径> --apply` 自己上传，给 `%s` 发【%s】登记；拿到【%s #ID】后运行 `docs.py relink <ID> --apply`，"
                      "再给路由 `%s` 发 `%s：<事项一句话> <主文档链接>`。路由转告入口，入口讲给研究员；你不直接找入口。" % (
                          BIN, scribe, reg, receipt, router, msg_head(spec, "decide", receiver=router)))
-        lines.append("- 决策包的“已有的决定和结论”一节不手写：先运行 `%sledger.py settled`（加 `--task`、`--sequence` 或 `--keyword` 定范围）看清单，"
+        # 1.1.2: what the researcher only has to nod to goes to him as a 简版决策 with its background, not as one line
+        # in the entry's chat; it becomes a work item only when it is promoted after he decided.
+        decide.append("- 只要研究员挑一下或点个头的事不写决策包，写简版决策，一事一份：照 `.claude/solo-lab/templates/brief.md` 写，运行 `docs.py brief <草稿> --apply` 上传，"
+                     "再给路由 `%s` 发 `%s：要研究员确认 <一句话> <链接>`。他定了以后的写回和升级见模板。"
+                     "用来签字的，不可逆的，改范围、成功标准、冻结项或组织规则的，定下以后要他亲手做的，照旧写决策包。" % (
+                         router, msg_head(spec, "notice", item=None, receiver=router)))
+        decide.append("- 决策包的“已有的决定和结论”一节不手写：先运行 `%sledger.py settled`（加 `--task`、`--sequence` 或 `--keyword` 定范围）看清单，"
                      "挑出和这次要定的事直接有关的，最多 5 条，再运行 `%sledger.py settled <同样的范围> --cards <ID,ID> --into <草稿路径>`，"
                      "脚本把范围、清单和卡片写进草稿。以前的决定对这次有什么影响，写在“建议”里，只引有卡片的；这条决策定下以后不再算数的旧决策，写在包头“取代的决策”。" % (BIN, BIN))
         lines.append("- 进展和里程碑发给路由 `%s`，不发入口：研究任务走完一步、跨序列需求验收、出现要研究员动手的事、工作项过了截止时间，用【%s #ID】告诉它，它改状态包、转告入口。"
@@ -773,7 +782,9 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
         lines += [
             "- 研究员会直接点开你的会话交代事情。这时先运行 `python3.12 -I .claude/solo-lab/bin/notify.py focus open --topic '<一句话>'`，用 `notify.py send %s --text '…'` 告诉路由；做完或研究员说“结束”时运行 `notify.py focus close`。谈定的事写成决策包（渠道：研究员主动发起），照决策包的做法上传、登记，再交路由。没写进台账的决定不算数。" % router,
             "- 被其他 agent 会话叫醒的轮次，研究员多半不在，不向研究员提问：要研究员拍板的事写决策包，登记后给路由发【%s】；+0 要拍板的事写进交付包。收尾里的提问 hook 会去掉。" % spec.term("msg", "decide"),
-            "- 只要研究员动一下手、没有选项要他挑的事（恢复集群连接、下载数据、连 VPN、跑一条只有他能跑的命令这类），不写决策包：运行 `todo.py add --text '<要他做什么>' --for <工作项 ID> --done-when '<做完怎么算数>'` 记进研究员任务清单，入口向研究员列出；他做完了，或者你自己核对到了结果，运行 `todo.py done <编号>`。建错的、不做了的工作项归档不了，也不去推它的节点：运行 `todo.py add --for <工作项 ID> --terminate --text '<为什么不要它了>'`，由研究员在网页上终止。有两个以上的选项要他挑，或者做了以后不好撤回的，是决策，照旧写决策包。",
+        ]
+        decide += [
+            "- 只要研究员动一下手、没有选项要他挑的事不写决策包，记进研究员任务清单（`todo.py add`）；做法和建错的工作项怎么终止，见 CLAUDE.md 的“所有会话共同遵守的运行机制”。",
             "- 决策定下以后要研究员亲手做的事（整理数据、挂 API、维护沙箱、开 Docker、调设置这类），写在决策包包头“研究员要做的事”。"
             "每份决策包都有这一行，没有要研究员亲手做的写“无”。"
             "包头还有“执行方”一行，写这条决策定下以后由谁执行：“研究员”，或者执行它的会话名，多半是你自己。"
@@ -789,13 +800,23 @@ def agent_mechanics(spec, seq, rank, name, pol, task, policy):
             "上面两条规矩不变，靠你照规则办、每轮的冻结提示和包检查。一件事可逆不可逆，你按判据判断，清单是必须写不可逆的下限。"
             "可逆的决策登记满到期时长（`org/decisions.md`，默认 24 小时）"
             "还没定，书记员按包头的到期默认动作记成决定，执行方照它办；不可逆的、要研究员亲手做事的、定过一次又回滚到待决定的一直等研究员。",
+        ]
+        lines += [
             "- 你有项目级记忆（`.claude/agent-memory/%s/`），开工前读一下。只记跨阶段要沿用的标准和判断；任务的当前状态以台账和状态包为准。" % name,
         ]
     else:
         lines.append("- 研究员也可能直接点开你的会话。照做，开工时用 `notify.py send <委托你的会话名> --text '…'` 告诉它。"
                      "被其他 agent 会话叫醒的轮次不向研究员提问，要拍板的事写进交付包；收尾里的提问 hook 会去掉。")
     lines += sequence_lines(seq)
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    if delegate or decide:
+        text += "\n\n%s\n\n%s\n\n### %s\n\n%s\n\n### %s\n\n%s" % (
+            pool_state.ON_DEMAND, ON_DEMAND_NOTE, DELEGATE, "\n".join(delegate), DECIDE, "\n".join(decide))
+    return text
+
+
+DELEGATE, DECIDE = "把活交给本序列的 +0", "要研究员定、挑或点头的事"
+ON_DEMAND_NOTE = "这一节不随角色说明注入上下文。要做下面哪件事，先读那一小节，再动手。"
 
 
 def agent_file(spec, seq, rank, task, policy):
@@ -819,6 +840,13 @@ def agent_file(spec, seq, rank, task, policy):
     return render(scaffold("agents/agent.md.tmpl"), values)
 
 
+def core_intro(intro):
+    """What a role's text keeps of its sequence's 重心: from the line that names it (……的重心是：) on. Why the
+    sequence exists is in org/org.md; a session does not need it in every turn (1.1.2)."""
+    m = re.search(r"^[^\n]*重心是：$", intro, re.M)
+    return intro[m.start():] if m else intro
+
+
 POOL_DESC = "不要用 Agent 工具派这个角色，给它的会话发消息。"
 CROSS_RECORD = "packages/drafts/pmo/跨序列协调记录.md"     # the router keeps it; route.py cross names it too
 
@@ -835,7 +863,8 @@ def entry_values(spec, policy):
         "entry_preface": "先写清工作方式：用中文回答，先给结论；先读再改，做完核对结果；研究员在场就问，不在场就写进决策队列，不猜参数、不编结果。你会运行很久，上下文一定会被压缩，所以不靠对话记状态：每次都从台账、状态包和 `python3.12 -I .claude/solo-lab/bin/pool.py show` 读。",
         "to_router_head": msg_head(spec, "notice", item=None, sender=me, receiver=router),
         "decide": spec.term("msg", "decide"),
-        "entry_queue": "清单长、要附选项和建议时，请路由 `%s` 汇总成表：每件写状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、选项、建议，改过版的在事项后面写版本号；已经到期、继续等研究员的排最前，其次是“插队”的。研究员在本会话里" % router,
+        "entry_queue": "清单长、要附选项和建议时，请路由 `%s` 汇总成表：每件写状态、事项、紧急程度、回复期限、执行方、要研究员亲手做的事、选项、建议，改过版的在事项后面写版本号；已经到期、继续等研究员的排最前，其次是“插队”的。" % router,
+        "on_demand": pool_state.ON_DEMAND, "on_demand_note": ON_DEMAND_NOTE,
         "entry_focus": (
             "**研究员直接交代。** 当前这一步由谁负责，照上面“研究任务”一段查；两个流程的对照在 `org/phases.md`。\n\n%s\n\n"
             "这时那个会话会自己运行 `notify.py focus open`，并告诉路由；`pool.py show` 显示它“研究员在用”。"
@@ -878,8 +907,7 @@ def pmo_file(spec, name, task, policy):
         desc = "项目管理 +1（入口）。研究员平时对话的会话：只和研究员对话，把他的话照录交给路由，读状态包、决策队列和台账回答他，把决策和里程碑讲给他。"
         common.update({
             "description_json": yaml_str(prefix + desc),
-            "seq_intro": s["intro"], "handoff_rules": spec.handoff_rules(), "signoff": spec.signoff_items(),
-            "routing_table": spec.routing_table(),
+            "seq_intro": core_intro(s["intro"]),
             "writes": describe_writes(pol),
         })
         common.update(entry_values(spec, policy))
@@ -887,7 +915,7 @@ def pmo_file(spec, name, task, policy):
     if name == ROUTER:
         me, notice, reg, receipt = pol["fixed_session"], spec.term("msg", "notice"), spec.term("msg", "register_request"), spec.term("msg", "register_receipt")
         router_scribe = "**交给书记员。** 要登记、确认、回滚或归档时，给 `%s` 发【%s】，等它回【%s】。格式：\n\n%s" % (scribe, reg, receipt, REGISTER_FORM)
-        router_report = ("**给入口的消息。** 只有三种：里程碑，要研究员定的事（【%s #ID】），你判断不了归属的话。正文长的写进 `packages/drafts/pmo/`，消息里只给路径和三行摘要。"
+        router_report = ("**给入口的消息。** 只有四种：里程碑，要研究员定的事（【%s #ID】），要研究员确认的事（一句话加简版决策的链接），你判断不了归属的话。正文长的写进 `packages/drafts/pmo/`，消息里只给路径和三行摘要。"
                          "你不开会话：书记员和你一样由入口开出，+0 之间不分上下级。" % spec.term("msg", "decide"))
         router_status = ("**状态包由你维护。** 研究任务主文档末尾的“状态包”记这条任务现在的状态：上游卡在哪条决策、哪些实验条件已经定死、哪些工作暂停了；各会话压缩上下文以后先读它，入口用它回答研究员。"
                          "工作项状态变化、研究员定下新决策、暂停或恢复某类工作时，你改写它：先 `ledger.py status <研究任务 ID>` 读现在的，把整段（简介、当前状态、近期变化、风险）改好存成 `packages/drafts/pmo/` 下的文件，"
@@ -1006,9 +1034,9 @@ def pool_sections(spec, policy):
             "本项目的会话池就是研究员认可的派发方式：委托消息发给池里的会话，不改用后台子智能体。",
             "改了共享文件不群发通知，别人看台账里的“负责会话”。",
             "被其他 agent 会话叫醒的轮次，研究员多半不在，不向研究员提问。这类轮次有三种：其他会话发来的消息、本会话开出的会话结束一轮的回报、开会话时上级写的首轮。"
-            "这时面向研究员最多写一行状态，不标“等研究员回答”，不复述已经登记过的决策；要研究员拍板的事，+1 写成决策包，登记后给路由发【%s】，+0 写进交付包。"
+            "这时面向研究员最多写一行状态，不标“等研究员回答”，不复述已经登记过的决策；要研究员拍板的事，+1 写成决策包，登记后给路由发【%s】，只要他点头的事 +1 写简版决策交路由，+0 写进交付包。"
             "hook 会去掉收尾里的提问、拒绝 AskUserQuestion；唯一的例外是路由把一条插队的决策转告入口的那一轮，入口可以在收尾里问研究员一次。" % decide,
-            "只要研究员动一下手、没有选项要他挑的事（恢复集群连接、下载数据、连 VPN、跑一条只有他能跑的命令这类），不写决策包：运行 `todo.py add --text '<要他做什么>' --for <工作项 ID> --done-when '<做完怎么算数>'` 记进研究员任务清单，入口向研究员列出；他做完了，或者你自己核对到了结果，运行 `todo.py done <编号>`。建错的、不做了的工作项归档不了，也不去推它的节点：运行 `todo.py add --for <工作项 ID> --terminate --text '<为什么不要它了>'`，由研究员在网页上终止。有两个以上的选项要他挑，或者做了以后不好撤回的，是决策，照旧写决策包。"
+            "只要研究员动一下手、没有选项要他挑的事（恢复集群连接、下载数据、连 VPN、跑一条只有他能跑的命令这类），不写决策包：运行 `todo.py add --text '<要他做什么>' --for <工作项 ID> --done-when '<做完怎么算数>'` 记进研究员任务清单，入口向研究员列出；他做完了，或者你自己核对到了结果，运行 `todo.py done <编号>`。建错的、不做了的工作项归档不了，也不去推它的节点：运行 `todo.py add --for <工作项 ID> --terminate --text '<为什么不要它了>'`，由研究员在网页上终止。有选项要他挑的不记清单：写决策包或简版决策。"
             "有选项要研究员挑、定下以后又要他亲手做的事（整理数据、挂 API、维护沙箱、开 Docker、调设置这类）是决策：卡住的那个序列 +1 写决策包，上传、登记后交路由 `%s`，"
             "包头“执行方”写“研究员”，“研究员要做的事”写明要他做什么；卡住的工作项照旧记阻塞，阻塞原因写“等研究员：决策 #<ID>”。"
             "每份决策包都有“执行方”和“研究员要做的事”这两行：执行方写“研究员”，或者执行这条决策的会话名，多半是发出方；"
@@ -1362,7 +1390,8 @@ PLUGIN_SECTIONS = {
     "c80f58059cf5cb10a43cc52da992aeb7b420f68618042de373c679496a383233": "1.0.10",
     "27f611c7282725b164819e37100fac25b86d8252a113c36b8a0a7fda75df2cc1": "1.0.11",
     "477a750ca960f939523f71466a9bd67391ecb9ae4f0afeeae5d691676d5fd753": "1.0.12",
-    "96f90c7115793754cd199474d98663c523282cf3e99af0830c5f3cf6d06c624c": "1.1.0",
+    "96f90c7115793754cd199474d98663c523282cf3e99af0830c5f3cf6d06c624c": "1.1.0 至 1.1.1",
+    "01170a9e6b1cd5fe3a6cbc425d143d27f966bb89259bf9bfe39faaaa625b8532": "1.1.2",
 }
 
 
@@ -1593,7 +1622,7 @@ def pair_problem(target):
             "在 Claude 以外的终端里合并 .claude/hooks/policy.json.new，再重跑 init" % (gv, pv))
 
 
-POLICY_VERSION = 9
+POLICY_VERSION = 10
 
 
 def disk_policy_version(target):

@@ -55,9 +55,9 @@ class InitializationTest(unittest.TestCase):
             with mock.patch.object(lg, "lark", side_effect=lark), contextlib.redirect_stdout(io.StringIO()):
                 docs.ensure_all_nodes(lg)
                 docs.ensure_all_nodes(lg)
-            self.assertEqual(len(created), 21)                         # 7 top-level nodes, 7 sequences under two of them
+            self.assertEqual(len(created), 22)                         # 8 top-level nodes (简版决策 from 1.1.2), 7 sequences under two of them
             self.assertEqual(sum(c[1] == "+node-list" for c in calls), 3)
-            self.assertEqual(len(json.loads(path.read_text())["wiki"]["nodes"]), 21)
+            self.assertEqual(len(json.loads(path.read_text())["wiki"]["nodes"]), 22)
             self.assertFalse(hasattr(lg, "_node_listing_cache"))
 
 

@@ -44,6 +44,7 @@
     "same_seq": "同序列需求包",
     "cross_request": "跨序列需求包",
     "decision": "决策包",
+    "brief": "简版决策",
     "feedback": "反馈包",
     "report": "汇报文档",
     "archive": "归档文档"
