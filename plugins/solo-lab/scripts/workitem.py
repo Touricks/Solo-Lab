@@ -135,14 +135,14 @@ def changed_executor(lg, value, item_id):
     return who
 
 
-def settle(lg, item_id, choice, by_default=None, executor=None):
+def settle(lg, item_id, choice, by_default=None, executor=None, it=None):
     """After 决定 is confirmed: the decision leaves the pending decisions, and its receipt keeps how it was
     decided: the option picked (when --option named one, or 到期默认 took the default), who decided (研究员 or
     到期默认) and when. executor (--executor) becomes the receipt's executor, with researcher_action null;
     as_packaged keeps what the package header said, for a rollback to 待决定 to put back."""
     if lg.mode != "apply":
         return
-    core.save_gates(lg, lambda gates: gates["pending"].pop(str(item_id), None), keep=item_id)
+    core.save_gates(lg, lambda gates: core.leave_pending(lg, gates, item_id, it), keep=item_id)
     values = {"option": (choice or {}).get("name"), "decided_by": BY_DEFAULT if by_default else core.RESEARCHER, "decided_at": core.now()}
     rec = core.receipt_of(lg, item_id)
     if executor and executor != rec.get("executor"):
@@ -191,12 +191,14 @@ def mark_superseded(lg, item_id, undo=False):
                 old, core.DECIDED_TEXT, "去掉" if undo else "记上", item_id, str(e)[:160], old, "去掉" if undo else "补上"))
 
 
-def drop_pending(lg, item_id):
-    """Take a decision out of the pending decisions (archived, terminated); True when it was there."""
+def drop_pending(lg, item_id, it=None):
+    """Take a decision out of the pending decisions (archived, terminated); True when it was there and its freeze
+    ended: a signature returned on the web page keeps it (core.leave_pending says so)."""
     if lg.mode != "apply" or str(item_id) not in core.load_gates(lg.root)["pending"]:
         return False
-    core.save_gates(lg, lambda gates: gates["pending"].pop(str(item_id), None), keep=item_id)
-    return True
+    kept = []
+    core.save_gates(lg, lambda gates: kept.append(core.leave_pending(lg, gates, item_id, it)), keep=item_id)
+    return not kept[0]
 
 
 def drop_owner(lg, item_id):
@@ -939,14 +941,15 @@ def confirm_step(lg, item_id, by=None, pairs=None, node=None, decision=None, wid
         done = next(n for n in after if n["key"] == cur["key"])
         if done["status"] != "finished":
             raise core.LedgerError("确认后回读，“%s”还是%s" % (cur["name"], NODE_STATUS.get(done["status"], done["status"])))
-        state = (lg.item(item_id) or {}).get("state")
+        it_after = lg.item(item_id) or {}
+        state = it_after.get("state")
         doing = [n for n in after if n["status"] == "doing"]
         print("确认：#%s “%s”完成，现在到“%s”，状态“%s”。" % (
             item_id, cur["name"], "、".join(n["name"] for n in doing) or "流程末尾", state))
         for n in doing:                                    # the scribe tells whoever the next step belongs to
             print("“%s”这一步的负责方：%s。" % (n["name"], core.responsible(lg, wid, it, n)[0]))
         if deciding:
-            settle(lg, item_id, choice, by_default and by_default[0], who)
+            settle(lg, item_id, choice, by_default and by_default[0], who, it_after)
             mark_superseded(lg, item_id)
             if by_default:
                 print("到期默认：照选项“%s”办，执行完请书记员归档。" % choice["name"])
@@ -958,6 +961,8 @@ def confirm_step(lg, item_id, by=None, pairs=None, node=None, decision=None, wid
                 except core.LedgerError as e:
                     print("%s。%s评论没写上（%s），用 workitem.py comment %s --text '%s' 补。" % (
                         note, "已记进%s；" % kept if kept else "", str(e)[:160], item_id, note))
+        if core.sign_slots(lg, wid, cur):              # the step is signed: holds of its returned signing decisions end
+            core.release_returned(lg, item_id)
         if wid == "decision" and state == lg.state(wid, "decided"):   # and the decision's 执行方 what was decided
             carried = who or core.carried_out_by(core.receipt_of(lg, item_id), lg.text_of(it, "sender"))
             if carried:
@@ -1049,6 +1054,7 @@ def reopen(lg, item_id):
     queued = bool(rec.get("queue")) and rec.get("options") is not None
     if queued:
         def change(gates):
+            gates["returned"].pop(str(item_id), None)
             old = gates["pending"].get(str(item_id)) or {}
             gates["pending"][str(item_id)] = core.pending_entry(
                 item_id, dict(rec, **values), old.get("registered_at") or rec.get("registered_at") or stamp, stamp)
@@ -1110,12 +1116,12 @@ def archive(lg, item_id, moved=False):
             raise core.LedgerError("认不出 #%s 的类型（type_key %s）；先跑 space.py feishu --live --apply 重读类型" % (item_id, it.get("type_key")))
         archived = lg.state(wid, lg.contract.flow["archive_node"]["state"])
         if wid == "decision" and it["state"] in core.system_states(lg.spec):     # terminated on the web page
-            gone = drop_pending(lg, item_id)
+            gone = drop_pending(lg, item_id, it)
             print("#%s 是“%s”，不用归档。%s%s" % (item_id, it["state"], "本地决策状态里移除了它：冻结解除。" if gone else "",
                                               owner_note(lg, item_id)))
             return
         if it["state"] == archived:
-            if wid == "decision" and drop_pending(lg, item_id):
+            if wid == "decision" and drop_pending(lg, item_id, it):
                 print("本地决策状态里移除了 #%s：冻结解除。" % item_id)
             print("#%s 已经是“%s”，不用再归档。%s" % (item_id, archived, owner_note(lg, item_id)))
             return
@@ -1156,7 +1162,7 @@ def archive(lg, item_id, moved=False):
         print("归档：#%s 的最后一步已确认（主文档此前已移到 %s 下）。" % (item_id, key))
     else:
         print("归档：#%s 的主文档整棵子树移到 %s 下（移动的是原节点，文档链接不变），最后一步已确认。" % (item_id, key))
-    if wid == "decision" and drop_pending(lg, item_id):
+    if wid == "decision" and drop_pending(lg, item_id, it):
         print("本地决策状态里移除了 #%s：冻结解除。" % item_id)
     note = owner_note(lg, item_id)
     if note:

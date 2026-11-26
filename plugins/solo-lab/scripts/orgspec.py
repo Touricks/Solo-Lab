@@ -800,7 +800,9 @@ def read_options(spec, section):
     its table, or None when the section has no table (研究员主动发起 may write 无)."""
     table = first_table(section)
     if table is None:
-        return None, []
+        if empty_text(section) or SAYS_NOTHING.match(section.strip()):
+            return None, []
+        return None, ["“%s”写成选项表，不写列表或一段话：表头照模板，第一列是选项名，书记员确认时照它记 --option；只有研究员主动发起、谈话里没比较过做法的才写“%s”" % (OPTIONS, NOTHING)]
     head, rows = table
     if IRREVERSIBLE_COLUMN not in head:
         if FORMER_COLUMN in head:

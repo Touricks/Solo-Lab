@@ -409,7 +409,7 @@ POOL_ALLOW = ["Bash(python3.12 -I .claude/solo-lab/bin/onboarding.py *)"] + [
                                          "route.py audit", "route.py cross", "notify.py send", "notify.py focus")]
 SCRIBE_ALLOW = ["Bash(python3.12 -I .claude/solo-lab/bin/%s.py %s *)" % (script, w) for script, words in (
     ("workitem", ("register", "reply", "confirm", "rollback", "update", "comment", "archive")),
-    ("docs", ("upload", "attach", "revise", "status-block", "append", "relink", "ensure-node", "brief"))) for w in words]
+    ("docs", ("upload", "accept", "attach", "revise", "status-block", "append", "relink", "ensure-node", "brief"))) for w in words]
 POOL_HOOK_EVENTS = ("Stop", "StopFailure", "Notification", "PermissionRequest", "PermissionDenied", "PostCompact")
 # The desktop app's terminal panel tool runs shell commands outside the Bash tool. A matcher with
 # regex characters is an unanchored regex, so it gets its own anchored group.
@@ -1347,7 +1347,7 @@ PLUGIN_SECTION = "## 插件定下的几处安排"
 # Only the versions projects still run are kept: no backward compatibility (the researcher, 2026-11-23).
 PLUGIN_SECTIONS = {
     "01170a9e6b1cd5fe3a6cbc425d143d27f966bb89259bf9bfe39faaaa625b8532": "1.1.2 至 1.1.3",
-    "ca19a785bde1d22d7fc124d57fd27747f7e7b01c43f7befc76fe4a34c0bff946": "1.1.4",
+    "ca19a785bde1d22d7fc124d57fd27747f7e7b01c43f7befc76fe4a34c0bff946": "1.1.4 至 1.1.5",
 }
 
 
@@ -1562,7 +1562,7 @@ def pair_problem(target):
             "在 Claude 以外的终端里合并 .claude/hooks/policy.json.new，再重跑 init" % (gv, pv))
 
 
-POLICY_VERSION = 10
+POLICY_VERSION = 11
 
 
 def disk_policy_version(target):

@@ -55,7 +55,7 @@ import feishu_cmd as fc  # noqa: E402
 import pool  # noqa: E402
 
 TMP_PREFIXES = ("/tmp/", "/private/tmp/", "/var/folders/", "/private/var/folders/")
-POLICY_VERSION = 10
+POLICY_VERSION = 11
 
 
 def glob_regex(pattern):
@@ -227,8 +227,11 @@ def check_meegle(inv, c, who, data, soft, rewritable):
 
 # settled reads the space; its --into writes the section of a draft of the session that runs it, a local file
 LEDGER_READS = {"", "get", "next", "query", "mql", "trace", "status", "settled", "-h", "--help"}
-LEDGER_WRITE_WORDS = {"register", "revise", "reply", "confirm", "rollback", "update", "comment", "status-block", "append",
-                      "archive", "relink", "ensure-node", "upload", "attach", "brief"}
+# The subcommands of docs.py and of workitem.py, every one a write (each takes --apply); a test holds both sets
+# to the scripts' own argparse subcommands, so a new command cannot be left out of the hook again.
+LEDGER_DOC_WORDS = {"upload", "accept", "attach", "revise", "status-block", "append", "relink", "ensure-node", "brief"}
+WORKITEM_WORDS = {"register", "reply", "confirm", "rollback", "update", "comment", "archive"}
+LEDGER_WRITE_WORDS = LEDGER_DOC_WORDS | WORKITEM_WORDS
 _WORDS = "|".join(re.escape(w) for w in sorted(LEDGER_WRITE_WORDS, key=len, reverse=True))
 # ledger.py was one script until 1.1.0. Its write commands are in docs.py and workitem.py now, over ledger_core.py,
 # and who may run them goes by the file: workitem.py is the scribe's alone; docs.py is every claimed session's,
@@ -238,7 +241,6 @@ _WORDS = "|".join(re.escape(w) for w in sorted(LEDGER_WRITE_WORDS, key=len, reve
 # as before, as a write of the scribe's. Code that imports any of the four modules counts as a write.
 LEDGER_SCRIPTS = fc.LEDGER_SCRIPTS
 DOCS_SCRIPT = "docs.py"
-LEDGER_DOC_WORDS = {"upload", "attach", "revise", "status-block", "append", "relink", "ensure-node", "brief"}   # the write commands of docs.py; the rest are workitem.py's
 DOCS_FREE = False       # set while ledger_write looks for writes other than the project's docs.py running its own commands
 LEDGER_MODULES = ("ledger", "ledger_core", "docs", "workitem")
 _SCRIPT = "(?:%s)" % "|".join(re.escape(s) for s in LEDGER_SCRIPTS)
@@ -250,9 +252,11 @@ STRING_LITERAL = re.compile(r"""(['"])((?:\\.|(?!\1)[^\\\n])*)\1""")
 LITERAL_AFTER = re.compile(r"(?:\}|%s)\s+(?:-\S+\s+)*(?:%s)\s+(?:\{|#?\d|--apply)" % (_SCRIPT, _WORDS))   # f"{L} archive {i}"
 LITERAL_LEAD = re.compile(r"\s*(?:%s)\s+(?:#?\d{3,}|\{[^}]*\}|.*\s--apply\b)" % _WORDS)               # "archive 2106 --apply".split()
 SHELL_SCRIPT = re.compile(r"^#!.*\b(?:sh|bash|zsh|dash|ksh)\b")
-# Code can only start ledger.py through one of these (imports and runpy are checked separately).
+# Code can only start ledger.py through one of these (imports and runpy are checked separately). A backtick runs a
+# command in perl, ruby or php; in Python it can only stand in a string or a comment (a Markdown code span), so
+# Python code is read without it.
 CODE_EXECUTES = re.compile(r"subprocess|os\.(?:system|popen|exec|spawn)|\bpty\.spawn|Popen|check_output|check_call|getoutput"
-                           r"|child_process|execSync|execFileSync|spawnSync|\bsystem\s*\(|\bexec\s*\(|\bqx\b|%x|IO\.popen|Open3|`")
+                           r"|child_process|execSync|execFileSync|spawnSync|\bsystem\s*\(|\bexec\s*\(|\bqx\b|%x|IO\.popen|Open3")
 PYTHON = fc.PYTHON_RE
 SHELLS_RUN = set(fc.SHELLS) | {"csh", "tcsh"}
 SOURCE = {"source", "."}
@@ -300,7 +304,7 @@ def _verdict(sub):
     return None if sub in LEDGER_READS else sub
 
 
-def _writes_in_code(code):
+def _writes_in_code(code, python=False):
     """Does Python (or other) source text run a ledger.py write? Imports of ledger count as writes.
 
     Only code that names ledger.py and can start a process counts (a data file such as
@@ -313,7 +317,7 @@ def _writes_in_code(code):
     code = fc.code_lines(code)
     if CODE_IMPORTS_LEDGER.search(code):
         return True
-    if not any(s in code for s in LEDGER_SCRIPTS) or not CODE_EXECUTES.search(code):  # text about ledger.py written to a file
+    if not any(s in code for s in LEDGER_SCRIPTS) or not (CODE_EXECUTES.search(code) or not python and "`" in code):  # text about ledger.py written to a file
         return False
     if CODE_WRITE.search(code):
         return True
@@ -325,7 +329,7 @@ def _code_verdict(code, rest):
     """python -c CODE [args], or a script on stdin: CODE that runs ledger.py takes args as its subcommand."""
     if CODE_RUNS_LEDGER.search(code):
         return _verdict(_subcommand(rest)) if rest else "（代码里运行了 ledger.py）"
-    return "（代码里调用了 ledger.py 的写命令）" if _writes_in_code(code) else None
+    return "（代码里调用了 ledger.py 的写命令）" if _writes_in_code(code, python=True) else None
 
 
 class _Ctx:
@@ -384,7 +388,7 @@ def _python_run(argv, ctx, stdin, via_xargs=False):
     if ("$" in name or "`" in name) and _names_ledger(ctx.text) and _subcommand(rest) in LEDGER_WRITE_WORDS:
         return _subcommand(rest)                       # for f in .../ledger.py; do python3 $f archive ...
     text = _script_text(script, ctx)
-    if text and _writes_in_code(text):
+    if text and _writes_in_code(text, python=True):
         return "（脚本 %s 里调用了 ledger.py 的写命令）" % script
     return None
 
@@ -504,7 +508,7 @@ def ledger_write(command, cwd=None, docs_free=False):
 
 def _ledger_write(command, cwd, depth, bodies=None):
     if depth > 4:
-        return "（嵌套太深）" if "ledger" in command or _names_ledger(command) else None
+        return "（嵌套太深）" if _names_ledger(command) else None
     text, new = fc.split_heredocs(command)
     ctx = _Ctx(dict(bodies or {}), cwd, depth)
     ctx.bodies.update(new)
@@ -522,7 +526,7 @@ def _ledger_write(command, cwd, depth, bodies=None):
     try:
         tokens = fc.tokenize(text)
     except ValueError:
-        return "（看不清的命令）" if "ledger" in text or _names_ledger(text) else None
+        return "（看不清的命令）" if _names_ledger(text) else None
     segs, piped = fc._segments(tokens)
     prev_out, prev_ledger = None, False
     for raw, is_piped in zip(segs, piped):
@@ -554,8 +558,10 @@ def _ledger_write(command, cwd, depth, bodies=None):
     return None
 
 
-def _direct_script(argv, ctx):
-    """./x.sh, ./x.py, uv run x.py: read the file and check it as bash FILE or python FILE would."""
+def _direct_script(argv, ctx, runner=False):
+    """./x.sh, ./x.py, uv run x.py: read the file and check it as what runs it. Run directly, the #! line says
+    what (a .py name says nothing: #!/usr/bin/perl runs perl, whose backticks start a command), and a file with
+    no #! is run by the shell (ENOEXEC). runner: a Python runner (uv run, poetry run ...) runs it."""
     path = argv[0]
     if "/" not in path and not os.path.isfile(os.path.join(ctx.cwd or ".", path)):
         return None
@@ -563,11 +569,12 @@ def _direct_script(argv, ctx):
     if not text or "\0" in text:
         return None
     first = text.split("\n", 1)[0]
-    shell = path.endswith((".sh", ".bash", ".zsh")) or bool(SHELL_SCRIPT.match(first)) or (
-        not first.startswith("#!") and "." not in os.path.basename(path))
+    bang = first.startswith("#!")
+    shell = bool(SHELL_SCRIPT.match(first)) or (not bang and not runner)
     if shell:
         return _ledger_write(text, ctx.cwd, ctx.depth + 1, ctx.bodies)
-    return "（脚本 %s 里调用了 ledger.py 的写命令）" % path if _writes_in_code(text) else None
+    python = "python" in first if bang else runner
+    return "（脚本 %s 里调用了 ledger.py 的写命令）" % path if _writes_in_code(text, python) else None
 
 
 def _segment_write(argv, wrappers, ctx, stdin):
@@ -584,9 +591,12 @@ def _segment_write(argv, wrappers, ctx, stdin):
             return "（xargs 传入的子命令）"
         return _verdict(sub)
 
-    def check_texts(texts):
+    def check_texts(texts, bodies):
+        """bodies: the here-documents a `bash x.sh` inside them may fall back on. A script this command has not
+        written yet is read as each here-document on its own (bodies None): with itself among them, a `bash y.sh`
+        inside it for a file the hook cannot see read it again, round and round until the depth limit."""
         for src in texts:
-            found = _ledger_write(src, ctx.cwd, ctx.depth + 1, ctx.bodies)
+            found = _ledger_write(src, ctx.cwd, ctx.depth + 1, bodies)
             if found:
                 return found
         return None
@@ -602,15 +612,15 @@ def _segment_write(argv, wrappers, ctx, stdin):
             if text is not None:
                 return _ledger_write(text, ctx.cwd, ctx.depth + 1, ctx.bodies)
             if not os.path.exists(fc._full(value, ctx.cwd)):  # written by a here-document earlier in this command
-                return check_texts(b for b, _ in ctx.bodies.values())
+                return check_texts([b for b, _ in ctx.bodies.values()], None)   # each on its own, see check_texts
             return None
-        return check_texts(stdin.texts)
+        return check_texts(stdin.texts, ctx.bodies)
     if head in SOURCE and len(argv) > 1:
         text = _script_text(argv[1], ctx)
         if text is not None:
             return _ledger_write(text, ctx.cwd, ctx.depth + 1, ctx.bodies)
         if not os.path.exists(fc._full(argv[1], ctx.cwd)):
-            return check_texts(b for b, _ in ctx.bodies.values())
+            return check_texts([b for b, _ in ctx.bodies.values()], None)   # each on its own, see check_texts
         return None
     if head == "find" or (argv[0].startswith("-") and ctx.find_named is not None):
         if head == "find":                                # find bin -name ledger.py -execdir python3 {} <sub>
@@ -643,10 +653,10 @@ def _segment_write(argv, wrappers, ctx, stdin):
         s = next((k for k, w in enumerate(argv) if _is_ledger_script(w)), None)
         if s is not None:
             return run_verdict(argv[s + 1:])
-        if "ledger" in ctx.text or _names_ledger(ctx.text):
+        if _names_ledger(ctx.text):                       # L=…/workitem.py; $L archive
             return next((w for w in argv[1:] if w in LEDGER_WRITE_WORDS), None)
         return None
-    return _direct_script(argv, ctx)
+    return _direct_script(argv, ctx, runner=any(os.path.basename(w) in fc.RUNNERS | {"uvx"} for w in wrappers))
 
 
 POOL_SUBS = ("claim", "expect", "release")
@@ -654,14 +664,28 @@ GIT_SWITCHES = ("checkout", "switch", "stash", "rebase", "merge", "reset", "clea
 GIT_VALUE_OPTIONS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env",
                      "--super-prefix", "--list-cmds"}
 SHELL_NAMES = set(fc.SHELLS) | {"csh", "tcsh"}
+# NAME, NAME=value, NAME+=value and NAME{,…} of the two identity variables
+IDENTITY_WORD = re.compile(r"CLAUDE_CODE_[\w{,}]*SESSION_ID(?:\+?=|$)")
+DECLARERS = ("export", "declare", "typeset", "readonly", "local")
+CLEARS_ENV = re.compile(r"-[a-zA-Z]*i[a-zA-Z]*|--ignore-environment|-")      # env -i, env -vi, env -
+PLUGIN_SCRIPT = re.compile(r"route|ledger|workitem|docs\.py|pool\.py|notify\.py|todo\.py")
+ENV_VALUES = ("-u", "--unset", "-C", "--chdir", "-P", "-S", "--split-string")   # env's options that take the next word
+TEXT_COMMANDS = {"echo", "printf", "print", "grep", "egrep", "fgrep", "rg", "ag", "git", "gh", "cat", "less", "more", "head",
+                 "tail", "printenv", "man", "wc", "sort", "uniq", "diff", "jq", "sed", "awk", "tr", "cut", "column", "ls"}
+# For text the parser does not read further (eval of a command's output, source of a pipe or of standard input, trap,
+# zsh's repeat, nesting deeper than command_runs goes, text it cannot split into words): the identity variables named
+# where a command could stand, or env -i / exec -c with a plugin script in the same command.
 IDENTITY = r"CLAUDE_CODE_(?:HOST_)?SESSION_ID"
-IDENTITY_VARS = re.compile(
+IDENTITY_TEXT = re.compile(
     r"\bunset\b[^;&|\n]*CLAUDE_CODE_"                                        # unset [-v] NAME, "NAME", NAME{,…}
     r"|\b(?:export|declare|typeset|readonly|local)\b[^;&|\n]*" + IDENTITY +  # export -n NAME, declare +x NAME
     r"|(?:^|\s)-u\s*['\"]?CLAUDE_CODE_|--unset[= ]\s*['\"]?CLAUDE_CODE_"     # env -u NAME
-    r"|(?:^|[;&|({\n])\s*(?:[A-Za-z_]\w*=\S*\s+)*" + IDENTITY + "="           # NAME=value where a command starts
-    r"|\benv\b(?:\s+(?:-[uCS]\s+\S+|-\S+|[A-Za-z_]\w*=\S*))*\s+" + IDENTITY + "=", re.M)
-CLEAR_ENV = re.compile(r"\benv\b[^;&|\n]*\s(?:-[a-zA-Z]*i[a-zA-Z]*|--ignore-environment|-)(?=\s|$)", re.M)
+    r"|(?:^|[;&|({\n])\s*(?:[A-Za-z_]\w*=\S*\s+)*" + IDENTITY + r"\+?=", re.M)  # NAME=value where a command starts
+CLEAR_TEXT = re.compile(r"(?:^|[\s;&|(`{])(?:env(?:[ \t]+(?:-[uCSP][ \t]+\S+|--\S+|[A-Za-z_]\w*=\S*))*[ \t]+"
+                        r"(?:-[a-zA-Z]*i[a-zA-Z]*|--ignore-environment|-)(?=\s|$)|exec[ \t]+-[a-zA-Z]*c)")
+STARTUP_FILE = re.compile(r">>?\s*['\"]?(?:~|\$HOME|\$\{HOME\}|/Use" r"rs/[^/\s]+|/home/[^/\s]+)/\.(?:zshenv|zshrc|zprofile|zlogin|bashrc|"
+                          r"bash_profile|bash_login|profile)\b")              # what every later shell of every session runs
+UNREAD = "\0unread"                                     # command_runs' mark in words for text it reads no further
 SUB_MARK, split_substitutions = fc.SUB_MARK, fc.split_substitutions
 VAR_REF = re.compile(r"\$\{(\w+)\}|\$(\w+)")
 
@@ -742,7 +766,7 @@ def simple_output(tokens, where):
     return text
 
 
-def command_runs(command, cwd, root, depth=0, bodies=None, assign=None, written=None):
+def command_runs(command, cwd, root, depth=0, bodies=None, assign=None, written=None, words=None):
     """(argv, directory) of each simple command a shell command runs, as far as the text shows.
 
     Split at ; && || | and ( ); wrappers (env, timeout, nohup ...) dropped; cd, pushd and popd
@@ -751,8 +775,12 @@ def command_runs(command, cwd, root, depth=0, bodies=None, assign=None, written=
     sh -c and eval, simple NAME=value variables, here-documents, here-strings, pipes and files fed
     to a shell or to source (a file written earlier in the same command counts), and find -exec.
     Here-document bodies not fed to a shell, quoted arguments and comments are not commands.
-    (None, text) stands for text the parser cannot read."""
+    (None, text) stands for text the parser cannot read. words, when a list is passed, gets the words of each
+    simple command with what stands in front of it (NAME=value, env -u NAME ...), redirects dropped, and
+    [UNREAD, text] for text nested deeper than it reads."""
     if depth > 4:
+        if words is not None:
+            words.append([UNREAD, command])
         return []
     text, new = fc.split_heredocs(command)
     bodies = dict(bodies or {})
@@ -762,7 +790,7 @@ def command_runs(command, cwd, root, depth=0, bodies=None, assign=None, written=
     out = []
 
     def deeper(inner, where):
-        return command_runs(inner, where, root, depth + 1, bodies, assign, written)
+        return command_runs(inner, where, root, depth + 1, bodies, assign, written, words)
 
     for body, quoted in new.values():                   # an unquoted here-document expands $(...)
         if not quoted:
@@ -799,13 +827,15 @@ def command_runs(command, cwd, root, depth=0, bodies=None, assign=None, written=
         stdin_text = "\n".join(t for t in fed if t)
         st["prev_out"] = None
         seg, _ = fc._drop_redirects(raw)
-        argv, _ = fc._unwrap(seg)
+        argv, front = fc._unwrap(seg)
         argv = [expand(a, assign) for a in argv]
         if argv and (" " in argv[0] or "\t" in argv[0]):   # $C holding a command
             try:
                 argv = shlex.split(argv[0]) + argv[1:]
             except ValueError:
                 pass
+        if words is not None:
+            words.append(front + argv)
         if not argv:
             return
         head = os.path.basename(argv[0]).lstrip("\\")
@@ -1041,12 +1071,97 @@ def check_setup(data, who, root, command):
     return Verdict("deny", "%s 只由研究员的会话运行：把要做的事报给研究员。" % " ".join(x for x in hits[0] if x))
 
 
-def check_identity_vars(data, who, command):
-    """A command that unsets, clears or sets the session's identity variables would speak
-    for another session to the plugin's scripts."""
-    if IDENTITY_VARS.search(command) or (CLEAR_ENV.search(command) and re.search(r"route|ledger|workitem|docs\.py|pool\.py|notify\.py|todo\.py", command)):
-        return Verdict("deny", "不要改或清掉 CLAUDE_CODE_SESSION_ID、CLAUDE_CODE_HOST_SESSION_ID（unset、env -u、env -i、export -n 都算）："
-                               "认领和台账写权按它们认会话。")
+def _clears(opts, after, command):
+    """env -i, env - (opts holding one) or exec -c in front of `after`: the variables are gone for what it runs. That
+    counts in front of a plugin script, or of a shell or Python, which runs what the command feeds it."""
+    head = os.path.basename(after[0]) if after else ""
+    fed = head in SHELL_NAMES or fc.PYTHON_RE.match(head)
+    return bool(PLUGIN_SCRIPT.search(command if fed else " ".join(after)))
+
+
+def _env_words(rest):
+    """(env's own words, the command after them) in rest, the words after an `env`."""
+    j = 0
+    while j < len(rest) and (rest[j].startswith("-") or fc.ASSIGN_RE.match(rest[j])):
+        j += 2 if rest[j] in ENV_VALUES else 1
+    return rest[:j], rest[j:]
+
+
+def identity_change(words, command):
+    """Does one simple command change the identity variables? NAME=value (NAME+=value) in front of it or among
+    env's words, env -u NAME (--unset=NAME), unset with any CLAUDE_CODE_ name or pattern (unset -m 'CLAUDE_CODE_*'),
+    export/declare/typeset/readonly/local NAME (export -n, declare +x, NAME=value), and env -i, env - or exec -c in
+    front of a plugin script, or in front of a shell or Python, which runs what the command feeds it (a here-document,
+    a pipe, a script). The same words behind a command the parser does not know (script -q /dev/null env -u NAME,
+    sandbox-exec, a function's "$@") count too; the arguments of a text command (echo, grep, git) and here-document
+    text do not."""
+    argv, front = fc._unwrap(words)
+    if any(IDENTITY_WORD.match(re.sub(r"^(?:-u|--unset=)", "", w)) for w in front + argv[:1]):
+        return True
+    names = [os.path.basename(w) for w in front]
+    if "exec" in names and any(re.fullmatch(r"-[a-zA-Z]*c[a-zA-Z]*", w) for w in front[names.index("exec") + 1:]) \
+            and _clears([], argv, command):
+        return True
+    env = next((k for k, w in enumerate(names) if w == "env"), None)
+    if env is not None and any(CLEARS_ENV.fullmatch(w) for w in front[env + 1:]) and _clears(front[env + 1:], argv, command):
+        return True
+    head = os.path.basename(argv[0]).lstrip("\\") if argv else ""
+    if head in TEXT_COMMANDS:
+        return False
+    for k, w in enumerate(argv):
+        base = os.path.basename(w)
+        rest = argv[k + 1:]
+        if base == "unset" and any("CLAUDE_CODE_" in a for a in rest):
+            return True
+        if base in DECLARERS and any(IDENTITY_WORD.match(a) for a in rest):
+            return True
+        if base == "env" and k:
+            opts, after = _env_words(rest)
+            if any(IDENTITY_WORD.match(re.sub(r"^(?:-u|--unset=)", "", o)) for o in opts):
+                return True
+            if any(CLEARS_ENV.fullmatch(o) for o in opts) and _clears(opts, after, command):
+                return True
+        if base == "exec" and k and rest and re.fullmatch(r"-[a-zA-Z]*c[a-zA-Z]*", rest[0]) and _clears([], rest[1:], command):
+            return True
+    return False
+
+
+def not_read(words):
+    """Does this simple command run text the parser does not read: eval of a command's output, source of a pipe, of
+    standard input or of a process substitution, a trap or zsh's repeat?"""
+    argv, _ = fc._unwrap(words)
+    head = os.path.basename(argv[0]).lstrip("\\") if argv else ""
+    if head == "eval":
+        return any("$(" in a or "`" in a or SUB_MARK.search(a) for a in argv[1:])
+    if head in SOURCE:
+        return len(argv) < 2 or argv[1] in ("-", "=", "/dev/stdin") or argv[1].startswith(("/dev/fd/", "<(", "=(")) \
+            or bool(SUB_MARK.search(argv[1]))
+    return head in ("trap", "repeat")
+
+
+def identity_text(text):
+    return bool(IDENTITY_TEXT.search(text) or (CLEAR_TEXT.search(text) and PLUGIN_SCRIPT.search(text)))
+
+
+def check_identity_vars(data, who, command, root):
+    """A command that unsets, clears or sets the session's identity variables would speak for another session to the
+    plugin's scripts (with neither variable, pool.caller() takes the caller for the researcher). Judged on the simple
+    commands the shell runs (command_runs), not on the text: a file name or a list line in a here-document is not a
+    command. Where the parser reads no further (see not_read, nesting too deep, text it cannot split), and in what is
+    written to a shell's startup file, the text itself is checked."""
+    if not any(w in command for w in ("CLAUDE_CODE_", "env", "exec")):
+        return None
+    words = []
+    runs = command_runs(command, data.get("cwd") or root, root, words=words)
+    unread = [text for argv, text in runs if argv is None] + [w[1] for w in words if w[:1] == [UNREAD]]
+    simple = [w for w in words if w[:1] != [UNREAD]]
+    for argv, text in runs:
+        if argv is None:
+            simple.extend([w.strip("'\"") for w in part.split()] for part in re.split(r"[;&|()\n`]", text))
+    if any(identity_text(t) for t in unread) or any(identity_change(w, command) for w in simple) \
+            or ((any(not_read(w) for w in simple) or STARTUP_FILE.search(command)) and identity_text(command)):
+        return refuse(who, data, "不要改或清掉 CLAUDE_CODE_SESSION_ID、CLAUDE_CODE_HOST_SESSION_ID（unset、env -u、env -i、exec -c、"
+                                 "export -n 都算）：认领和台账写权按它们认会话。")     # the researcher's own session: asked, as the other hard rules
     return None
 
 
@@ -1171,7 +1286,7 @@ def check_bash(data, who, policy, risk, soft, command=None):
     command = tool_input.get("command") or "" if command is None else command
     root = project_root(data)
     verdict = Verdict()
-    for found in (check_identity_vars(data, who, command), check_pool_command(data, who, policy, root, command),
+    for found in (check_identity_vars(data, who, command, root), check_pool_command(data, who, policy, root, command),
                   check_setup(data, who, root, command), check_git(data, who, command, root)):
         if found:
             verdict.merge(found)

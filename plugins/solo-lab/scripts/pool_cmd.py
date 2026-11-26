@@ -493,6 +493,45 @@ def queue_cmd(root, policy, name, offline=False):
 RECOVER_BEFORE = ("busy", "uncertain", "waiting_researcher")
 
 
+def recover_receipts(root):
+    """(the authors' steps, the registrations the scribe finishes with --resume, the deliveries whose field is still
+    empty) left halfway, from the receipts in packages/sent/ alone. Only a registration (<ID>.json and its like, not
+    ledger_core.OTHER_RECEIPTS, not a task without a work item) is the scribe's. A 简版决策 is no work item: what is
+    left of it is its author's, and nothing once its 决策包 is uploaded (that upload's own line) or registered. A link
+    field's document (attach-) is not listed: the scribe's --set <字段>=@<文件> stops with the command to run."""
+    recs = [(os.path.basename(p), pool.load_json(p, {}) or {}) for p in pool.files_in(os.path.join(root, "packages", "sent"), "*.json")]
+    recs = [(base, rec) for base, rec in recs if isinstance(rec, dict)]
+    known = {rec.get("draft") for base, rec in recs if not base.startswith(ledger_core.OTHER_RECEIPTS)}   # registered or halfway
+    uploaded = {rec.get("draft") for base, rec in recs if base.startswith("upload-")}
+    authors, unfinished, replies = [], [], []
+    for base, rec in recs:
+        draft, by, status = rec.get("draft"), rec.get("by") or "?", rec.get("status")
+        if base.startswith("upload-"):                 # the author's step of a registration
+            if status != "uploaded":
+                authors.append("%s（文档没传完，作者 %s 重跑 docs.py upload <草稿>）" % (draft, by))
+            elif draft not in known:
+                authors.append("%s（文档已上传，还没登记：作者 %s 把登记请求再发一次）" % (draft, by))
+        elif base.startswith("brief-"):
+            package = rec.get("package")
+            if status not in ("uploaded", "decided"):
+                authors.append("%s（简版决策没传完，作者 %s 重跑 docs.py brief <草稿>）" % (draft, by))
+            elif package and package not in known and package not in uploaded:
+                authors.append("%s（简版决策升级用的决策包已生成、还没上传：作者 %s 重跑 docs.py brief <草稿> --package --apply，照它打印的步骤上传、登记）" % (
+                    draft, by))
+        elif base.startswith("attach-") or status in (None, "registered", "replied"):
+            continue
+        elif base.startswith("reply-"):
+            if status == "created":                    # the document itself is not finished: the author's step
+                authors.append("%s（交付包没传完，作者 %s 重跑 docs.py upload <草稿>）" % (draft, by))
+            else:
+                replies.append("%s（答复 #%s，%s）" % (draft, rec.get("parent"), status))
+        elif rec.get("local"):                         # a task without a work item: its author uploads it, nobody registers it
+            authors.append("%s（#%s 的需求包没传完，派活的 %s 重跑 docs.py upload <草稿>）" % (draft, rec.get("work_item_id"), by))
+        else:
+            unfinished.append("%s（#%s，%s）" % (draft, rec.get("work_item_id"), status))
+    return authors, unfinished, replies
+
+
 def recover_cmd(root, policy):
     pl, ok = pool.load(root)
     if not ok:
@@ -504,27 +543,9 @@ def recover_cmd(root, policy):
     hub = (policy["agents"].get(policy.get("router_role")) or {}).get("fixed_session") or entry
     word = (policy.get("msg") or {}).get("resume", "继续")
     print("恢复清单（入口把它交给路由 %s，下面的消息由路由发）：" % hub if hub != entry else "恢复清单：")
-    unfinished, replies = [], []
-    uploads, sent = [], pool.files_in(os.path.join(root, "packages", "sent"), "*.json")
-    known = {(pool.load_json(p, {}) or {}).get("draft") for p in sent if not os.path.basename(p).startswith(("reply-", "upload-", "attach-", "brief-"))}
-    for path in sent:
-        rec = pool.load_json(path, {}) or {}
-        if isinstance(rec, dict) and os.path.basename(path).startswith("upload-"):     # the author's step of a registration
-            if rec.get("status") != "uploaded":
-                uploads.append("%s（文档没传完，作者 %s 重跑 docs.py upload <草稿>）" % (rec.get("draft"), rec.get("by") or "?"))
-            elif rec.get("draft") not in known:
-                uploads.append("%s（文档已上传，还没登记：作者 %s 把登记请求再发一次）" % (rec.get("draft"), rec.get("by") or "?"))
-            continue
-        if isinstance(rec, dict) and rec.get("status") not in (None, "registered", "replied"):
-            if os.path.basename(path).startswith("reply-"):
-                if rec.get("status") == "created":           # the document itself is not finished: the author's step
-                    uploads.append("%s（交付包没传完，作者 %s 重跑 docs.py upload <草稿>）" % (rec.get("draft"), rec.get("by") or "?"))
-                    continue
-                replies.append("%s（答复 #%s，%s）" % (rec.get("draft"), rec.get("parent"), rec.get("status")))
-            else:
-                unfinished.append("%s（#%s，%s）" % (rec.get("draft"), rec.get("work_item_id"), rec.get("status")))
+    uploads, unfinished, replies = recover_receipts(root)
     if uploads:
-        print("- 传了文档、还没登记成工作项的草稿：%s" % "；".join(uploads))
+        print("- 作者那一步没做完的草稿（路由转给作者）：%s" % "；".join(uploads))
     if unfinished:
         print("- 书记员先补完写到一半的登记，逐条运行 workitem.py register <草稿> --resume：%s" % "；".join(unfinished))
     if replies:
@@ -594,7 +615,7 @@ def item_end(lg, item):
     try:
         it = lg.item(item)
     except ledger_core.LedgerError as e:
-        if "WorkItemNotFound" in str(e):
+        if ledger_core.deleted(e):
             return "已删除", ""
         raise
     if it is None:

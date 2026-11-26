@@ -535,7 +535,7 @@ def _unwrap(seg, names=None):
                 if split is not None:                    # the words of the string are read as env's own from here
                     seg = split
                     continue
-                i += 2 if seg[i] in ("-u", "--unset", "-C", "--chdir") else 1
+                i += 2 if seg[i] in ("-u", "--unset", "-C", "--chdir", "-P") else 1   # -P altpath: macOS
         elif base == "timeout":
             i += 1
             while i < len(seg) and seg[i].startswith("-"):
@@ -543,9 +543,9 @@ def _unwrap(seg, names=None):
             i += 1
         elif base == "nice":
             i += 1
-            if i < len(seg) and seg[i] == "-n":
+            if i < len(seg) and seg[i] in ("-n", "--adjustment"):
                 i += 2
-            elif i < len(seg) and re.match(r"^-\d+$", seg[i]):
+            elif i < len(seg) and re.match(r"^(?:-\d+|-n-?\d+|--adjustment=-?\d+)$", seg[i]):
                 i += 1
         elif base in ("stdbuf", "sudo", "doas", "caffeinate", "arch", "ionice", "chrt", "taskset", "sshpass"):
             takes = VALUE_OPTIONS.get(base, ())

@@ -200,6 +200,7 @@ SOURCE_SHOWN = 80                     # characters of the sender's title shown
 GATES_FILE = "gates.json"
 FROZEN = "待定决策冻结的动作，决策定下以前谁都不做（hook 不拦，要自己守住），选项中立的准备照常做：%s。"
 FROZEN_SHOWN = 700                    # characters of the frozen line at most
+RETURNED = "签字退回，到研究任务 #%s 的签字决策批准为止"
 MORE_FROZEN = "……（全文看 python3.12 -I .claude/solo-lab/bin/ledger.py query queue 列的决策包）"
 DUE_DEFAULT = "#%s 已到期：请书记员按到期默认确认（workitem.py confirm %s --by 到期默认），书记员确认后通知执行方 %s 照到期默认动作办（%s），再告诉入口一声；已经请过的不再请。"
 MAX_DUE = 5                           # lines about decisions past their expiry, at most, a turn
@@ -266,35 +267,36 @@ def back_text(prev, at, waiting=()):
     return BACK_AFTER % int(gap.total_seconds() // 60) + LIST_DUE + first
 
 
-def load_pending(root):
+def load_pending(root, key="pending", since="registered_at"):
     """The decisions still waiting in the local decision state (.claude/state/gates.json, which only
-    ledger.py writes), by ID, in the order they were registered; {} when there is none or it cannot be read."""
+    ledger.py writes), by ID, in the order they were registered; {} when there is none or it cannot be read.
+    key="returned", since="returned_at": the signing decisions sent back (退回) whose freeze holds."""
     try:
         with open(os.path.join(pool.state_dir(root), GATES_FILE), encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return {}
-    pending = data.get("pending") if isinstance(data, dict) else None
+    pending = data.get(key) if isinstance(data, dict) else None
     if not isinstance(pending, dict):
         return {}
     rows = [(str(k), v) for k, v in pending.items() if isinstance(v, dict)]
-    return dict(sorted(rows, key=lambda kv: (str(kv[1].get("registered_at") or ""), kv[0])))
+    return dict(sorted(rows, key=lambda kv: (str(kv[1].get(since) or ""), kv[0])))
 
 
-def frozen_text(pending):
+def frozen_text(pending, returned=None):
     """One line: what each decision still waiting freezes, each item as its package wrote it (a category of
     the list of irreversible actions or a sentence; a command prefix in a state written before 1.0.6). None
     when nothing is frozen."""
     rows = []
-    for item_id, entry in pending.items():
+    for item_id, entry in list((returned or {}).items()) + list(pending.items()):   # holds first: query queue does not list them
         texts = []
         for f in entry.get("frozen") if isinstance(entry.get("frozen"), list) else []:
             text = str(f.get("text") or f.get("prefix") or "").strip() if isinstance(f, dict) else ""
             if text and text not in texts:
                 texts.append(text)
         if texts:
-            rows.append("#%s%s：%s" % (item_id, "（%s）" % entry["title"] if entry.get("title") else "",
-                                       "".join("“%s”" % t for t in texts)))
+            label = "；".join(x for x in (entry.get("title"), RETURNED % entry.get("task") if entry.get("returned_at") else None) if x)
+            rows.append("#%s%s：%s" % (item_id, "（%s）" % label if label else "", "".join("“%s”" % t for t in texts)))
     if not rows:
         return None
     text = FROZEN % "；".join(rows)
@@ -447,7 +449,7 @@ def pool_prompt(data, policy, root):
             parts.append("这条消息有几处和规范对不上（只提醒，不拦）：\n" + "\n".join("- " + h for h in hits))
     if due:                                         # the router and the entry, every turn: decisions past their expiry time
         parts.append(due_lines(due))
-    frozen = frozen_text(pending)
+    frozen = frozen_text(pending, load_pending(root, "returned", "returned_at"))
     if frozen:                                      # every pool session, every turn
         parts.append(frozen)
     inbox = os.path.join(root, "inbox")

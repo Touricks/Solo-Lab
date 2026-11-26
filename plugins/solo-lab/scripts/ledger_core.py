@@ -684,6 +684,17 @@ def doc_content(data):
     return doc.get("content") or data.get("_text") or ""
 
 
+SCOPED = re.compile(r"\A\s*<fragment\b[^>]*>(.*)</fragment>\s*\Z", re.S)
+
+
+def scoped_markdown(data):
+    """The Markdown of a `docs +fetch --scope … --doc-format markdown` answer: lark-cli wraps what it read in
+    <fragment mode=… requested-…>…</fragment>; only that outer pair goes."""
+    content = doc_content(data)
+    m = SCOPED.match(content)
+    return (m.group(1) if m else content).strip()
+
+
 # --------------------------------------------------------------- drafts
 HEADER = re.compile(r"^- ([^：:]+)[：:]\s*(.*)$")
 SHEETS = {"研究任务单": "research_task", "反馈": "feedback"}
@@ -1078,8 +1089,8 @@ def update_receipt(lg, item_id, **values):
 # ---------------------------------------------------- local decision state
 # .claude/state/gates.json, next to the claims table and
 # guarded like it: only ledger.py run by the scribe with --apply writes it (atomically, under the ledger's
-# write lock); the inbox hook only reads it, the guard hook not at all. Shape (GATES_VERSION 2, from 1.0.6):
-#   {"version": 2, "updated_at": ISO,
+# write lock); the inbox hook only reads it, the guard hook not at all. Shape (GATES_VERSION 3, from 1.1.5):
+#   {"version": 3, "updated_at": ISO,
 #    "pending": {"<ID>": {
 #        "id", "title" (事项), "urgency" (紧急程度), "registered_at" (ISO, the registration; a revision keeps it,
 #        and the expiry counts from it), "rolled_back_at" (ISO, only on a decision the researcher decided once
@@ -1091,17 +1102,28 @@ def update_receipt(lg, item_id, **values):
 #        "due" (回复期限, reference only), "sender",
 #        "options" [{"name", "approach", "irreversible": [{"category" (id in orgspec/irreversible.json), "name",
 #                    "qualifier" (the note after the category, "" when none), "text"}]}],
-#        "frozen" [{"kind": "category", "category", "name", "qualifier", "text"} | {"kind": "text", "text"}]}}}
+#        "frozen" [{"kind": "category", "category", "name", "qualifier", "text"} | {"kind": "text", "text"}]}},
+#    "returned": {"<ID>": {"id", "title", "task" (所属研究任务 ID), "returned_at" (ISO), "frozen" (as above)}}}
 # pending: decisions from the decision queue while 待决定. Written when one is registered (from the moment
 # its work item exists) and revised; removed when 决定 is confirmed (by the researcher or by 到期默认), when
 # it is archived or found terminated, and when another write finds it no longer waiting in the space; put back,
 # marked rolled_back_at, when a decided one is rolled back to 待决定.
+# returned: signing decisions decided 退回 (1.1.5), each keeping what it froze: 退回 is no approval. A hold ends
+# when a signing decision of its research task is approved (here, on the web page, or with the step it signs),
+# when the task is archived, terminated or deleted, and when the returned decision is rolled back to 待决定. A
+# file without it (1.1.4) is read with none.
 # Nothing else is kept. Not the expiry time: pool.expiry_hours reads org/decisions.md whenever it is needed,
 # here and in the inbox hook, so the two cannot disagree. And nothing is released: until 1.0.6 a "releases"
 # list held what decided decisions let the guard hook pass. A file written by 1.0.4 or 1.0.5 is read as far
 # as it still applies (load_gates) and loses the rest the next time it is written.
-GATES_VERSION = 2
+GATES_VERSION = 3
 PRUNE_AFTER = datetime.timedelta(minutes=10)
+
+
+def deleted(e):
+    """Does this LedgerError say the space no longer has the work item (deleted on the web page)? A ledger that did
+    not answer says something else, and what was asked of it stays as it is."""
+    return "WorkItemNotFound" in str(e)
 
 
 def gates_path(root):
@@ -1127,7 +1149,9 @@ def load_gates(root):
         for option in entry.get("options") or []:
             if isinstance(option, dict) and "releases" in option:
                 option.setdefault("irreversible", option.pop("releases"))
-    return {"version": GATES_VERSION, "updated_at": data.get("updated_at"), "pending": pending}
+    returned = {str(k): v for k, v in (data.get("returned") or {}).items() if isinstance(v, dict)} \
+        if isinstance(data.get("returned"), dict) else {}
+    return {"version": GATES_VERSION, "updated_at": data.get("updated_at"), "pending": pending, "returned": returned}
 
 
 def expiry_hours(root):
@@ -1182,10 +1206,93 @@ def prune_pending(lg, gates, keep=None):
         print("提醒：没能核对本地决策状态里的待定决策还在不在待决定（%s），先都留着" % str(e)[:160])
         return
     waiting = {str(r.get("work_item_id")) for r in rows}
+    left = []
     for i in stale:
-        if i not in waiting:
-            del gates["pending"][i]
+        if i in waiting:
+            continue
+        try:
+            it = lg.item(i)
+        except LedgerError as e:
+            if deleted(e):
+                del gates["pending"][i]
+                print("本地决策状态：#%s 在空间里已经没有了（在网页上删掉了），它的冻结解除。" % i)
+            else:
+                print("提醒：#%s 在空间里已经不在待决定，但读不出它（%s），先留着" % (i, str(e)[:160]))
+            continue
+        left.append(((lg.flow_nodes(i) or [{}])[0].get("finished_at") or 0, i, it))
+    for _, i, it in sorted(left, key=lambda x: (x[0], x[1])):    # as decided: a 退回 after an 批准 keeps its hold
+        if not leave_pending(lg, gates, i, it):
             print("本地决策状态：#%s 在空间里已经不在待决定（终止了，或者在网页上处理了），它的冻结解除。" % i)
+
+
+def signing(lg, it):
+    """(签字结果, 所属研究任务 ID) of a decision read with item(): what the sign gate reads. Either is None when empty."""
+    gate = lg.contract.flow["sign_gate"]
+    return lg.text_of(it, gate["result"]), (lg.text_of(it, gate["task"]) or "").strip().lstrip("#") or None
+
+
+def leave_pending(lg, gates, item_id, it):
+    """A decision is out of 待决定 (its 决定 confirmed here or on the web page): it leaves the pending decisions. A
+    signing decision (签字结果 and 所属研究任务 filled) that was approved ends the holds of its research task. One
+    that was not approved (退回) keeps what it froze as a hold of the task, and the task's earlier holds stay: 退回
+    is no approval (the researcher, 2026-11-26), whatever the next version still freezes. True when the task still
+    has a hold."""
+    entry = gates["pending"].pop(str(item_id), None)
+    signed, task = signing(lg, it)
+    if not (signed and task):
+        return False
+    held = [i for i, e in gates["returned"].items() if e.get("task") == task]
+    if signed == lg.spec.term("sign", lg.contract.flow["sign_gate"]["approved"]):
+        for old in held:
+            del gates["returned"][old]
+            if old != str(item_id):
+                print("本地决策状态：研究任务 #%s 的签字决策 #%s 批准了，之前退回的 #%s 冻结的动作解除。" % (task, item_id, old))
+        return False
+    rec = receipt_of(lg, item_id)
+    frozen = (entry or {}).get("frozen") or rec.get("frozen") or []
+    if frozen:
+        gates["returned"][str(item_id)] = {"id": str(item_id), "title": (entry or {}).get("title") or rec.get("title"), "task": task,
+                                           "returned_at": now(), "frozen": frozen}
+        print("本地决策状态：#%s 的签字结果是“%s”，没有批准：它冻结的动作继续生效，到研究任务 #%s 的签字决策批准为止。" % (item_id, signed, task))
+    earlier = [i for i in held if i != str(item_id)]
+    if earlier:
+        print("本地决策状态：#%s 没有批准，研究任务 #%s 之前退回的 #%s 冻结的动作也继续生效。" % (item_id, task, "、#".join(earlier)))
+    return bool(frozen or earlier)
+
+
+def prune_returned(lg, gates):
+    """Drop the holds of research tasks that are over (archived, or terminated on the web page): no signature of
+    theirs is waited for any more, nor of one deleted on the web page. One read per hold older than PRUNE_AFTER; a hold
+    whose task the ledger does not answer for stays."""
+    old = now_at() - PRUNE_AFTER
+    for i, e in list(gates["returned"].items()):
+        if (parse_stamp(e.get("returned_at")) or now_at()) >= old:
+            continue
+        try:
+            t = lg.item(e.get("task"))
+        except LedgerError as err:
+            if deleted(err):
+                del gates["returned"][i]
+                print("本地决策状态：研究任务 #%s 在空间里已经没有了，签字退回的 #%s 冻结的动作解除。" % (e.get("task"), i))
+            continue
+        if t is not None and finished(lg, t.get("state"), t.get("type")):
+            del gates["returned"][i]
+            print("本地决策状态：研究任务 #%s 是“%s”，签字退回的 #%s 冻结的动作解除。" % (e.get("task"), t.get("state"), i))
+
+
+def release_returned(lg, task):
+    """The research task's step was confirmed with a signature that passed the gate: the holds of its returned
+    signing decisions end (also when the approving decision's 签字结果 was filled in afterwards with update, and one
+    returned on the web page that the local state still has waiting: save_gates prunes before it changes)."""
+    task = str(task)
+    if lg.mode != "apply":
+        return
+
+    def change(gates):
+        for old in [i for i, e in gates["returned"].items() if e.get("task") == task]:
+            del gates["returned"][old]
+            print("本地决策状态：研究任务 #%s 这一步签了字，之前退回的 #%s 冻结的动作解除。" % (task, old))
+    save_gates(lg, change)
 
 
 def save_gates(lg, change, keep=None):
@@ -1195,8 +1302,9 @@ def save_gates(lg, change, keep=None):
     if lg.mode != "apply":
         return None
     gates = load_gates(lg.root)
+    prune_pending(lg, gates, keep)                     # first: what was decided on the web page came before this write
+    prune_returned(lg, gates)
     change(gates)
-    prune_pending(lg, gates, keep)
     note = expiry_hours(lg.root)[2]
     if note and any(pool.takes_default(e) for e in gates["pending"].values()):
         print(note)

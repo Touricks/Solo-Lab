@@ -240,7 +240,7 @@ def status(lg, item_id):
     data = lg.lark("docs", "+fetch", "--doc", url, "--doc-format", "markdown", "--scope", "section",
                    "--start-block-id", start)
     if data is not None:
-        print(core.doc_content(data) or json.dumps(data, ensure_ascii=False, indent=2))
+        print(core.scoped_markdown(data) or json.dumps(data, ensure_ascii=False, indent=2))
 
 
 # ------------------------------------------------------------ what is settled
@@ -300,8 +300,66 @@ def index_line(lg, row):
     return "#%s  %s  %s  %s  →  %s" % (row["id"], lg.spec.term("wi", "research_task"), row["state"], row["name"], row["gist"])
 
 
+TAG = re.compile(r"(?<!\\)</?[A-Za-z][\w:-]*(?:\s[^<>]*)?/?>")      # \< is a literal < in a Markdown export
+CODE = re.compile(r"((?<!\\)```.*?```|(?<!\\)`[^`\n]*`)", re.S)        # code says what it says, <ID> included
+HEADING = re.compile(r"^[ \t]*#{1,6}[ \t]+")
+SECTION_LIKE = re.compile(r"#{2,6}[ \t]")                              # what the package check takes for a heading
+# What a Markdown export writes as XML because Markdown has no way to (lark-doc-md: @人, @文档, tables it cannot
+# write, line breaks in a cell): its words are in attributes, so dropping the tag would drop them.
+CITE = re.compile(r"<(cite|bookmark)\b([^>]*?)/?>(?:\s*</\1>)?")
+XML_TABLE = re.compile(r"<table\b.*?</table>", re.S)
+BREAK = re.compile(r"<br\s*/?>")
+
+
+def _attr(attrs, name):
+    m = re.search(r'\b%s="([^"]*)"' % name, attrs)
+    return m.group(1) if m else None
+
+
+def _readable(text):
+    """XML in a Markdown export as the words a reader sees: @<name> for a person, the title of a cited document or
+    bookmark, a table said to be in the original, a line break as a space."""
+    def cite(m):
+        attrs = m.group(2)
+        name = _attr(attrs, "user-name") or _attr(attrs, "title") or _attr(attrs, "name")
+        if _attr(attrs, "type") == "user":
+            return "@" + name if name else "（@人，见原文）"
+        return name or "（引用，见原文）"
+    return CITE.sub(cite, BREAK.sub(" ", XML_TABLE.sub("（表格，见原文）", text)))
+
+
+def card_line(label, text):
+    """label：text for a card. Text that starts with a code block starts on the next line, and a block cut() left
+    open is closed: one fence left alone would turn the rest of the draft into code once it is uploaded."""
+    if text.lstrip().startswith("```"):
+        text = "\n" + text
+    if sum(1 for line in text.splitlines() if line.lstrip().startswith("```")) % 2:
+        text += "\n```"
+    return "%s：%s" % (label, text)
+
+
+def card_text(markdown):
+    """A section as Markdown, as text for a card: the tags gone outside code (their text kept; a person, a cited
+    document or a table said in words, see _readable), its own heading dropped, the headings under it made plain lines, and in a code block a line the package check would take
+    for a heading moved off the line start; so nothing in a card opens a section of the draft or another card."""
+    parts = CODE.split(markdown or "")
+    lines = "".join(p if i % 2 else TAG.sub("", _readable(p)) for i, p in enumerate(parts)).strip().splitlines()
+    if lines and HEADING.match(lines[0]):
+        lines = lines[1:]
+    out, fenced = [], False
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+        elif fenced:
+            line = " " + line if SECTION_LIKE.match(line) else line
+        else:
+            line = HEADING.sub("", line)
+        out.append(line)
+    return "\n".join(out).strip()
+
+
 def doc_sections(lg, url, names):
-    """{name: text} of the level-2 sections of a document that it has, as they are written, without their headings."""
+    """{name: card_text} of the level-2 sections of a document that it has."""
     heads = core.heading_ids(lg, url)
     out = {}
     for name in names:
@@ -309,10 +367,7 @@ def doc_sections(lg, url, names):
         if not start:
             continue
         data = lg.lark("docs", "+fetch", "--doc", url, "--doc-format", "markdown", "--scope", "section", "--start-block-id", start)
-        lines = core.doc_content(data).strip().splitlines() if data is not None else []
-        if lines and lines[0].lstrip("#").strip() == name:
-            lines = lines[1:]
-        out[name] = "\n".join(lines).strip()
+        out[name] = card_text(core.scoped_markdown(data)) if data is not None else ""
     return out
 
 
@@ -331,10 +386,10 @@ def decision_card(lg, item_id, it):
                                  "%s %s定" % ((rec.get("decided_at") or "")[:10], rec.get("decided_by") or "") if rec.get("decided_at") else ""]))
     lines = ["### #%s %s（%s）" % (item_id, it["name"], how), ""]
     if parts.get("认知层"):
-        lines += ["要定的事：%s" % cut(parts["认知层"], 200), ""]
+        lines += [card_line("要定的事", cut(parts["认知层"], 200)), ""]
     if parts.get(orgspec.BACKGROUND):
-        lines += ["背景：%s" % cut(parts[orgspec.BACKGROUND], CUT), ""]
-    lines += ["决定：%s" % (cut(text, CUT) or "工作项上没有写决定内容，见原文"), ""]
+        lines += [card_line("背景", cut(parts[orgspec.BACKGROUND], CUT)), ""]
+    lines += [card_line("决定", cut(text, CUT) or "工作项上没有写决定内容，见原文"), ""]
     names = [o.get("name") for o in rec.get("options") or [] if o.get("name")]
     if names and rec.get("option"):
         rest = [n for n in names if n != rec["option"]]
@@ -363,7 +418,7 @@ def task_card(lg, item_id, it):
     for name in TASK_FACTS:
         value = lg.text_of(it, name) if lg.key_of(wid, name) else None
         if value:
-            lines.append("%s：%s" % (name, cut(value, 200)))
+            lines.append(card_line(name, cut(value, 200)))
     links = [("主文档", lg.doc_url(item_id, it))] + [(n, lg.text_of(it, n)) for n in ("结论文档", "探索记录") if lg.key_of(wid, n)]
     report = dict(links).get("结论文档")
     try:
@@ -371,13 +426,13 @@ def task_card(lg, item_id, it):
     except core.LedgerError:                           # the fields above stand on their own
         summary = None
     if summary:
-        lines += ["", "结论：%s" % cut(summary, CUT)]
+        lines += ["", card_line("结论", cut(summary, CUT))]
     signed = (lg.text_of(it, "next_step_signoff") or "").strip().lstrip("#") if lg.key_of(wid, "next_step_signoff") else ""
     if signed.isdigit():
         choice = lg.item(signed)
         text = lg.text_of(choice, core.DECIDED_TEXT) if choice else None
         if text:
-            lines += ["", "下一步（决策 #%s）：%s" % (signed, cut(text, CUT))]
+            lines += ["", card_line("下一步（决策 #%s）" % signed, cut(text, CUT))]
     lines += ["", "原文：%s" % "；".join("%s %s" % pair for pair in links if pair[1])]
     return "\n".join(lines)
 

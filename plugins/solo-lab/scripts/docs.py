@@ -420,6 +420,32 @@ YES_NO = {"是": True, "否": False}
 DECIDED_MARK = "已定｜"
 
 
+BRIEF_OPTION = re.compile(r"[-*] (\S.*)$")
+
+
+def brief_cell(text):
+    """Text as a cell of a markdown table holds it: one line, no | to split it."""
+    return " ".join(text.split()).replace("|", "｜")
+
+
+def brief_options(section):
+    """([(name, consequence)], [other lines]) of a 简版决策's 选项和后果: one option a line, `- <选项>：<后果>`, at
+    the start of the line, both as a cell of the options table has them; the name is what comes before the
+    first ：, or the first : when there is no ：. The same reading checks the draft and writes the options
+    table of the 决策包 it is promoted with."""
+    options, other = [], []
+    for line in (section or "").splitlines():
+        m = BRIEF_OPTION.match(line)
+        if m:
+            name, colon, rest = m.group(1).partition("：")
+            if not colon:
+                name, colon, rest = m.group(1).partition(":")
+            options.append((brief_cell(name), brief_cell(rest)))
+        elif line.strip():
+            other.append(line.strip())
+    return options, other
+
+
 def brief_parts(text, rel):
     """What a 简版决策 draft says, held against its template: {heading, body, sections, promote}. The title and
     the seven sections, nothing else; at least two options, one a line; the last but one section says whether
@@ -441,9 +467,16 @@ def brief_parts(text, rel):
     extra = [h for h in orgspec.headings(text) if h not in BRIEF_SECTIONS]
     if extra:
         problems.append("模板里没有栏目“%s”：一份简版决策只讲一件事，不临时加栏目" % "”“".join(extra))
-    options = [l for l in sections[BRIEF_OPTIONS].splitlines() if re.match(r"\s*[-*] \S", l)]
+    options, other = brief_options(sections[BRIEF_OPTIONS])
     if sections[BRIEF_OPTIONS] and not orgspec.empty_text(sections[BRIEF_OPTIONS]) and len(options) < 2:
         problems.append("“%s”至少写两个选项，一行一个，以“- ”开头；其中一个可以是“不做”" % BRIEF_OPTIONS)
+    if [n for n, c in options if not n or not c or n == orgspec.NOTHING]:
+        problems.append("“%s”每行写成“- <选项>：<后果>”：升级成决策包时，“：”前面的字是选项表里的选项名，不写“%s”" % (BRIEF_OPTIONS, orgspec.NOTHING))
+    if other:
+        problems.append("“%s”只写选项，一行一个：“%s”这样的引言、续行和子条目，并进那个选项的后果，或者写进“建议”" % (BRIEF_OPTIONS, other[0]))
+    names = [n for n, _ in options]
+    if len(set(names)) < len(names):
+        problems.append("“%s”里有两个选项同名：一个选项写一行，名字不重复" % BRIEF_OPTIONS)
     header = core.header_of(text)
     for key in BRIEF_HEADER:                           # optional lines; what they say goes into the 决策包 it may become
         value = header.get(key)
@@ -624,6 +657,9 @@ def brief_package(lg, ref):
         background = background[:orgspec.BACKGROUND_MAX - len(tail)] + tail
     words = rec.get("words") or ""
     gist = " ".join(l.strip() for l in words.splitlines() if l.strip())
+    picks = brief_options(s[BRIEF_OPTIONS])[0]
+    options_table = ["| 选项 | 做法 | 代价 | 风险 | %s |" % orgspec.IRREVERSIBLE_COLUMN, "| --- | --- | --- | --- | --- |"]
+    options_table += ["| %s | %s | 见做法 | 见做法 | %s |" % (n, c, orgspec.NOTHING) for n, c in picks]
     lines = ["# 决策包：%s" % parts["heading"], "", "- 包类型：决策包", "- 版本：第 1 版（%s）" % today, "- 渠道：%s" % lg.spec.term("channel", "researcher"),
              "- 紧急程度：本周"]
     ref = {k: "#%s" % core.item_id_of(header[k]) for k in BRIEF_HEADER if header.get(k) and not orgspec.SAYS_NOTHING.match(header[k])}
@@ -637,7 +673,7 @@ def brief_package(lg, ref):
               "## 认知层", "研究员 %s 定了“%s”：%s" % ((rec.get("decided_at") or today)[:10], parts["heading"], gist), "",
               "## 背景", background, "",
               "## 已有的决定和结论", "无（由简版决策升级，没有另查范围）", "",
-              "## 选项", s[BRIEF_OPTIONS], "",
+              "## 选项"] + options_table + ["",
               "## 没有列入的选项", "无", "", "## 约束的出处", "无", "",
               "## 建议", s["建议"], "",
               "## 已发生的偏向性工作", "无", "", "## 冻结的动作", "无", "",
@@ -674,9 +710,9 @@ def brief_package(lg, ref):
     print(("%s：%s\n" % ("决策包草稿已生成" if lg.mode == "apply" else "预览：会生成决策包草稿", out)) +
           "接着照研究员当面定下的事办：\n"
           "1. %sdocs.py upload %s --apply\n"
-          "2. 给书记员 %s 发【%s】：草稿 %s，新建工作项；接着确认节点“决定”，由 研究员 提出，必填项：决定内容=%s，决定人=研究员；原话照抄。\n"
+          "2. 给书记员 %s 发【%s】：草稿 %s，新建工作项；接着确认节点“决定”，由 研究员 提出，必填项：决定内容=%s，决定人=研究员；原话照抄；选项：<研究员选的是%s里哪一个，照写；都不是写“无”>。\n"
           "3. 拿到工作项 ID 后运行 %sdocs.py relink <工作项 ID> --apply，再用【%s #ID】告诉路由 %s。" % (
-              RUN, out, scribe, reg, out, gist, RUN, lg.spec.term("msg", "notice"), router))
+              RUN, out, scribe, reg, out, gist, "、".join("“%s”" % n for n, _ in picks), RUN, lg.spec.term("msg", "notice"), router))
     return out
 
 
